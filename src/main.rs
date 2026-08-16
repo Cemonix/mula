@@ -5,7 +5,7 @@ use crate::app::{App, AppError};
 
 mod action;
 mod app;
-mod fs;
+mod directory;
 mod keys;
 mod ops;
 mod ui;
@@ -26,5 +26,5 @@ fn main() -> Result<(), AppError> {
     let _guard = init_logging();
 
     tracing::info!("App starting...");
-    ratatui::run(|terminal| App::new().unwrap().run(terminal))
+    ratatui::run(|terminal| App::new()?.run(terminal))
 }
