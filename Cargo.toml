@@ -1,0 +1,12 @@
+[package]
+name = "mula"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+ratatui = "0.30.2"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
