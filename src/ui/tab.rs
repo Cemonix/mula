@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use crate::{
-    fs::{DirEntryKind, list_dir_entries},
+    directory::{DirEntryKind, Directory},
     ui::pane::{Pane, PaneError},
 };
 
@@ -83,7 +83,7 @@ impl Tab {
 
         Ok(Self {
             title,
-            pane: Pane::new(Rc::clone(&curr_dir)).with_items(list_dir_entries(&curr_dir)?),
+            pane: Pane::new(Directory::read(curr_dir)?),
             selected_items: HashSet::new(),
         })
     }
