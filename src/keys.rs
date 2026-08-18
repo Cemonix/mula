@@ -108,9 +108,6 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
     Ok(())
 }
 
-// TODO: It would be good idea to implement shortcut handler that would read shortcuts from file,
-// user should be able to change shortcuts if they want, so save new etc...
-//
 // `resolve` takes the first match and the help overlay lists the entries in this
 // order. `ShowHelp` carries no `bar` label; the keybar draws the help key itself.
 pub const BROWSE_KEYS: &[Binding<Action>] = &[

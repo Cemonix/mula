@@ -159,8 +159,8 @@ impl App {
             offset += height;
         }
 
-        // The top row is reserved for the info bar, so marking an item cannot
-        // change the height of the panes above.
+        // The top of the two rows is reserved for the info bar whether or not it
+        // has anything to draw.
         let [info_area, keys_area] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(main_layout[1]);
 
@@ -317,15 +317,12 @@ impl App {
             ),
         };
 
-        // Skip transfer when there is nothing to transfer
         if from.get_selected_items().is_empty() {
             return Ok(());
         }
 
         let to_dir = Rc::clone(to.get_pane().get_current_dir());
 
-        // TODO: Better approach would be to return how much were transfered from total and display
-        // in toast
         let mut counter = 0;
         let result = from.get_selected_items().iter().try_for_each(|item| {
             if let Some(source) = item.parent()
@@ -350,7 +347,7 @@ impl App {
             )));
         }
 
-        // Marks are kept on failure so the batch can be retried once the cause is dealt with.
+        // Clears the marks only after every item succeeded.
         if result.is_ok() {
             from.deselect_items();
         }
@@ -387,7 +384,7 @@ impl App {
             }
         });
 
-        // Marks are kept on failure so the batch can be retried once the cause is dealt with.
+        // Clears the marks only after every item succeeded.
         if result.is_ok() {
             tab.deselect_items();
         }

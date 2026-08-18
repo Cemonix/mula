@@ -78,7 +78,6 @@ impl Dialog {
         Self {
             title: title.into(),
             message: message.into(),
-            // Start on the harmless answer, so a stray Enter never deletes anything.
             choice: Choice::No,
         }
     }
