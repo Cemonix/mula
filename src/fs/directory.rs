@@ -4,7 +4,21 @@ use std::{cmp::Ordering, io, path::Path, rc::Rc};
 pub enum DirEntryKind {
     Parent,
     Directory,
+    Symlink,
     File,
+}
+
+impl DirEntryKind {
+    /// Position in the listing: the parent leads, then directories, symlinks,
+    /// and files last.
+    fn rank(self) -> u8 {
+        match self {
+            DirEntryKind::Parent => 0,
+            DirEntryKind::Directory => 1,
+            DirEntryKind::Symlink => 2,
+            DirEntryKind::File => 3,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -26,8 +40,8 @@ impl Directory {
     /// entry whenever `path` has a parent. A directory that cannot be opened,
     /// or a single entry that cannot be read, fails the whole listing.
     ///
-    /// `kind` follows symlinks: a symlink pointing at a directory is reported
-    /// as [`DirEntryKind::Directory`].
+    /// `kind` does not follow symlinks: every symlink is reported as
+    /// [`DirEntryKind::Symlink`], whatever it points at.
     pub fn read(path: Rc<Path>) -> Result<Self, io::Error> {
         let mut entries = Vec::new();
 
@@ -39,14 +53,17 @@ impl Directory {
         }
 
         for entry in std::fs::read_dir(&path)? {
-            let entry_path: Rc<Path> = Rc::from(entry?.path());
-            let kind = if entry_path.is_dir() {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let kind = if file_type.is_symlink() {
+                DirEntryKind::Symlink
+            } else if file_type.is_dir() {
                 DirEntryKind::Directory
             } else {
                 DirEntryKind::File
             };
             entries.push(DirEntry {
-                path: entry_path,
+                path: Rc::from(entry.path()),
                 kind,
             });
         }
@@ -79,16 +96,13 @@ impl Directory {
     }
 }
 
-/// Orders the parent entry before everything, directories before files, and
-/// two entries of the same kind by [`compare_file_names`].
+/// Orders entries by [`DirEntryKind::rank`], and two entries of the same rank
+/// by [`compare_file_names`].
 fn compare_entries(a: &DirEntry, b: &DirEntry) -> Ordering {
-    match (&a.kind, &b.kind) {
-        (DirEntryKind::Parent, _) => Ordering::Less,
-        (_, DirEntryKind::Parent) => Ordering::Greater,
-        (DirEntryKind::Directory, DirEntryKind::File) => Ordering::Less,
-        (DirEntryKind::File, DirEntryKind::Directory) => Ordering::Greater,
-        _ => compare_file_names(&a.path, &b.path),
-    }
+    a.kind
+        .rank()
+        .cmp(&b.kind.rank())
+        .then_with(|| compare_file_names(&a.path, &b.path))
 }
 
 /// Orders two paths by their file name, folding each character to lower case as
@@ -164,5 +178,69 @@ mod directory_tests {
             names(&directory),
             ["/..", "/assets", "/src", "/Makefile", "/zip"]
         );
+    }
+
+    #[test]
+    fn every_kind_sorts_by_rank_before_it_sorts_by_name() {
+        // The names run in the opposite order to the ranks, so any listing that
+        // came out alphabetically would show here.
+        let directory = Directory::new(
+            Rc::from(Path::new("/home")),
+            entries(&[
+                ("a-file", DirEntryKind::File),
+                ("b-link", DirEntryKind::Symlink),
+                ("c-dir", DirEntryKind::Directory),
+                ("..", DirEntryKind::Parent),
+            ]),
+        );
+
+        assert_eq!(names(&directory), ["/..", "/c-dir", "/b-link", "/a-file"]);
+    }
+
+    #[test]
+    fn a_directory_leads_a_symlink_that_sorts_earlier_by_name() {
+        // Compared by name alone these three close a cycle: the directory z
+        // precedes the file a, a precedes the symlink b, and b precedes z.
+        let directory = Directory::new(
+            Rc::from(Path::new("/home")),
+            entries(&[
+                ("z", DirEntryKind::Directory),
+                ("a", DirEntryKind::File),
+                ("b", DirEntryKind::Symlink),
+            ]),
+        );
+
+        assert_eq!(names(&directory), ["/z", "/b", "/a"]);
+    }
+
+    #[test]
+    fn the_parent_entry_holds_the_resolved_parent_path() {
+        let base = std::env::temp_dir().join(format!("mula-parent-{}", std::process::id()));
+        let nested = base.join("bla").join("blac");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let directory = Directory::read(Rc::from(nested.as_path())).unwrap();
+        let parent = directory.get(0).unwrap();
+        println!("parent path = {:?}", parent.path);
+
+        assert_eq!(parent.kind, DirEntryKind::Parent);
+        assert_eq!(parent.path.as_ref(), base.join("bla"));
+        assert!(parent.path.is_dir());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn symlinks_sort_among_themselves_by_name() {
+        let directory = Directory::new(
+            Rc::from(Path::new("/home")),
+            entries(&[
+                ("Link", DirEntryKind::Symlink),
+                ("anchor", DirEntryKind::Symlink),
+                ("bin", DirEntryKind::Symlink),
+            ]),
+        );
+
+        assert_eq!(names(&directory), ["/anchor", "/bin", "/Link"]);
     }
 }

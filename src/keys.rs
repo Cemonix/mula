@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, NavDirection, Side, ToggleDirection},
-    ops::TransferOp,
+    fs::ops::TransferOp,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,9 +108,6 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
     Ok(())
 }
 
-// TODO: It would be good idea to implement shortcut handler that would read shortcuts from file,
-// user should be able to change shortcuts if they want, so save new etc...
-//
 // `resolve` takes the first match and the help overlay lists the entries in this
 // order. `ShowHelp` carries no `bar` label; the keybar draws the help key itself.
 pub const BROWSE_KEYS: &[Binding<Action>] = &[
@@ -149,6 +146,24 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         msg: Action::ToggleMark,
         bar: Some("Mark"),
         help: "Marks or unmarks the item under the cursor",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Up).shift(),
+        msg: Action::MarkAndMove(NavDirection::Up),
+        bar: None,
+        help: "Marks the item under the cursor and moves up",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Down).shift(),
+        msg: Action::MarkAndMove(NavDirection::Down),
+        bar: None,
+        help: "Marks the item under the cursor and moves down",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Esc),
+        msg: Action::ClearMarks,
+        bar: None,
+        help: "Unmarks every item in the focused panel",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(5)),

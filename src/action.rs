@@ -1,4 +1,4 @@
-use crate::ops::TransferOp;
+use crate::fs::ops::TransferOp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
@@ -26,6 +26,8 @@ pub enum Action {
     OpenSelected,
     ToggleMark,
     ToggleTab(ToggleDirection),
+    MarkAndMove(NavDirection),
+    ClearMarks,
     Transfer { op: TransferOp },
     Delete,
     NewTab,

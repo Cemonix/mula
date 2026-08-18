@@ -5,9 +5,8 @@ use crate::app::{App, AppError};
 
 mod action;
 mod app;
-mod directory;
+mod fs;
 mod keys;
-mod ops;
 mod ui;
 
 fn init_logging() -> WorkerGuard {
