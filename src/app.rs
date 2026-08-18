@@ -9,8 +9,8 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, NavDirection, Side, ToggleDirection},
+    fs::ops::{MutationOp, TransferOp},
     keys::{self, KeyBinding},
-    ops::{MutationOp, TransferOp},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
         help::Help,

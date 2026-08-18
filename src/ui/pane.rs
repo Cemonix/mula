@@ -9,7 +9,7 @@ use ratatui::{
 };
 use thiserror::Error;
 
-use crate::directory::{DirEntry, DirEntryKind, Directory};
+use crate::fs::directory::{DirEntry, DirEntryKind, Directory};
 
 #[derive(Error, Debug)]
 pub enum PaneError {
@@ -51,16 +51,14 @@ impl Pane {
             .ok_or(PaneError::NoItemSelected)
     }
 
-    /// Reads the selected entry when it is a directory or the parent, and moves
-    /// the pane into it. Leaves the pane alone for any other kind.
+    /// Reads the selected entry and moves the pane into it when its path
+    /// resolves to a directory, following symlinks. Leaves the pane alone
+    /// otherwise. The entry's [`DirEntryKind`] is not consulted.
     pub fn change_directory(&mut self) -> Result<(), PaneError> {
         let entry = self.selected_entry()?;
-        match entry.kind {
-            DirEntryKind::Parent | DirEntryKind::Directory => {
-                let path = Rc::clone(&entry.path);
-                self.set_directory(Directory::read(path)?);
-            }
-            _ => (),
+        if entry.path.is_dir() {
+            let path = Rc::clone(&entry.path);
+            self.set_directory(Directory::read(path)?);
         }
         Ok(())
     }

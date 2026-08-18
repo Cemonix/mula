@@ -1,4 +1,4 @@
-use crate::ops::TransferOp;
+use crate::fs::ops::TransferOp;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {

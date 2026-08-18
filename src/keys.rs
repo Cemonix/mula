@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, NavDirection, Side, ToggleDirection},
-    ops::TransferOp,
+    fs::ops::TransferOp,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

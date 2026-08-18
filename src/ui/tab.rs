@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use crate::{
-    directory::{DirEntryKind, Directory},
+    fs::directory::{DirEntryKind, Directory},
     ui::pane::{Pane, PaneError},
 };
 
