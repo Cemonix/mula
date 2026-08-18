@@ -258,6 +258,20 @@ impl App {
                     Ok(())
                 }
             },
+            Action::MarkAndMove(dir) => {
+                self.get_focused_tabs_mut().active_tab_mut().mark()?;
+                match dir {
+                    NavDirection::Up => self.get_focused_pane_mut().select_prev(),
+                    NavDirection::Down => self.get_focused_pane_mut().select_next(),
+                }
+                Ok(())
+            }
+            Action::ClearMarks => {
+                self.get_focused_tabs_mut()
+                    .active_tab_mut()
+                    .deselect_items();
+                Ok(())
+            }
             Action::OpenSelected => self
                 .get_focused_pane_mut()
                 .change_directory()

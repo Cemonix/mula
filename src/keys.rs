@@ -148,6 +148,24 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Marks or unmarks the item under the cursor",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::Up).shift(),
+        msg: Action::MarkAndMove(NavDirection::Up),
+        bar: None,
+        help: "Marks the item under the cursor and moves up",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Down).shift(),
+        msg: Action::MarkAndMove(NavDirection::Down),
+        bar: None,
+        help: "Marks the item under the cursor and moves down",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Esc),
+        msg: Action::ClearMarks,
+        bar: None,
+        help: "Unmarks every item in the focused panel",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::F(5)),
         msg: Action::Transfer {
             op: TransferOp::Copy,

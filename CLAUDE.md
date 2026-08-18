@@ -154,6 +154,11 @@ Marks and operations:
 - **Deleting means the trash (F8); permanent deletion is Shift+F8**, a deliberate
   choice and never a fallback. "If the trash fails, delete for real" means the
   safety net is missing exactly when someone was relying on it.
+- **Marks are cleared only on a fully successful batch.** A partial failure keeps
+  them, so the batch can be retried once the cause is dealt with instead of the
+  user having to mark everything again.
+- **A confirmation dialog opens on the harmless answer.** `Choice::No` is the
+  starting focus, so a stray Enter on a delete confirmation does nothing.
 
 Rendering:
 

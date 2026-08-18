@@ -3,13 +3,16 @@ use std::{collections::HashSet, io, path::Path, rc::Rc};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Stylize},
-    text::Line,
-    widgets::{Block, List, ListState},
+    style::{Color, Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, List, ListItem, ListState},
 };
 use thiserror::Error;
 
-use crate::fs::directory::{DirEntry, DirEntryKind, Directory};
+use crate::{
+    fs::directory::{DirEntry, Directory},
+    ui::icon::Icon,
+};
 
 #[derive(Error, Debug)]
 pub enum PaneError {
@@ -30,6 +33,16 @@ impl Pane {
     const FOCUSED: Color = Color::Blue;
     /// Border colour of every other pane.
     const UNFOCUSED: Color = Color::White;
+    /// Colour of the bar drawn in the mark column of a marked row.
+    const MARK: Color = Color::Rgb(0x98, 0xc3, 0x79);
+    /// Background of a marked row.
+    const MARKED_BG: Color = Color::Rgb(0x2a, 0x2a, 0x2d);
+    /// Background of the row the cursor is on.
+    const CURSOR_BG: Color = Color::Rgb(0x33, 0x3c, 0x4d);
+    /// Drawn in the mark column of a marked row.
+    const MARK_BAR: &'static str = "\u{258c} ";
+    /// Holds the mark column open on an unmarked row.
+    const MARK_BLANK: &'static str = "  ";
 
     /// Opens `directory` with its first entry selected, or with nothing
     /// selected while the listing is empty.
@@ -119,24 +132,34 @@ impl Pane {
         frame.render_widget(block, area);
 
         let list = List::new(self.directory.entries().iter().map(|entry| {
-            let file_name = match &entry.kind {
-                DirEntryKind::Parent => "..".to_string(),
-                _ => match entry.path.file_name() {
-                    Some(n) => n.to_string_lossy().to_string(),
-                    None => {
-                        tracing::warn!(path = ?entry.path, "no file name");
-                        entry.path.to_string_lossy().to_string()
-                    }
-                },
+            // Every row, the parent included, is labelled by the last component
+            // of its path. The filesystem root has none, so it labels itself.
+            let label = match entry.path.file_name() {
+                Some(name) => name.to_string_lossy().to_string(),
+                None => entry.path.to_string_lossy().to_string(),
             };
-            if selected_items.contains(&entry.path) {
-                format!("• {}", file_name)
+            let icon = Icon::icon_for(entry);
+            let marked = selected_items.contains(&entry.path);
+            let item = ListItem::new(Line::from(vec![
+                Span::styled(
+                    if marked {
+                        Self::MARK_BAR
+                    } else {
+                        Self::MARK_BLANK
+                    },
+                    Style::new().fg(Self::MARK),
+                ),
+                Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
+                Span::raw(label),
+            ]));
+            if marked {
+                item.style(Style::new().bg(Self::MARKED_BG))
             } else {
-                file_name
+                item
             }
         }))
         .style(Color::White)
-        .highlight_style(Modifier::REVERSED)
+        .highlight_style(Style::new().bg(Self::CURSOR_BG))
         .highlight_symbol(">");
         frame.render_stateful_widget(list, inner_area, &mut self.list_state);
     }
@@ -155,6 +178,7 @@ fn clamped(selected: Option<usize>, len: usize) -> Option<usize> {
 #[cfg(test)]
 mod pane_tests {
     use super::*;
+    use crate::fs::directory::DirEntryKind;
 
     /// Builds a pane over `count` file entries at `/0`, `/1`, … in that order.
     fn pane(count: usize) -> Pane {

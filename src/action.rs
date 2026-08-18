@@ -26,6 +26,8 @@ pub enum Action {
     OpenSelected,
     ToggleMark,
     ToggleTab(ToggleDirection),
+    MarkAndMove(NavDirection),
+    ClearMarks,
     Transfer { op: TransferOp },
     Delete,
     NewTab,

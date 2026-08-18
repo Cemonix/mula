@@ -102,7 +102,7 @@ impl Tab {
 
     pub fn toggle_mark(&mut self) -> Result<(), PaneError> {
         let selected = self.pane.selected_entry()?;
-        // Parent dir cannot be selected
+        // The parent entry is never marked.
         if selected.kind == DirEntryKind::Parent {
             return Ok(());
         }
@@ -113,6 +113,18 @@ impl Tab {
         } else {
             self.selected_items.insert(path);
         }
+        Ok(())
+    }
+
+    /// Marks the item under the cursor, leaving an already marked one marked.
+    /// The parent entry is never marked.
+    pub fn mark(&mut self) -> Result<(), PaneError> {
+        let selected = self.pane.selected_entry()?;
+        if selected.kind == DirEntryKind::Parent {
+            return Ok(());
+        }
+
+        self.selected_items.insert(Rc::clone(&selected.path));
         Ok(())
     }
 
