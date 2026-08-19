@@ -40,6 +40,7 @@ pub enum MutationOp {
     Delete { path: PathBuf },
     Rename { path: PathBuf, new_name: String },
     CreateDir { parent: PathBuf, name: String },
+    CreateFile { parent: PathBuf, name: String },
 }
 
 impl MutationOp {
@@ -49,7 +50,23 @@ impl MutationOp {
             MutationOp::Rename { path, new_name } => {
                 fs::rename(path, path.with_file_name(new_name))
             }
-            MutationOp::CreateDir { parent, name } => fs::create_dir(parent.join(name)),
+            MutationOp::CreateDir { parent, name } => {
+                let path = parent.join(name);
+                if path.symlink_metadata().is_ok() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", path.display()),
+                    ));
+                }
+                fs::create_dir_all(path)
+            }
+            MutationOp::CreateFile { parent, name } => {
+                let path = parent.join(name);
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir)?;
+                }
+                fs::File::create_new(path).map(|_| ())
+            }
         }
     }
 }
@@ -157,6 +174,10 @@ mod ops_tests {
 
         fn at(&self, relative: &str) -> PathBuf {
             self.0.join(relative)
+        }
+
+        fn root(&self) -> PathBuf {
+            self.0.clone()
         }
 
         fn make_dir(&self, path: &Path) {
@@ -398,5 +419,98 @@ mod ops_tests {
         .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn creates_a_directory_and_any_missing_intermediate_directories() {
+        let t = TempTree::new();
+
+        MutationOp::CreateDir {
+            parent: t.root(),
+            name: "fol/fol2/fol3".to_string(),
+        }
+        .execute()
+        .unwrap();
+
+        assert!(t.at("fol/fol2/fol3").is_dir());
+    }
+
+    #[test]
+    fn creates_a_directory_through_existing_intermediate_directories() {
+        let t = TempTree::new();
+        t.make_dir(&t.at("fol/fol2"));
+
+        MutationOp::CreateDir {
+            parent: t.root(),
+            name: "fol/fol2/fol3".to_string(),
+        }
+        .execute()
+        .unwrap();
+
+        assert!(t.at("fol/fol2/fol3").is_dir());
+    }
+
+    #[test]
+    fn refuses_to_recreate_an_existing_directory() {
+        let t = TempTree::new();
+        t.make_dir(&t.at("fol"));
+
+        let err = MutationOp::CreateDir {
+            parent: t.root(),
+            name: "fol".to_string(),
+        }
+        .execute()
+        .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn creates_a_file_and_any_missing_parent_directories() {
+        let t = TempTree::new();
+
+        MutationOp::CreateFile {
+            parent: t.root(),
+            name: "fol/fol2/fol3/file.txt".to_string(),
+        }
+        .execute()
+        .unwrap();
+
+        assert!(t.at("fol/fol2/fol3/file.txt").is_file());
+    }
+
+    #[test]
+    fn creates_a_file_through_existing_intermediate_directories() {
+        let t = TempTree::new();
+        t.make_dir(&t.at("fol/fol2"));
+
+        MutationOp::CreateFile {
+            parent: t.root(),
+            name: "fol/fol2/fol3/file.txt".to_string(),
+        }
+        .execute()
+        .unwrap();
+
+        assert!(t.at("fol/fol2/fol3/file.txt").is_file());
+    }
+
+    #[test]
+    fn refuses_to_overwrite_an_existing_file() {
+        let t = TempTree::new();
+        t.make_file("file.txt", "original");
+
+        let err = MutationOp::CreateFile {
+            parent: t.root(),
+            name: "file.txt".to_string(),
+        }
+        .execute()
+        .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(t.at("file.txt")).unwrap(),
+            "original",
+            "existing file must not be clobbered"
+        );
     }
 }

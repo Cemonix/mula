@@ -2,14 +2,17 @@ use std::{collections::VecDeque, io, path::Path, rc::Rc, time::Duration};
 
 use ratatui::{
     DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyEvent, KeyEventKind},
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Constraint, Direction, Flex, Layout, Rect},
 };
 use thiserror::Error;
 
 use crate::{
-    action::{Action, NavDirection, Side, ToggleDirection},
-    fs::ops::{MutationOp, TransferOp},
+    action::{Action, InputPurpose, NavDirection, Side, ToggleDirection},
+    fs::{
+        directory::DirEntryKind,
+        ops::{MutationOp, TransferOp},
+    },
     keys::{self, KeyBinding},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
@@ -17,6 +20,7 @@ use crate::{
         infobar::InfoBar,
         keybar::Keybar,
         pane::{Pane, PaneError},
+        prompt::{InputMsg, Prompt},
         tab::{Tab, TabList},
         toast::{Toast, ToastLevel},
     },
@@ -25,8 +29,14 @@ use crate::{
 #[derive(Debug)]
 pub enum Mode {
     Browse,
-    Confirm { dialog: Dialog, pending: Action },
-    // později: Input { prompt: Prompt, pending: … }
+    Confirm {
+        dialog: Dialog,
+        pending: Action,
+    },
+    Input {
+        prompt: Prompt,
+        pending: InputPurpose,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -135,6 +145,11 @@ impl App {
             frame.render_widget(dialog, frame.area());
         }
 
+        if let Mode::Input { prompt, .. } = &self.mode {
+            frame.render_widget(prompt, frame.area());
+            frame.set_cursor_position(prompt.cursor_screen_position(frame.area()));
+        }
+
         // Newest toast in the bottom-right corner, older ones stacked above it.
         // The first that no longer fits ends the stack; nothing older would fit
         // either.
@@ -181,6 +196,9 @@ impl App {
             Mode::Confirm { .. } => {
                 frame.render_widget(Keybar::new(Dialog::DIALOG_KEYS), keys_area)
             }
+            Mode::Input { .. } => {
+                frame.render_widget(Keybar::new(Prompt::PROMPT_KEYS), keys_area);
+            }
         }
 
         if self.show_help {
@@ -188,6 +206,9 @@ impl App {
                 Mode::Browse => frame.render_widget(Help::new(keys::BROWSE_KEYS), frame.area()),
                 Mode::Confirm { .. } => {
                     frame.render_widget(Help::new(Dialog::DIALOG_KEYS), frame.area())
+                }
+                Mode::Input { .. } => {
+                    frame.render_widget(Help::new(Prompt::PROMPT_KEYS), frame.area());
                 }
             }
         }
@@ -215,6 +236,7 @@ impl App {
 
         match &mut self.mode {
             Mode::Confirm { .. } => self.handle_confirm_key(key),
+            Mode::Input { .. } => self.handle_input_key(key),
             Mode::Browse => {
                 if let Some(action) = keys::resolve(keys::BROWSE_KEYS, &key)
                     && let Err(e) = self.dispatch(action)
@@ -240,6 +262,7 @@ impl App {
                 match nav_dir {
                     NavDirection::Up => self.get_focused_pane_mut().select_prev(),
                     NavDirection::Down => self.get_focused_pane_mut().select_next(),
+                    _ => (),
                 };
                 Ok(())
             }
@@ -263,6 +286,7 @@ impl App {
                 match dir {
                     NavDirection::Up => self.get_focused_pane_mut().select_prev(),
                     NavDirection::Down => self.get_focused_pane_mut().select_next(),
+                    _ => (),
                 }
                 Ok(())
             }
@@ -287,6 +311,8 @@ impl App {
             Action::Transfer { op } => self.transfer(op),
             Action::Delete => self.confirm_delete(),
             Action::DeleteMarked => self.delete_marked(),
+            Action::Rename => self.start_rename(),
+            Action::New => self.start_new(),
             Action::ShowHelp => {
                 self.show_help = true;
                 Ok(())
@@ -317,6 +343,68 @@ impl App {
                 }
             }
         }
+    }
+
+    fn handle_input_key(&mut self, key: KeyEvent) {
+        let Mode::Input { prompt, pending } = &mut self.mode else {
+            return;
+        };
+
+        match keys::resolve(Prompt::PROMPT_KEYS, &key) {
+            Some(InputMsg::MoveCursor(dir)) => prompt.move_cursor(dir),
+            Some(InputMsg::Cancel) => self.mode = Mode::Browse,
+            Some(InputMsg::Confirm) => {
+                let text = prompt.text().to_string();
+                let pending = pending.clone();
+                self.mode = Mode::Browse;
+                if text.is_empty() {
+                    self.notify(ToastLevel::Warning, "Nothing was typed", None);
+                } else if let Err(e) = self.mutate(pending, text) {
+                    self.notify(ToastLevel::Error, e, None);
+                }
+            }
+            None => match key.code {
+                KeyCode::Char(c) => prompt.insert(c),
+                KeyCode::Backspace => prompt.backspace(),
+                _ => (),
+            },
+        }
+    }
+
+    fn start_rename(&mut self) -> Result<(), AppError> {
+        let entry = self.get_focused_pane().selected_entry()?;
+        if entry.kind == DirEntryKind::Parent {
+            return Ok(());
+        }
+        let target = Rc::clone(&entry.path);
+        let name = entry
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+
+        let mut prompt = Prompt::new("Rename");
+        if let Some(name) = name {
+            prompt.set_text(name);
+        }
+        self.mode = Mode::Input {
+            prompt,
+            pending: InputPurpose::Rename(target),
+        };
+        Ok(())
+    }
+
+    fn start_new(&mut self) -> Result<(), AppError> {
+        let parent = Rc::clone(self.get_focused_pane().get_current_dir());
+        self.mode = Mode::Input {
+            prompt: Prompt::new("New"),
+            pending: InputPurpose::New(parent),
+        };
+        Ok(())
+    }
+
+    fn mutate(&mut self, purpose: InputPurpose, name: String) -> Result<(), AppError> {
+        purpose.op(name).execute()?;
+        self.refresh_panes()
     }
 
     fn transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
