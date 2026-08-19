@@ -166,6 +166,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Unmarks every item in the focused panel",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::F(2)),
+        msg: Action::Rename,
+        bar: Some("Rename"),
+        help: "Renames the item under the cursor",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::F(5)),
         msg: Action::Transfer {
             op: TransferOp::Copy,
@@ -180,6 +186,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         },
         bar: Some("Move"),
         help: "Moves marked items into the other panel",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::F(7)),
+        msg: Action::New,
+        bar: Some("New"),
+        help: "Creates a file, or a folder if the name ends with /",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(8)),
