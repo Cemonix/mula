@@ -10,6 +10,7 @@ use ratatui::{
 };
 
 use crate::{
+    action::MarkOp,
     fs::directory::{DirEntryKind, Directory},
     ui::pane::{Pane, PaneError},
 };
@@ -23,10 +24,6 @@ pub struct TabList {
 impl TabList {
     pub fn new(tabs: Vec<Tab>) -> Self {
         Self { tabs, active: 0 }
-    }
-
-    pub fn len(&self) -> usize {
-        self.tabs.len()
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
@@ -72,7 +69,7 @@ impl TabList {
 
 #[derive(Debug)]
 pub struct Tab {
-    pub title: String,
+    title: String,
     pane: Pane,
     selected_items: HashSet<Rc<Path>>,
 }
@@ -100,31 +97,34 @@ impl Tab {
         &self.selected_items
     }
 
-    pub fn toggle_mark(&mut self) -> Result<(), PaneError> {
+    pub fn get_title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn rename(&mut self, title: String) {
+        self.title = title;
+    }
+
+    pub fn apply_mark(&mut self, op: MarkOp) -> Result<(), PaneError> {
         let selected = self.pane.selected_entry()?;
         // The parent entry is never marked.
         if selected.kind == DirEntryKind::Parent {
             return Ok(());
         }
 
-        let path = Rc::clone(&selected.path);
-        if self.selected_items.contains(&path) {
-            self.selected_items.remove(&path);
-        } else {
-            self.selected_items.insert(path);
+        match op {
+            MarkOp::Toggle => {
+                if !self.selected_items.insert(Rc::clone(&selected.path)) {
+                    self.selected_items.remove(&selected.path);
+                }
+            }
+            MarkOp::Mark => {
+                self.selected_items.insert(Rc::clone(&selected.path));
+            }
+            MarkOp::Unmark => {
+                self.selected_items.remove(&selected.path);
+            }
         }
-        Ok(())
-    }
-
-    /// Marks the item under the cursor, leaving an already marked one marked.
-    /// The parent entry is never marked.
-    pub fn mark(&mut self) -> Result<(), PaneError> {
-        let selected = self.pane.selected_entry()?;
-        if selected.kind == DirEntryKind::Parent {
-            return Ok(());
-        }
-
-        self.selected_items.insert(Rc::clone(&selected.path));
         Ok(())
     }
 

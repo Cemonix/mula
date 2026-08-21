@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use thiserror::Error;
 
 use crate::{
-    action::{Action, NavDirection, Side, ToggleDirection},
+    action::{Action, MarkOp, NavDirection, ToggleDirection},
     fs::ops::TransferOp,
 };
 
@@ -124,16 +124,10 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Moves the cursor one item down",
     },
     Binding {
-        key: KeyBinding::plain(KeyCode::Left),
-        msg: Action::FocusSide(Side::Left),
+        key: KeyBinding::plain(KeyCode::Tab),
+        msg: Action::ToggleSide,
         bar: None,
-        help: "Focuses the left panel",
-    },
-    Binding {
-        key: KeyBinding::plain(KeyCode::Right),
-        msg: Action::FocusSide(Side::Right),
-        bar: None,
-        help: "Focuses the right panel",
+        help: "Focuses the other panel",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Enter),
@@ -149,15 +143,39 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Up).shift(),
-        msg: Action::MarkAndMove(NavDirection::Up),
+        msg: Action::MarkAndMove {
+            op: MarkOp::Mark,
+            nav_dir: NavDirection::Up,
+        },
         bar: None,
         help: "Marks the item under the cursor and moves up",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Down).shift(),
-        msg: Action::MarkAndMove(NavDirection::Down),
+        msg: Action::MarkAndMove {
+            op: MarkOp::Mark,
+            nav_dir: NavDirection::Down,
+        },
         bar: None,
         help: "Marks the item under the cursor and moves down",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Up).alt(),
+        msg: Action::MarkAndMove {
+            op: MarkOp::Unmark,
+            nav_dir: NavDirection::Up,
+        },
+        bar: None,
+        help: "Unmarks the item under the cursor and moves up",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Down).alt(),
+        msg: Action::MarkAndMove {
+            op: MarkOp::Unmark,
+            nav_dir: NavDirection::Down,
+        },
+        bar: None,
+        help: "Unmarks the item under the cursor and moves down",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Esc),
@@ -189,7 +207,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(7)),
-        msg: Action::New,
+        msg: Action::CreateEntry,
         bar: Some("New"),
         help: "Creates a file, or a folder if the name ends with /",
     },
@@ -204,6 +222,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         msg: Action::NewTab,
         bar: None,
         help: "Opens a new tab in the focused panel",
+    },
+    Binding {
+        key: KeyBinding::ctrl(KeyCode::Char('r')),
+        msg: Action::RenameTab,
+        bar: None,
+        help: "Renames the active tab",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Char('[')),

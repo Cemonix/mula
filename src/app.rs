@@ -8,7 +8,7 @@ use ratatui::{
 use thiserror::Error;
 
 use crate::{
-    action::{Action, InputPurpose, NavDirection, Side, ToggleDirection},
+    action::{Action, InputPurpose, InputTarget, MarkOp, NavDirection, Side, ToggleDirection},
     fs::{
         directory::DirEntryKind,
         ops::{MutationOp, TransferOp},
@@ -35,7 +35,7 @@ pub enum Mode {
     },
     Input {
         prompt: Prompt,
-        pending: InputPurpose,
+        pending: InputTarget,
     },
 }
 
@@ -68,8 +68,8 @@ impl App {
 
     pub fn new() -> Result<Self, AppError> {
         Ok(Self {
-            left_tabs: TabList::new(vec![Tab::new(String::from("Tab 1"))?]),
-            right_tabs: TabList::new(vec![Tab::new(String::from("Tab 1"))?]),
+            left_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
+            right_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
@@ -229,6 +229,9 @@ impl App {
             return Ok(());
         }
 
+        tracing::info!("{}", key.modifiers);
+        tracing::info!("{}", key.code);
+
         if self.show_help {
             self.show_help = false;
             return Ok(());
@@ -254,8 +257,8 @@ impl App {
                 self.exit = true;
                 Ok(())
             }
-            Action::FocusSide(side) => {
-                self.focused_side = side;
+            Action::ToggleSide => {
+                self.focused_side = self.focused_side.toggle();
                 Ok(())
             }
             Action::MoveCursor(nav_dir) => {
@@ -269,7 +272,7 @@ impl App {
             Action::ToggleMark => self
                 .get_focused_tabs_mut()
                 .active_tab_mut()
-                .toggle_mark()
+                .apply_mark(MarkOp::Toggle)
                 .map_err(AppError::from),
             Action::ToggleTab(tog_dir) => match tog_dir {
                 ToggleDirection::Previous => {
@@ -281,9 +284,11 @@ impl App {
                     Ok(())
                 }
             },
-            Action::MarkAndMove(dir) => {
-                self.get_focused_tabs_mut().active_tab_mut().mark()?;
-                match dir {
+            Action::MarkAndMove { op, nav_dir } => {
+                self.get_focused_tabs_mut()
+                    .active_tab_mut()
+                    .apply_mark(op)?;
+                match nav_dir {
                     NavDirection::Up => self.get_focused_pane_mut().select_prev(),
                     NavDirection::Down => self.get_focused_pane_mut().select_next(),
                     _ => (),
@@ -301,18 +306,17 @@ impl App {
                 .change_directory()
                 .map_err(AppError::from),
             Action::NewTab => {
-                let tab_list = self.get_focused_tabs_mut();
-                let n = tab_list.len();
-                if let Ok(new_tab) = Tab::new(format!("Tab {}", n + 1)) {
-                    tab_list.add_tab(new_tab);
+                if let Ok(new_tab) = Tab::new(String::from("New Tab")) {
+                    self.get_focused_tabs_mut().add_tab(new_tab);
                 }
                 Ok(())
             }
             Action::Transfer { op } => self.transfer(op),
             Action::Delete => self.confirm_delete(),
             Action::DeleteMarked => self.delete_marked(),
-            Action::Rename => self.start_rename(),
-            Action::New => self.start_new(),
+            Action::Rename => self.prompt_rename(),
+            Action::CreateEntry => self.prompt_create_entry(),
+            Action::RenameTab => self.prompt_rename_tab(),
             Action::ShowHelp => {
                 self.show_help = true;
                 Ok(())
@@ -359,8 +363,17 @@ impl App {
                 self.mode = Mode::Browse;
                 if text.is_empty() {
                     self.notify(ToastLevel::Warning, "Nothing was typed", None);
-                } else if let Err(e) = self.mutate(pending, text) {
-                    self.notify(ToastLevel::Error, e, None);
+                } else {
+                    let result = match pending {
+                        InputTarget::Mutation(purpose) => self.mutate(purpose, text),
+                        InputTarget::RenameTab => {
+                            self.get_focused_tabs_mut().active_tab_mut().rename(text);
+                            Ok(())
+                        }
+                    };
+                    if let Err(e) = result {
+                        self.notify(ToastLevel::Error, e, None);
+                    }
                 }
             }
             None => match key.code {
@@ -371,7 +384,7 @@ impl App {
         }
     }
 
-    fn start_rename(&mut self) -> Result<(), AppError> {
+    fn prompt_rename(&mut self) -> Result<(), AppError> {
         let entry = self.get_focused_pane().selected_entry()?;
         if entry.kind == DirEntryKind::Parent {
             return Ok(());
@@ -388,16 +401,26 @@ impl App {
         }
         self.mode = Mode::Input {
             prompt,
-            pending: InputPurpose::Rename(target),
+            pending: InputTarget::Mutation(InputPurpose::Rename(target)),
         };
         Ok(())
     }
 
-    fn start_new(&mut self) -> Result<(), AppError> {
+    fn prompt_create_entry(&mut self) -> Result<(), AppError> {
         let parent = Rc::clone(self.get_focused_pane().get_current_dir());
         self.mode = Mode::Input {
             prompt: Prompt::new("New"),
-            pending: InputPurpose::New(parent),
+            pending: InputTarget::Mutation(InputPurpose::CreateEntry(parent)),
+        };
+        Ok(())
+    }
+
+    fn prompt_rename_tab(&mut self) -> Result<(), AppError> {
+        let mut prompt = Prompt::new("Rename tab");
+        prompt.set_text(self.get_focused_tabs().active_tab().get_title());
+        self.mode = Mode::Input {
+            prompt,
+            pending: InputTarget::RenameTab,
         };
         Ok(())
     }
