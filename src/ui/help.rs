@@ -64,3 +64,15 @@ impl<'b, T> Widget for Help<'b, T> {
         .render(columns[1], buf);
     }
 }
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use crate::keys::BROWSE_KEYS;
+
+    #[test]
+    fn browse_keys_fit_the_help_overlay() {
+        let inner_height = Help::<()>::HEIGHT - 2; // top and bottom border
+        assert!(BROWSE_KEYS.len() <= inner_height as usize);
+    }
+}

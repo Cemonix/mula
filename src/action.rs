@@ -8,6 +8,15 @@ pub enum Side {
     Right,
 }
 
+impl Side {
+    pub fn toggle(self) -> Self {
+        match self {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum NavDirection {
     Up,
@@ -22,21 +31,30 @@ pub enum ToggleDirection {
     Next,
 }
 
+/// What a mark action does to the item under the cursor.
+#[derive(Clone, Copy, Debug)]
+pub enum MarkOp {
+    Toggle,
+    Mark,
+    Unmark,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
     Quit,
-    FocusSide(Side),
+    ToggleSide,
     MoveCursor(NavDirection),
     OpenSelected,
     ToggleMark,
     ToggleTab(ToggleDirection),
-    MarkAndMove(NavDirection),
+    MarkAndMove { op: MarkOp, nav_dir: NavDirection },
     ClearMarks,
     Transfer { op: TransferOp },
     Delete,
     Rename,
-    New,
+    CreateEntry,
     NewTab,
+    RenameTab,
     DeleteMarked,
     ShowHelp,
     None,
@@ -46,7 +64,15 @@ pub enum Action {
 #[derive(Debug, Clone)]
 pub enum InputPurpose {
     Rename(Rc<Path>),
-    New(Rc<Path>),
+    CreateEntry(Rc<Path>),
+}
+
+/// What happens once an `Input` prompt is confirmed: either a filesystem
+/// mutation, or the title of the tab that was open for renaming.
+#[derive(Debug, Clone)]
+pub enum InputTarget {
+    Mutation(InputPurpose),
+    RenameTab,
 }
 
 impl InputPurpose {
@@ -59,7 +85,7 @@ impl InputPurpose {
                 path: target.to_path_buf(),
                 new_name: name,
             },
-            InputPurpose::New(parent) => match name.strip_suffix('/') {
+            InputPurpose::CreateEntry(parent) => match name.strip_suffix('/') {
                 Some(dirs) => MutationOp::CreateDir {
                     parent: parent.to_path_buf(),
                     name: dirs.to_string(),
