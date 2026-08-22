@@ -8,7 +8,7 @@ use ratatui::{
 use thiserror::Error;
 
 use crate::{
-    action::{Action, InputPurpose, InputTarget, MarkOp, NavDirection, Side, ToggleDirection},
+    action::{Action, VerticalDir},
     fs::{
         directory::DirEntryKind,
         ops::{MutationOp, TransferOp},
@@ -21,10 +21,25 @@ use crate::{
         keybar::Keybar,
         pane::{Pane, PaneError},
         prompt::{InputMsg, Prompt},
-        tab::{Tab, TabList},
+        tab::{MarkOp, Tab, TabList},
         toast::{Toast, ToastLevel},
     },
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+impl Side {
+    pub fn toggle(self) -> Self {
+        match self {
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Mode {
@@ -39,10 +54,98 @@ pub enum Mode {
     },
 }
 
+/// A filesystem mutation that still needs the name being typed.
+#[derive(Debug, Clone)]
+pub enum PendingMutation {
+    Rename(Rc<Path>),
+    CreateEntry(Rc<Path>),
+}
+
+impl PendingMutation {
+    /// A name ending in `/` creates a directory; anything else creates a
+    /// file. Either may carry intermediate directories that do not exist
+    /// yet (`fol/fol2/fol3/file1.txt`), which the op creates along the way.
+    pub fn op(self, name: String) -> MutationOp {
+        match self {
+            PendingMutation::Rename(target) => MutationOp::Rename {
+                path: target.to_path_buf(),
+                new_name: name,
+            },
+            PendingMutation::CreateEntry(parent) => match name.strip_suffix('/') {
+                Some(dirs) => MutationOp::CreateDir {
+                    parent: parent.to_path_buf(),
+                    name: dirs.to_string(),
+                },
+                None => MutationOp::CreateFile {
+                    parent: parent.to_path_buf(),
+                    name,
+                },
+            },
+        }
+    }
+}
+
+/// Where the text of a confirmed `Input` prompt goes: into a filesystem
+/// mutation, or into the title of the tab that was open for renaming.
+#[derive(Debug, Clone)]
+pub enum InputTarget {
+    Mutation(PendingMutation),
+    RenameTab,
+}
+
+/// How a batch of filesystem operations ended. `total` is the size of the
+/// batch, fixed when it starts, so a run that stops early is still reported
+/// against what it set out to do. A batch never fails as a whole: an item that
+/// cannot be handled is counted, and the run carries on to the next one.
+#[derive(Debug)]
+pub struct ProcessedSummary {
+    processed: usize,
+    skipped: usize,
+    failed: usize,
+    total: usize,
+}
+
+impl ProcessedSummary {
+    pub fn new(total: usize) -> Self {
+        Self {
+            processed: 0,
+            skipped: 0,
+            failed: 0,
+            total,
+        }
+    }
+
+    pub fn process(&mut self) {
+        self.processed += 1;
+    }
+
+    pub fn skip(&mut self) {
+        self.skipped += 1;
+    }
+
+    pub fn fail(&mut self) {
+        self.failed += 1;
+    }
+
+    /// Whether nothing went through, either because nothing was marked or
+    /// because every item was skipped or failed.
+    pub fn nothing_processed(&self) -> bool {
+        self.processed == 0
+    }
+
+    pub fn has_failures(&self) -> bool {
+        self.failed > 0
+    }
+
+    /// Whether the disk may have changed. A failed item counts: an op can give
+    /// up half way through and still leave something behind.
+    pub fn touched_disk(&self) -> bool {
+        self.processed > 0 || self.failed > 0
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("Source and destination directories are identical: {0}")]
-    SameDirectory(Rc<Path>),
     #[error(transparent)]
     Pane(#[from] PaneError),
     #[error(transparent)]
@@ -262,11 +365,7 @@ impl App {
                 Ok(())
             }
             Action::MoveCursor(nav_dir) => {
-                match nav_dir {
-                    NavDirection::Up => self.get_focused_pane_mut().select_prev(),
-                    NavDirection::Down => self.get_focused_pane_mut().select_next(),
-                    _ => (),
-                };
+                self.move_cursor(nav_dir);
                 Ok(())
             }
             Action::ToggleMark => self
@@ -274,25 +373,15 @@ impl App {
                 .active_tab_mut()
                 .apply_mark(MarkOp::Toggle)
                 .map_err(AppError::from),
-            Action::ToggleTab(tog_dir) => match tog_dir {
-                ToggleDirection::Previous => {
-                    self.get_focused_tabs_mut().toggle_prev();
-                    Ok(())
-                }
-                ToggleDirection::Next => {
-                    self.get_focused_tabs_mut().toggle_next();
-                    Ok(())
-                }
-            },
+            Action::ToggleTab(tog_dir) => {
+                self.get_focused_tabs_mut().toggle(tog_dir);
+                Ok(())
+            }
             Action::MarkAndMove { op, nav_dir } => {
                 self.get_focused_tabs_mut()
                     .active_tab_mut()
                     .apply_mark(op)?;
-                match nav_dir {
-                    NavDirection::Up => self.get_focused_pane_mut().select_prev(),
-                    NavDirection::Down => self.get_focused_pane_mut().select_next(),
-                    _ => (),
-                }
+                self.move_cursor(nav_dir);
                 Ok(())
             }
             Action::ClearMarks => {
@@ -311,9 +400,21 @@ impl App {
                 }
                 Ok(())
             }
-            Action::Transfer { op } => self.transfer(op),
+            Action::Transfer { op } => {
+                let summary = self.transfer(op);
+                let verb = match op {
+                    TransferOp::Copy => "copied",
+                    TransferOp::Move => "moved",
+                };
+                self.notify_summary(verb, &summary);
+                self.refresh_after(&summary)
+            }
             Action::Delete => self.confirm_delete(),
-            Action::DeleteMarked => self.delete_marked(),
+            Action::DeleteMarked => {
+                let summary = self.delete_marked();
+                self.notify_summary("deleted", &summary);
+                self.refresh_after(&summary)
+            }
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
@@ -321,7 +422,13 @@ impl App {
                 self.show_help = true;
                 Ok(())
             }
-            Action::None => Ok(()),
+        }
+    }
+
+    fn move_cursor(&mut self, dir: VerticalDir) {
+        match dir {
+            VerticalDir::Up => self.get_focused_pane_mut().select_prev(),
+            VerticalDir::Down => self.get_focused_pane_mut().select_next(),
         }
     }
 
@@ -365,7 +472,7 @@ impl App {
                     self.notify(ToastLevel::Warning, "Nothing was typed", None);
                 } else {
                     let result = match pending {
-                        InputTarget::Mutation(purpose) => self.mutate(purpose, text),
+                        InputTarget::Mutation(mutation) => self.mutate(mutation, text),
                         InputTarget::RenameTab => {
                             self.get_focused_tabs_mut().active_tab_mut().rename(text);
                             Ok(())
@@ -401,7 +508,7 @@ impl App {
         }
         self.mode = Mode::Input {
             prompt,
-            pending: InputTarget::Mutation(InputPurpose::Rename(target)),
+            pending: InputTarget::Mutation(PendingMutation::Rename(target)),
         };
         Ok(())
     }
@@ -410,7 +517,7 @@ impl App {
         let parent = Rc::clone(self.get_focused_pane().get_current_dir());
         self.mode = Mode::Input {
             prompt: Prompt::new("New"),
-            pending: InputTarget::Mutation(InputPurpose::CreateEntry(parent)),
+            pending: InputTarget::Mutation(PendingMutation::CreateEntry(parent)),
         };
         Ok(())
     }
@@ -425,12 +532,12 @@ impl App {
         Ok(())
     }
 
-    fn mutate(&mut self, purpose: InputPurpose, name: String) -> Result<(), AppError> {
-        purpose.op(name).execute()?;
+    fn mutate(&mut self, mutation: PendingMutation, name: String) -> Result<(), AppError> {
+        mutation.op(name).execute()?;
         self.refresh_panes()
     }
 
-    fn transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
+    fn transfer(&mut self, op: TransferOp) -> ProcessedSummary {
         let (from, to) = match self.focused_side {
             Side::Left => (
                 self.left_tabs.active_tab_mut(),
@@ -442,47 +549,46 @@ impl App {
             ),
         };
 
-        if from.get_selected_items().is_empty() {
-            return Ok(());
-        }
-
         let to_dir = Rc::clone(to.get_pane().get_current_dir());
 
-        let mut counter = 0;
-        let result = from.get_selected_items().iter().try_for_each(|item| {
-            if let Some(source) = item.parent()
-                && source != to_dir.as_ref()
-            {
-                let file_name = item.file_name().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("{} has no file name", item.display()),
-                    )
-                })?;
-                op.execute(item, &to_dir.join(file_name))
-            } else {
-                counter += 1;
-                Ok(())
+        let mut summary = ProcessedSummary::new(from.get_selected_items().len());
+        for item in from.get_selected_items() {
+            // The same directory on both sides is a skip, not a failure. A path
+            // without a parent has nowhere to come from and skips too.
+            if item.parent().is_none_or(|source| source == to_dir.as_ref()) {
+                summary.skip();
+                continue;
             }
-        });
 
-        if counter == from.get_selected_items().len() {
-            return Err(AppError::SameDirectory(Rc::clone(
-                from.get_pane().get_current_dir(),
-            )));
+            let Some(file_name) = item.file_name() else {
+                summary.fail();
+                tracing::error!(path = ?item, "no file name to transfer under");
+                continue;
+            };
+
+            match op.execute(item, &to_dir.join(file_name)) {
+                Ok(()) => summary.process(),
+                Err(e) => {
+                    summary.fail();
+                    tracing::error!(path = ?item, error = %e, "transfer failed");
+                }
+            }
         }
 
-        // Clears the marks only after every item succeeded.
-        if result.is_ok() {
+        // Marks clear only when nothing failed and at least one item moved: a
+        // batch that broke or changed nothing keeps its marks so it can be
+        // retried or aimed somewhere else.
+        if !summary.has_failures() && !summary.nothing_processed() {
             from.deselect_items();
         }
 
-        result.map_err(AppError::from).and(self.refresh_panes())
+        summary
     }
 
     fn confirm_delete(&mut self) -> Result<(), AppError> {
         let tab = self.get_focused_tabs().active_tab();
         if tab.get_selected_items().is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
             return Ok(());
         }
         let count = tab.get_selected_items().len();
@@ -493,28 +599,44 @@ impl App {
         Ok(())
     }
 
-    fn delete_marked(&mut self) -> Result<(), AppError> {
+    fn delete_marked(&mut self) -> ProcessedSummary {
         let tab = self.get_focused_tabs_mut().active_tab_mut();
 
-        let result = tab.get_selected_items().iter().try_for_each(|item| {
+        let mut summary = ProcessedSummary::new(tab.get_selected_items().len());
+        for item in tab.get_selected_items() {
             match (MutationOp::Delete {
                 path: item.to_path_buf(),
             })
             .execute()
             {
+                Ok(()) => summary.process(),
                 // A mark can outlive the file it points at: marks survive a directory
                 // change, and a retried batch walks over what the first pass removed.
-                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                other => other,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => summary.skip(),
+                Err(e) => {
+                    summary.fail();
+                    tracing::error!(path = ?item, error = %e, "delete failed");
+                }
             }
-        });
+        }
 
-        // Clears the marks only after every item succeeded.
-        if result.is_ok() {
+        // Marks clear only when nothing failed and at least one item went: a
+        // batch that broke or changed nothing keeps its marks so it can be
+        // retried.
+        if !summary.has_failures() && !summary.nothing_processed() {
             tab.deselect_items();
         }
 
-        result.map_err(AppError::from).and(self.refresh_panes())
+        summary
+    }
+
+    /// Refreshes both panes when a batch could have changed the disk, so a run
+    /// that only skipped costs no reads.
+    fn refresh_after(&mut self, summary: &ProcessedSummary) -> Result<(), AppError> {
+        if summary.touched_disk() {
+            self.refresh_panes()?;
+        }
+        Ok(())
     }
 
     /// Refreshes the active pane on both sides. Both run even when the first fails;
@@ -523,6 +645,39 @@ impl App {
         let left = self.left_tabs.active_tab_mut().get_pane_mut().refresh();
         let right = self.right_tabs.active_tab_mut().get_pane_mut().refresh();
         left.and(right).map_err(AppError::from)
+    }
+
+    /// Reports how a batch ended, taking the operation's past tense (`copied`)
+    /// to build the message. A batch that touched nothing is a warning rather
+    /// than an info, so silently doing nothing cannot read as success.
+    fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary) {
+        if summary.total == 0 {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return;
+        }
+
+        let mut message = if summary.nothing_processed() {
+            format!("Nothing {verb}")
+        } else if summary.processed == summary.total {
+            format!("{} item(s) {verb}", summary.processed)
+        } else {
+            format!("{} of {} {verb}", summary.processed, summary.total)
+        };
+        if summary.skipped > 0 {
+            message.push_str(&format!(", {} skipped", summary.skipped));
+        }
+        if summary.has_failures() {
+            message.push_str(&format!(", {} failed", summary.failed));
+        }
+
+        let level = if summary.has_failures() {
+            ToastLevel::Error
+        } else if summary.nothing_processed() {
+            ToastLevel::Warning
+        } else {
+            ToastLevel::Info
+        };
+        self.notify(level, message, None);
     }
 
     fn notify(

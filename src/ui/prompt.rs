@@ -7,14 +7,18 @@ use ratatui::{
     widgets::{Block, Clear, Padding, Paragraph, Widget},
 };
 
-use crate::{
-    action::NavDirection,
-    keys::{Binding, KeyBinding},
-};
+use crate::keys::{Binding, KeyBinding};
+
+/// Which way the cursor steps through the typed text.
+#[derive(Clone, Copy, Debug)]
+pub enum HorizontalDir {
+    Left,
+    Right,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputMsg {
-    MoveCursor(NavDirection),
+    MoveCursor(HorizontalDir),
     Confirm,
     Cancel,
 }
@@ -30,13 +34,13 @@ impl Prompt {
     pub const PROMPT_KEYS: &[Binding<InputMsg>] = &[
         Binding {
             key: KeyBinding::plain(KeyCode::Left),
-            msg: InputMsg::MoveCursor(NavDirection::Left),
+            msg: InputMsg::MoveCursor(HorizontalDir::Left),
             bar: None,
             help: "Moves cursor left",
         },
         Binding {
             key: KeyBinding::plain(KeyCode::Right),
-            msg: InputMsg::MoveCursor(NavDirection::Right),
+            msg: InputMsg::MoveCursor(HorizontalDir::Right),
             bar: None,
             help: "Moves cursor right",
         },
@@ -65,12 +69,11 @@ impl Prompt {
         }
     }
 
-    pub fn move_cursor(&mut self, nav_dir: NavDirection) {
+    pub fn move_cursor(&mut self, dir: HorizontalDir) {
         let char_len = self.text_buf.chars().count();
-        match nav_dir {
-            NavDirection::Left => self.cursor_pos = self.cursor_pos.saturating_sub(1),
-            NavDirection::Right => self.cursor_pos = (self.cursor_pos + 1).min(char_len),
-            _ => (),
+        match dir {
+            HorizontalDir::Left => self.cursor_pos = self.cursor_pos.saturating_sub(1),
+            HorizontalDir::Right => self.cursor_pos = (self.cursor_pos + 1).min(char_len),
         }
     }
 

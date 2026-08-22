@@ -4,8 +4,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use thiserror::Error;
 
 use crate::{
-    action::{Action, MarkOp, NavDirection, ToggleDirection},
+    action::{Action, VerticalDir},
     fs::ops::TransferOp,
+    ui::tab::{MarkOp, ToggleDirection},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,13 +114,13 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
 pub const BROWSE_KEYS: &[Binding<Action>] = &[
     Binding {
         key: KeyBinding::plain(KeyCode::Up),
-        msg: Action::MoveCursor(NavDirection::Up),
+        msg: Action::MoveCursor(VerticalDir::Up),
         bar: None,
         help: "Moves the cursor one item up",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Down),
-        msg: Action::MoveCursor(NavDirection::Down),
+        msg: Action::MoveCursor(VerticalDir::Down),
         bar: None,
         help: "Moves the cursor one item down",
     },
@@ -145,7 +146,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Up).shift(),
         msg: Action::MarkAndMove {
             op: MarkOp::Mark,
-            nav_dir: NavDirection::Up,
+            nav_dir: VerticalDir::Up,
         },
         bar: None,
         help: "Marks the item under the cursor and moves up",
@@ -154,7 +155,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Down).shift(),
         msg: Action::MarkAndMove {
             op: MarkOp::Mark,
-            nav_dir: NavDirection::Down,
+            nav_dir: VerticalDir::Down,
         },
         bar: None,
         help: "Marks the item under the cursor and moves down",
@@ -163,7 +164,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Up).alt(),
         msg: Action::MarkAndMove {
             op: MarkOp::Unmark,
-            nav_dir: NavDirection::Up,
+            nav_dir: VerticalDir::Up,
         },
         bar: None,
         help: "Unmarks the item under the cursor and moves up",
@@ -172,7 +173,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Down).alt(),
         msg: Action::MarkAndMove {
             op: MarkOp::Unmark,
-            nav_dir: NavDirection::Down,
+            nav_dir: VerticalDir::Down,
         },
         bar: None,
         help: "Unmarks the item under the cursor and moves down",
