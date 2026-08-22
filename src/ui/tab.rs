@@ -10,10 +10,24 @@ use ratatui::{
 };
 
 use crate::{
-    action::MarkOp,
     fs::directory::{DirEntryKind, Directory},
     ui::pane::{Pane, PaneError},
 };
+
+/// Which neighbour of the active tab becomes active, wrapping around the ends.
+#[derive(Clone, Copy, Debug)]
+pub enum ToggleDirection {
+    Previous,
+    Next,
+}
+
+/// What a mark action does to the item under the cursor.
+#[derive(Clone, Copy, Debug)]
+pub enum MarkOp {
+    Toggle,
+    Mark,
+    Unmark,
+}
 
 #[derive(Debug)]
 pub struct TabList {
@@ -38,12 +52,11 @@ impl TabList {
         &mut self.tabs[self.active]
     }
 
-    pub fn toggle_prev(&mut self) {
-        self.active = self.active.checked_sub(1).unwrap_or(self.tabs.len() - 1);
-    }
-
-    pub fn toggle_next(&mut self) {
-        self.active = (self.active + 1) % self.tabs.len();
+    pub fn toggle(&mut self, dir: ToggleDirection) {
+        self.active = match dir {
+            ToggleDirection::Previous => self.active.checked_sub(1).unwrap_or(self.tabs.len() - 1),
+            ToggleDirection::Next => (self.active + 1) % self.tabs.len(),
+        };
     }
 
     /// Draws the tab strip and the active tab below it. `focused` says whether
