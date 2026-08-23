@@ -191,6 +191,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Renames the item under the cursor",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::F(4)),
+        msg: Action::Find,
+        bar: None,
+        help: "Searches the tree below this panel for a name",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::F(5)),
         msg: Action::Transfer {
             op: TransferOp::Copy,

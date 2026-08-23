@@ -14,7 +14,7 @@ pub struct Help<'b, T> {
 
 impl<'b, T> Help<'b, T> {
     const WIDTH: u16 = 80;
-    const HEIGHT: u16 = 24;
+    const HEIGHT: u16 = 25;
 
     pub fn new(bindings: &'b [Binding<T>]) -> Self {
         Self { bindings }
