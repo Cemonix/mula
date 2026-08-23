@@ -17,7 +17,7 @@ use std::{
     sync::Arc,
 };
 
-use image::{ImageFormat, ImageReader, imageops::FilterType};
+use image::{ImageFormat, ImageReader};
 
 use crate::fs::{
     directory::Directory,
@@ -294,10 +294,11 @@ fn decode(path: &Path, format: ImageFormat, limits: &Limits, live: &Live<'_>) ->
     }
 
     let side = limits.max_bitmap_side;
-    // `resize` keeps the shape of the picture and fits it inside the square,
-    // so only the longer side ever reaches the cap.
+    // `thumbnail` keeps the shape of the picture and fits it inside the
+    // square, so only the longer side ever reaches the cap. Every source pixel
+    // lands in exactly one of the result's, which is an area average.
     let image = if image.width() > side || image.height() > side {
-        image.resize(side, side, FilterType::Triangle)
+        image.thumbnail(side, side)
     } else {
         image
     };

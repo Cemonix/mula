@@ -129,6 +129,10 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - Transparency is composited at drawing time. What is behind the panel is the
   terminal's own colour and unknowable to the reader, so a cell no part of the
   picture reaches is left unpainted rather than filled with a guess.
+- Shrinking with `thumbnail`, not `resize(Triangle)`: at 4000 → 512 it is less
+  than half the time, and an area average is what a reduction that large wants
+  anyway. Measured, because the guess was wrong — in a debug build the resize
+  cost three times the PNG decode, not the other way round.
 
 ## ratatui/crossterm gotchas
 
