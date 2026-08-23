@@ -401,43 +401,9 @@ impl Observer for Reporter<'_> {
 #[cfg(test)]
 mod worker_tests {
     use super::*;
-    use std::{fs, path::PathBuf, sync::atomic::AtomicUsize};
+    use std::{fs, path::PathBuf};
 
-    use crate::fs::job::JobKind;
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    struct TempTree(PathBuf);
-
-    impl TempTree {
-        fn new() -> Self {
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                "mula-worker-{}-{}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-
-        fn at(&self, relative: &str) -> PathBuf {
-            self.0.join(relative)
-        }
-
-        fn make_file(&self, relative: &str, contents: &str) -> PathBuf {
-            let path = self.at(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, contents).unwrap();
-            path
-        }
-    }
-
-    impl Drop for TempTree {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::fs::{job::JobKind, temp_tree::TempTree};
 
     /// Drains until every queued job has reported, the way the main loop does,
     /// and gives up rather than hanging if the worker never answers.
@@ -497,8 +463,7 @@ mod worker_tests {
     fn a_transfer_copies_and_counts_its_bytes() {
         let t = TempTree::new();
         let items = vec![t.make_file("src/a.txt", "aaaa")];
-        let to_dir = t.at("dest");
-        fs::create_dir_all(&to_dir).unwrap();
+        let to_dir = t.make_dir("dest");
 
         let mut worker = Worker::start();
         worker
@@ -518,8 +483,7 @@ mod worker_tests {
     fn an_item_that_fails_comes_back_so_it_can_be_marked_again() {
         let t = TempTree::new();
         let present = t.make_file("src/a.txt", "a");
-        let to_dir = t.at("dest");
-        fs::create_dir_all(&to_dir).unwrap();
+        let to_dir = t.make_dir("dest");
         // A destination that is already taken is the failure that is easiest to
         // arrange and is exactly what a retry is for.
         t.make_file("dest/a.txt", "in the way");
@@ -560,11 +524,10 @@ mod worker_tests {
     fn cancelling_stops_the_batch_and_leaves_the_rest_untried() {
         let t = TempTree::new();
         let items: Vec<PathBuf> = (0..200)
-            .map(|i| t.make_file(&format!("src/{i}.txt"), "x"))
+            .map(|i| t.make_file(format!("src/{i}.txt"), "x"))
             .collect();
         let total = items.len();
-        let to_dir = t.at("dest");
-        fs::create_dir_all(&to_dir).unwrap();
+        let to_dir = t.make_dir("dest");
 
         let mut worker = Worker::start();
         worker
@@ -591,11 +554,10 @@ mod worker_tests {
     fn cancelling_a_job_that_has_already_started_stops_it() {
         let t = TempTree::new();
         let items: Vec<PathBuf> = (0..2000)
-            .map(|i| t.make_file(&format!("src/{i}.txt"), "x"))
+            .map(|i| t.make_file(format!("src/{i}.txt"), "x"))
             .collect();
         let total = items.len();
-        let to_dir = t.at("dest");
-        fs::create_dir_all(&to_dir).unwrap();
+        let to_dir = t.make_dir("dest");
 
         let mut worker = Worker::start();
         worker
