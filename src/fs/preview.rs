@@ -10,11 +10,14 @@
 //! under another file's name. Only the newest one is ever folded in.
 
 use std::{
+    fmt,
     fs::{self, File},
-    io::Read,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+use image::{ImageFormat, ImageReader, imageops::FilterType};
 
 use crate::fs::{
     directory::Directory,
@@ -41,6 +44,16 @@ pub struct Limits {
     /// Characters kept from one line, so a minified bundle on a single line
     /// cannot be the thing that is measured and wrapped every frame.
     pub max_line_chars: usize,
+    /// The largest file that is decoded as an image at all. Unlike text, an
+    /// image has to be read whole, so the cap is what stands between a preview
+    /// and a hundred megabytes of it.
+    pub max_image_bytes: u64,
+    /// The longest side a stored image may claim before it is refused
+    /// undecoded, which is what a decompression bomb runs into.
+    pub max_source_side: u32,
+    /// The longest side of the bitmap that is carried back. A panel is tens of
+    /// cells across, so anything beyond this is detail nothing can draw.
+    pub max_bitmap_side: u32,
 }
 
 impl Default for Limits {
@@ -49,6 +62,62 @@ impl Default for Limits {
             max_bytes: 64 * 1024,
             max_lines: 500,
             max_line_chars: 512,
+            max_image_bytes: 32 * 1024 * 1024,
+            max_source_side: 20_000,
+            max_bitmap_side: 512,
+        }
+    }
+}
+
+/// A decoded image, cut down to something worth carrying across a channel and
+/// sampling from every frame.
+///
+/// Kept as RGBA rather than composited: what shows through a transparent pixel
+/// is whatever the panel sits on, and only the widget knows that.
+pub struct Bitmap {
+    pub width: u32,
+    pub height: u32,
+    /// Four bytes to a pixel, row after row.
+    pixels: Vec<u8>,
+}
+
+/// Prints the size rather than the pixels, so a bitmap can sit in a `Debug`
+/// struct without a megabyte coming out of it.
+impl fmt::Debug for Bitmap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bitmap")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Bitmap {
+    /// The pixel at `(x, y)` as red, green, blue and alpha. Outside the
+    /// bitmap it is transparent black, so a caller that samples a box need not
+    /// clamp its edges.
+    pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        if x >= self.width || y >= self.height {
+            return [0, 0, 0, 0];
+        }
+
+        let at = ((y * self.width + x) * 4) as usize;
+        [
+            self.pixels[at],
+            self.pixels[at + 1],
+            self.pixels[at + 2],
+            self.pixels[at + 3],
+        ]
+    }
+
+    /// A bitmap of `width` by `height` from raw RGBA bytes.
+    #[cfg(test)]
+    pub fn of(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        assert_eq!(pixels.len(), (width * height * 4) as usize);
+        Self {
+            width,
+            height,
+            pixels,
         }
     }
 }
@@ -93,6 +162,7 @@ pub enum Content {
         bytes: Vec<u8>,
         clipped: bool,
     },
+    Image(Bitmap),
     Refused(Refused),
     /// Permissions, a file that vanished between the listing and the read. A
     /// normal state of a file manager, drawn in the panel rather than raised
@@ -157,8 +227,96 @@ fn read(path: &Path, limits: &Limits, live: &Live<'_>) -> Option<Content> {
         return None;
     }
 
+    // The first bytes say what the file is; the extension is not consulted,
+    // because it lies and `ui::icon` already shows how many of them there are.
+    // An image is then read again, whole, since it cannot be decoded from its
+    // front alone.
+    if let Some(format) = sniff(&bytes)
+        && metadata.len() <= limits.max_image_bytes
+    {
+        match decode(path, format, limits, live) {
+            Decoded::Image(bitmap) => return Some(Content::Image(bitmap)),
+            Decoded::Cancelled => return None,
+            // A file whose first bytes claim a format it does not keep is
+            // shown as the bytes it actually holds.
+            Decoded::Failed => (),
+        }
+    }
+
     let clipped = metadata.len() > bytes.len() as u64;
     Some(classify(bytes, clipped, limits))
+}
+
+/// The format the first bytes of a file announce, or `None` for anything that
+/// is not an image this can draw.
+fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    const JPEG: &[u8] = &[0xff, 0xd8, 0xff];
+
+    if bytes.starts_with(PNG) {
+        Some(ImageFormat::Png)
+    } else if bytes.starts_with(JPEG) {
+        Some(ImageFormat::Jpeg)
+    } else {
+        None
+    }
+}
+
+/// What came of trying to read a file as an image.
+enum Decoded {
+    Image(Bitmap),
+    /// Replaced while it was being decoded, which is the longest step there is.
+    Cancelled,
+    /// Not this format after all, or too broken to read.
+    Failed,
+}
+
+/// Decodes `path` and cuts the result down to something a panel can use.
+///
+/// The source is bounded before anything is allocated, so an image claiming
+/// impossible dimensions is refused rather than decoded; the result is scaled
+/// down here rather than at drawing time, because a full sized photograph is
+/// tens of megabytes to carry for a picture tens of cells across.
+fn decode(path: &Path, format: ImageFormat, limits: &Limits, live: &Live<'_>) -> Decoded {
+    let Ok(file) = File::open(path) else {
+        return Decoded::Failed;
+    };
+
+    let mut reader = ImageReader::new(BufReader::new(file));
+    reader.set_format(format);
+    reader.limits(source_limits(limits.max_source_side));
+
+    let Ok(image) = reader.decode() else {
+        return Decoded::Failed;
+    };
+    if live.cancelled() {
+        return Decoded::Cancelled;
+    }
+
+    let side = limits.max_bitmap_side;
+    // `resize` keeps the shape of the picture and fits it inside the square,
+    // so only the longer side ever reaches the cap.
+    let image = if image.width() > side || image.height() > side {
+        image.resize(side, side, FilterType::Triangle)
+    } else {
+        image
+    };
+
+    let rgba = image.into_rgba8();
+    Decoded::Image(Bitmap {
+        width: rgba.width(),
+        height: rgba.height(),
+        pixels: rgba.into_raw(),
+    })
+}
+
+/// Bounds the decoder before it allocates anything. `image::Limits` is
+/// non-exhaustive, so it is built by assignment rather than as a literal.
+fn source_limits(max_side: u32) -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    limits
 }
 
 /// What the link resolves to, following it as far as the filesystem will.
@@ -181,9 +339,8 @@ fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Error>
     Ok(bytes)
 }
 
-/// Decides what the bytes are and shapes them accordingly. A NUL byte in the
-/// prefix means binary; the extension is not consulted, because it lies and
-/// `ui::icon` already shows how many of them there are.
+/// Shapes bytes that are not an image. A NUL byte in the prefix means binary;
+/// anything else is drawn as text, however little of it is valid UTF-8.
 fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
     if bytes.contains(&0) {
         return Content::Binary { bytes, clipped };
@@ -427,6 +584,92 @@ mod preview_tests {
         let text = "ahoj č".as_bytes();
         assert_eq!(whole_chars(&text[..text.len() - 1]), text.len() - 2);
         assert_eq!(whole_chars(text), text.len());
+    }
+
+    /// Writes a solid image of `width` by `height` into the tree.
+    fn make_image(
+        tree: &TempTree,
+        name: &str,
+        width: u32,
+        height: u32,
+        format: image::ImageFormat,
+    ) -> PathBuf {
+        let buffer = image::RgbImage::from_pixel(width, height, image::Rgb([200, 30, 30]));
+        let path = tree.at(name);
+        image::DynamicImage::from(buffer)
+            .save_with_format(&path, format)
+            .expect("the tree can be written to");
+        path
+    }
+
+    #[test]
+    fn a_png_comes_back_decoded() {
+        let tree = TempTree::new();
+        let path = make_image(&tree, "red.png", 4, 2, image::ImageFormat::Png);
+
+        let Content::Image(bitmap) = read_at(&path, &limits()) else {
+            panic!("a png did not read as an image");
+        };
+        assert_eq!((bitmap.width, bitmap.height), (4, 2));
+        assert_eq!(bitmap.pixel(0, 0), [200, 30, 30, 255]);
+    }
+
+    #[test]
+    fn a_jpeg_comes_back_decoded() {
+        let tree = TempTree::new();
+        let path = make_image(&tree, "red.jpg", 8, 4, image::ImageFormat::Jpeg);
+
+        let Content::Image(bitmap) = read_at(&path, &limits()) else {
+            panic!("a jpeg did not read as an image");
+        };
+        assert_eq!((bitmap.width, bitmap.height), (8, 4));
+    }
+
+    #[test]
+    fn the_name_does_not_decide_that_something_is_an_image() {
+        let tree = TempTree::new();
+        // Named like a picture, and the bytes say otherwise.
+        let path = tree.make_file("photo.png", "just text\n");
+
+        assert!(matches!(read_at(&path, &limits()), Content::Text { .. }));
+    }
+
+    #[test]
+    fn a_file_that_only_claims_to_be_a_png_falls_back_to_its_bytes() {
+        let tree = TempTree::new();
+        let path = tree.make_file("broken.png", "\u{89}PNG\r\n\u{1a}\n\u{0}not a png");
+
+        // The signature got it as far as the decoder, which refused it; the
+        // panel shows what is really there rather than an error.
+        assert!(matches!(read_at(&path, &limits()), Content::Binary { .. }));
+    }
+
+    #[test]
+    fn a_large_image_is_cut_down_before_it_is_carried_back() {
+        let tree = TempTree::new();
+        let path = make_image(&tree, "wide.png", 40, 20, image::ImageFormat::Png);
+
+        let small = Limits {
+            max_bitmap_side: 10,
+            ..limits()
+        };
+        let Content::Image(bitmap) = read_at(&path, &small) else {
+            panic!("a png did not read as an image");
+        };
+        // Scaled to fit the cap with the shape of the picture kept.
+        assert_eq!((bitmap.width, bitmap.height), (10, 5));
+    }
+
+    #[test]
+    fn an_image_too_large_to_read_is_shown_as_its_bytes() {
+        let tree = TempTree::new();
+        let path = make_image(&tree, "big.png", 64, 64, image::ImageFormat::Png);
+
+        let tiny = Limits {
+            max_image_bytes: 8,
+            ..limits()
+        };
+        assert!(matches!(read_at(&path, &tiny), Content::Binary { .. }));
     }
 
     #[test]

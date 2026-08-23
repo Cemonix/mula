@@ -2,8 +2,9 @@
 //! opposite listing would be.
 //!
 //! Dumb like every other widget. Everything it draws was settled by the
-//! reading thread; nothing here opens a path, and the only decision left is
-//! how many of the bytes it was handed fit on a row.
+//! reading thread; nothing here opens a path. What is left is laying it out
+//! for an area whose size only this side knows: how many bytes fit on a dump
+//! row, and how a bitmap fits a grid of half-pixels.
 
 use std::path::Path;
 
@@ -18,7 +19,7 @@ use ratatui::{
 use crate::{
     fs::{
         directory::DirEntryKind,
-        preview::{Content, LinkTarget, Refused},
+        preview::{Bitmap, Content, LinkTarget, Refused},
     },
     ui::{icon::Icon, pane::Pane},
 };
@@ -39,6 +40,17 @@ mod words {
     pub const LINK_TO_OTHER: &str = "special file";
 }
 
+/// Paints the upper of the two pixels a cell holds; the cell's background is
+/// the lower one. Two pixels to a cell is what makes the grid roughly square
+/// in a terminal whose cells are about twice as tall as they are wide.
+const UPPER_HALF: &str = "▀";
+/// The same block the other way up, for a cell whose upper pixel is not part
+/// of the picture and has to keep showing the panel behind it.
+const LOWER_HALF: &str = "▄";
+/// Alpha at or above which a pixel is painted at all. Below it the panel shows
+/// through, which is what makes a logo on transparency look like one.
+const OPAQUE_ENOUGH: u8 = 0x20;
+
 /// One look at one path. Holds nothing of its own: both halves are borrowed
 /// from the state the main loop keeps, and either may be missing while an
 /// answer is on its way.
@@ -46,6 +58,13 @@ mod words {
 pub struct PreviewPane<'a> {
     path: Option<&'a Path>,
     content: Option<&'a Content>,
+}
+
+/// What the panel has to put in its area, in the two shapes it comes in. Kept
+/// apart so neither drawing path needs an arm for the other.
+enum Body<'a> {
+    Lines(Vec<Line<'a>>),
+    Image(&'a Bitmap),
 }
 
 impl<'a> PreviewPane<'a> {
@@ -65,12 +84,7 @@ impl<'a> PreviewPane<'a> {
     /// The title: the name of what is under the cursor, or nothing at all
     /// while the cursor is on nothing.
     fn title(&self) -> Line<'_> {
-        let name = self.path.map(|path| match path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => path.to_string_lossy().to_string(),
-        });
-
-        match name {
+        match self.path.map(name_of) {
             Some(name) => Line::from(name.bold()),
             None => Line::default(),
         }
@@ -78,19 +92,21 @@ impl<'a> PreviewPane<'a> {
 
     /// The body, laid out for an area this size. Width decides how many bytes
     /// a hex row holds and height decides how much is worth building at all.
-    fn body(&self, area: Rect) -> Vec<Line<'_>> {
+    fn body(&self, area: Rect) -> Body<'_> {
         let rows = area.height as usize;
 
         let Some(content) = self.content else {
             // Nothing has arrived. Which of the two it is depends on whether
             // there is anything to arrive for.
-            return match self.path {
+            return Body::Lines(match self.path {
                 Some(_) => vec![muted(words::LOADING)],
                 None => vec![muted(words::NOTHING_SELECTED)],
-            };
+            });
         };
 
-        match content {
+        Body::Lines(match content {
+            Content::Image(bitmap) => return Body::Image(bitmap),
+
             Content::Directory(listing) => {
                 // The parent leads every listing and says nothing about the
                 // directory being looked at.
@@ -100,7 +116,7 @@ impl<'a> PreviewPane<'a> {
                     .filter(|entry| entry.kind != DirEntryKind::Parent)
                     .collect();
                 if entries.is_empty() {
-                    return vec![muted(words::EMPTY_DIRECTORY)];
+                    return Body::Lines(vec![muted(words::EMPTY_DIRECTORY)]);
                 }
 
                 let mut lines: Vec<Line> = entries
@@ -133,7 +149,7 @@ impl<'a> PreviewPane<'a> {
 
             Content::Text { lines, clipped } => {
                 if lines.is_empty() && !clipped {
-                    return vec![muted(words::EMPTY_FILE)];
+                    return Body::Lines(vec![muted(words::EMPTY_FILE)]);
                 }
 
                 let mut drawn: Vec<Line> = lines
@@ -150,7 +166,7 @@ impl<'a> PreviewPane<'a> {
 
             Content::Binary { bytes, clipped } => {
                 if bytes.is_empty() {
-                    return vec![muted(words::EMPTY_FILE)];
+                    return Body::Lines(vec![muted(words::EMPTY_FILE)]);
                 }
 
                 let per_row = bytes_per_row(area.width);
@@ -172,7 +188,7 @@ impl<'a> PreviewPane<'a> {
             // Permissions, or a file that went away between the listing and
             // the read. The panel says so and browsing carries on.
             Content::Unreadable(reason) => vec![muted(reason)],
-        }
+        })
     }
 }
 
@@ -184,7 +200,11 @@ impl Widget for &PreviewPane<'_> {
 
         let inner = block.inner(area);
         block.render(area, buf);
-        Paragraph::new(self.body(inner)).render(inner, buf);
+
+        match self.body(inner) {
+            Body::Lines(lines) => Paragraph::new(lines).render(inner, buf),
+            Body::Image(bitmap) => draw_image(bitmap, inner, buf),
+        }
     }
 }
 
@@ -253,6 +273,116 @@ fn hex_line(offset: usize, chunk: &[u8], per_row: usize) -> Line<'static> {
     ])
 }
 
+/// Where the picture sits in the grid of half-pixels a panel offers, and how
+/// to read one point of it.
+struct Placement {
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Placement {
+    /// Centres `bitmap` in a grid `columns` across and `rows` of half-pixels
+    /// tall, keeping the shape of the picture.
+    fn fit(bitmap: &Bitmap, columns: u32, rows: u32) -> Self {
+        let (width, height) = scaled(bitmap.width, bitmap.height, columns, rows);
+        Self {
+            left: (columns - width) / 2,
+            // Rounded down to a whole cell. Starting on the lower half of one
+            // would put every row of the picture in the wrong half of its own.
+            top: ((rows - height) / 2) & !1,
+            width,
+            height,
+        }
+    }
+
+    /// The colour of the grid point at `(x, y)`: `None` where the picture is
+    /// not, and where what is there is too transparent to paint.
+    fn sample(&self, bitmap: &Bitmap, x: u32, y: u32) -> Option<Color> {
+        let x = x.checked_sub(self.left).filter(|x| *x < self.width)?;
+        let y = y.checked_sub(self.top).filter(|y| *y < self.height)?;
+
+        // The box of source pixels this one grid point stands for. Averaging
+        // them is what keeps this second scaling, after the one the reader
+        // already did, from turning every edge into stairs.
+        let x0 = x * bitmap.width / self.width;
+        let x1 = ((x + 1) * bitmap.width / self.width).clamp(x0 + 1, bitmap.width);
+        let y0 = y * bitmap.height / self.height;
+        let y1 = ((y + 1) * bitmap.height / self.height).clamp(y0 + 1, bitmap.height);
+
+        let mut total = [0u32; 4];
+        let mut count = 0;
+        for source_y in y0..y1 {
+            for source_x in x0..x1 {
+                for (sum, channel) in total.iter_mut().zip(bitmap.pixel(source_x, source_y)) {
+                    *sum += u32::from(channel);
+                }
+                count += 1;
+            }
+        }
+
+        let alpha = total[3] / count;
+        if alpha < u32::from(OPAQUE_ENOUGH) {
+            return None;
+        }
+
+        // What is only partly transparent is composited onto black: the colour
+        // behind the panel is the terminal's own and cannot be read from here.
+        let mix = |sum: u32| ((sum / count) * alpha / 255) as u8;
+        Some(Color::Rgb(mix(total[0]), mix(total[1]), mix(total[2])))
+    }
+}
+
+/// The largest size with the shape of `width` by `height` that fits inside
+/// `max_width` by `max_height`. Compared as cross products, so nothing rounds
+/// through a float, and never smaller than one, so a very wide picture comes
+/// out as a line rather than as nothing.
+fn scaled(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
+    if width * max_height <= max_width * height {
+        ((width * max_height / height).max(1), max_height)
+    } else {
+        (max_width, (height * max_width / width).max(1))
+    }
+}
+
+/// Draws `bitmap` into `area`, two pixels to a cell.
+///
+/// A cell that no part of the picture reaches is left alone rather than
+/// painted over, so the panel shows through around the edges and behind
+/// anything transparent.
+fn draw_image(bitmap: &Bitmap, area: Rect, buf: &mut Buffer) {
+    let columns = u32::from(area.width);
+    let rows = u32::from(area.height) * 2;
+    if columns == 0 || rows == 0 || bitmap.width == 0 || bitmap.height == 0 {
+        return;
+    }
+
+    let placement = Placement::fit(bitmap, columns, rows);
+
+    for row in 0..area.height {
+        for column in 0..area.width {
+            let x = u32::from(column);
+            let upper = placement.sample(bitmap, x, u32::from(row) * 2);
+            let lower = placement.sample(bitmap, x, u32::from(row) * 2 + 1);
+
+            let cell = &mut buf[(area.x + column, area.y + row)];
+            match (upper, lower) {
+                (None, None) => (),
+                (Some(colour), None) => {
+                    cell.set_symbol(UPPER_HALF).set_fg(colour);
+                }
+                (None, Some(colour)) => {
+                    cell.set_symbol(LOWER_HALF).set_fg(colour);
+                }
+                (Some(upper), Some(lower)) => {
+                    cell.set_symbol(UPPER_HALF).set_fg(upper).set_bg(lower);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod preview_pane_tests {
     use super::*;
@@ -264,9 +394,7 @@ mod preview_pane_tests {
     /// Renders into a buffer and gives the rows back as strings, without the
     /// border the block draws around them and without trailing blanks.
     fn rows(pane: &PreviewPane, width: u16, height: u16) -> Vec<String> {
-        let area = Rect::new(0, 0, width, height);
-        let mut buf = Buffer::empty(area);
-        pane.render(area, &mut buf);
+        let buf = rendered(pane, width, height);
 
         (0..height)
             .map(|y| {
@@ -274,6 +402,24 @@ mod preview_pane_tests {
                 row.trim_matches(|c| c == '│' || c == ' ').to_string()
             })
             .collect()
+    }
+
+    /// Renders and hands the whole buffer back, so a test can look at colours
+    /// as well as at symbols.
+    fn rendered(pane: &PreviewPane, width: u16, height: u16) -> Buffer {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        pane.render(area, &mut buf);
+        buf
+    }
+
+    /// A bitmap from one colour per pixel, given row by row.
+    fn bitmap(width: u32, height: u32, pixels: &[[u8; 4]]) -> Bitmap {
+        Bitmap::of(
+            width,
+            height,
+            pixels.iter().flatten().copied().collect::<Vec<u8>>(),
+        )
     }
 
     #[test]
@@ -385,5 +531,69 @@ mod preview_pane_tests {
 
         let rows = rows(&pane, 30, 4);
         assert!(rows[1].contains(words::NOTHING_SELECTED));
+    }
+
+    #[test]
+    fn a_cell_carries_the_pixel_above_it_as_ink_and_the_one_below_as_ground() {
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        const BLUE: [u8; 4] = [0, 0, 255, 255];
+        // One column, two rows: exactly the two halves of one cell.
+        let content = Content::Image(bitmap(1, 2, &[RED, BLUE]));
+        let path = PathBuf::from("flag.png");
+        let pane = PreviewPane::new(Some(&path), Some(&content));
+
+        // One cell of body inside a border on every side.
+        let buf = rendered(&pane, 3, 3);
+        let cell = &buf[(1, 1)];
+
+        assert_eq!(cell.symbol(), UPPER_HALF);
+        assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
+        assert_eq!(cell.bg, Color::Rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn a_transparent_pixel_leaves_the_panel_showing_through() {
+        const CLEAR: [u8; 4] = [0, 0, 0, 0];
+        const GREEN: [u8; 4] = [0, 255, 0, 255];
+        let content = Content::Image(bitmap(1, 2, &[CLEAR, GREEN]));
+        let path = PathBuf::from("logo.png");
+        let pane = PreviewPane::new(Some(&path), Some(&content));
+
+        let buf = rendered(&pane, 3, 3);
+        let cell = &buf[(1, 1)];
+
+        // The lower block draws the pixel that is there and leaves the ground
+        // to the panel, rather than painting it black.
+        assert_eq!(cell.symbol(), LOWER_HALF);
+        assert_eq!(cell.fg, Color::Rgb(0, 255, 0));
+        assert_eq!(cell.bg, Color::Reset);
+    }
+
+    #[test]
+    fn a_picture_keeps_its_shape_inside_the_grid() {
+        // Twice as wide as it is tall, in a grid that is square.
+        assert_eq!(scaled(20, 10, 10, 10), (10, 5));
+        // Taller than it is wide, so the height is what binds.
+        assert_eq!(scaled(10, 20, 10, 10), (5, 10));
+        // Already smaller than the grid: filled out, shape kept.
+        assert_eq!(scaled(2, 1, 10, 10), (10, 5));
+        // Far wider than the grid is tall, and still a row rather than nothing.
+        assert_eq!(scaled(1000, 1, 10, 10), (10, 1));
+    }
+
+    #[test]
+    fn a_cell_no_part_of_the_picture_reaches_is_left_alone() {
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        // Four wide and one tall, in a body six wide and two rows tall: the
+        // picture is one half-pixel high, so the second row is outside it.
+        let content = Content::Image(bitmap(4, 1, &[RED, RED, RED, RED]));
+        let path = PathBuf::from("stripe.png");
+        let pane = PreviewPane::new(Some(&path), Some(&content));
+
+        let buf = rendered(&pane, 8, 4);
+
+        assert_eq!(buf[(1, 2)].symbol(), " ");
+        assert_eq!(buf[(1, 2)].fg, Color::Reset);
+        assert_eq!(buf[(1, 2)].bg, Color::Reset);
     }
 }
