@@ -72,15 +72,32 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - Same directory in `transfer` is skipped silently, not an error.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
   errors — so a partial failure can say "Deleted 3 of 5".
-- Marks clear only on full batch success, so a partial failure can be retried.
+- Marks clear when a batch is queued, not when it finishes — the user keeps
+  marking while it runs. `Done` carries the failed paths and they are marked
+  again, so a partial failure is still retryable.
 - Confirmation dialogs open on `Choice::No` (harmless answer as default focus).
 
 **Rendering**
 - Style goes on `Span`, never `Line` (a `Line` repaints its whole area).
+
+**Background I/O**
 - All `fs::` access behind one boundary (needed by SSH panes, background I/O).
-- I/O in threads, not async — `tokio::fs` is just a thread pool over the same
-  syscalls. One worker, not a pool: `trash` calls `getmntent`, UB from
-  multiple threads on Linux/FreeBSD.
+- I/O in threads, not async — regular files have no non-blocking API (`epoll`
+  and `kqueue` can't watch them), so `tokio::fs` is a thread pool over the same
+  blocking syscalls. Cancelling a copy is an `AtomicBool` between entries
+  either way, since one `fs::copy` is a single syscall.
+- One worker, not a pool. One FIFO queue makes "which operation wins" a
+  question of which key was pressed first, so overlapping paths can't conflict
+  and nothing needs locking. Parallel I/O on one disk doesn't pay; two devices
+  at once is what a second Mula instance is for.
+- Every mutation goes through the worker. Reads stay synchronous until SSH
+  panes need otherwise — a `Directory::read` queued behind a 4 GB copy would
+  freeze navigation. A second worker for reads then, since only writes need
+  ordering.
+- A job owns a snapshot of its paths, taken when it is queued, and never reads
+  `App` again. Whatever the user changes afterwards can only turn into a
+  skipped entry, so nothing has to be forbidden while a job runs: no modal
+  busy state, no read-only mode.
 - The worker never touches `App`; it sends `Progress`/`Done { summary }`, the
   main loop refreshes panes and raises a toast.
 
@@ -99,6 +116,9 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
   `Ctrl+PageUp/Down`, `Ctrl+Tab`/`Ctrl+Shift+Tab`). Plain printable chars can't
   be intercepted this way; free in Browse since every text-reading mode has
   its own key table.
+- `Ctrl+<letter>` is contested ground even beyond terminal defaults — a user's
+  own config takes what it likes, and the key then never reaches the app at
+  all. Function keys are the safe family, which is what Cancel sits on.
 - `Self` in `impl Widget for &Foo` means `&Foo`; associated consts need
   `Foo::<T>::CONST`.
 - `Block` doesn't erase what it covers (`set_style` changes colours, not

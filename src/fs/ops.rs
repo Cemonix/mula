@@ -3,6 +3,108 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// How a batch of filesystem operations ended. `total` is the size of the
+/// batch, fixed when it starts, so a run that stops early is still reported
+/// against what it set out to do. A batch never fails as a whole: an item that
+/// cannot be handled is counted, and the run carries on to the next one.
+#[derive(Debug)]
+pub struct ProcessedSummary {
+    processed: usize,
+    skipped: usize,
+    failed: usize,
+    total: usize,
+}
+
+impl ProcessedSummary {
+    pub fn new(total: usize) -> Self {
+        Self {
+            processed: 0,
+            skipped: 0,
+            failed: 0,
+            total,
+        }
+    }
+
+    pub fn process(&mut self) {
+        self.processed += 1;
+    }
+
+    pub fn skip(&mut self) {
+        self.skipped += 1;
+    }
+
+    pub fn fail(&mut self) {
+        self.failed += 1;
+    }
+
+    pub fn processed(&self) -> usize {
+        self.processed
+    }
+
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    /// Whether nothing went through, either because nothing was marked or
+    /// because every item was skipped or failed.
+    pub fn nothing_processed(&self) -> bool {
+        self.processed == 0
+    }
+
+    pub fn has_failures(&self) -> bool {
+        self.failed > 0
+    }
+
+    /// Whether the disk may have changed. A failed item counts: an op can give
+    /// up half way through and still leave something behind.
+    pub fn touched_disk(&self) -> bool {
+        self.processed > 0 || self.failed > 0
+    }
+}
+
+/// Watches a transfer while it runs. The transfer reports every entry it
+/// writes and asks before each one whether it should carry on, which is the
+/// only place a running transfer can be stopped: a single `fs::copy` is one
+/// syscall and cannot be interrupted from outside.
+pub trait Observer {
+    /// Called once per file or symlink written, with the bytes it contributed.
+    fn entry_copied(&mut self, path: &Path, bytes: u64);
+
+    /// Checked before every entry. `true` aborts the transfer, which then
+    /// removes what it has already written.
+    fn cancelled(&self) -> bool;
+}
+
+/// Sums the bytes a transfer will have to write, walking directories without
+/// following symlinks. An entry that cannot be read contributes nothing
+/// instead of failing the walk: the total only feeds a progress bar, and the
+/// transfer itself will report the same entry as failed soon enough.
+pub fn tree_size(path: &Path) -> u64 {
+    let Ok(metadata) = path.symlink_metadata() else {
+        return 0;
+    };
+
+    if !metadata.file_type().is_dir() {
+        return metadata.len();
+    }
+
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| tree_size(&entry.path()))
+        .sum()
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum TransferOp {
     Copy,
@@ -10,7 +112,7 @@ pub enum TransferOp {
 }
 
 impl TransferOp {
-    pub fn execute(&self, from: &Path, to: &Path) -> io::Result<()> {
+    pub fn execute(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
         ensure_destination_outside_source(from, to)?;
 
         if to.symlink_metadata().is_ok() {
@@ -21,12 +123,14 @@ impl TransferOp {
         }
 
         match self {
-            TransferOp::Copy => copy_recursive(from, to).inspect_err(|_| remove_partial(to)),
+            TransferOp::Copy => {
+                copy_recursive(from, to, watcher).inspect_err(|_| remove_partial(to))
+            }
             TransferOp::Move => match fs::rename(from, to) {
                 // rename(2) cannot cross filesystems. Fall back to a full copy,
                 // and only delete the source once that copy has fully succeeded.
                 Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-                    copy_recursive(from, to).inspect_err(|_| remove_partial(to))?;
+                    copy_recursive(from, to, watcher).inspect_err(|_| remove_partial(to))?;
                     remove_recursive(from)
                 }
                 other => other,
@@ -71,22 +175,35 @@ impl MutationOp {
     }
 }
 
-fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
+fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+    if watcher.cancelled() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "transfer cancelled",
+        ));
+    }
+
     // symlink_metadata does not follow links, which is what stops a symlink
     // loop from being walked into.
     let file_type = from.symlink_metadata()?.file_type();
 
     if file_type.is_symlink() {
-        copy_symlink(from, to)
+        copy_symlink(from, to)?;
+        // A recreated link writes only its own target string, which the
+        // pre-walk did not count either.
+        watcher.entry_copied(from, 0);
+        Ok(())
     } else if file_type.is_dir() {
         fs::create_dir(to)?;
         for entry in fs::read_dir(from)? {
             let entry = entry?;
-            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+            copy_recursive(&entry.path(), &to.join(entry.file_name()), watcher)?;
         }
         Ok(())
     } else {
-        fs::copy(from, to).map(|_| ()) // copy returns u64, normalize to ()
+        let bytes = fs::copy(from, to)?;
+        watcher.entry_copied(from, bytes);
+        Ok(())
     }
 }
 
@@ -158,6 +275,31 @@ mod ops_tests {
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+    /// Records what a transfer reports and answers `cancelled` from a switch
+    /// the test flips, so both halves of the trait can be driven on their own.
+    #[derive(Default)]
+    struct Watcher {
+        entries: Vec<(PathBuf, u64)>,
+        cancel_after: Option<usize>,
+    }
+
+    impl Watcher {
+        fn bytes(&self) -> u64 {
+            self.entries.iter().map(|(_, bytes)| bytes).sum()
+        }
+    }
+
+    impl Observer for Watcher {
+        fn entry_copied(&mut self, path: &Path, bytes: u64) {
+            self.entries.push((path.to_path_buf(), bytes));
+        }
+
+        fn cancelled(&self) -> bool {
+            self.cancel_after
+                .is_some_and(|after| self.entries.len() >= after)
+        }
+    }
+
     struct TempTree(PathBuf);
 
     impl TempTree {
@@ -206,7 +348,7 @@ mod ops_tests {
         t.make_file("src/sub/deep/c.txt", "c");
 
         TransferOp::Copy
-            .execute(&t.at("src"), &t.at("dest"))
+            .execute(&t.at("src"), &t.at("dest"), &mut Watcher::default())
             .unwrap();
 
         assert_eq!(fs::read_to_string(t.at("dest/a.txt")).unwrap(), "a");
@@ -225,7 +367,7 @@ mod ops_tests {
         t.make_file("dest.txt", "original");
 
         let err = TransferOp::Copy
-            .execute(&t.at("src.txt"), &t.at("dest.txt"))
+            .execute(&t.at("src.txt"), &t.at("dest.txt"), &mut Watcher::default())
             .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
@@ -242,7 +384,7 @@ mod ops_tests {
         t.make_file("src/a.txt", "a");
 
         let err = TransferOp::Copy
-            .execute(&t.at("src"), &t.at("src/nested"))
+            .execute(&t.at("src"), &t.at("src/nested"), &mut Watcher::default())
             .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -255,7 +397,7 @@ mod ops_tests {
         t.make_file("src/sub/a.txt", "a");
 
         TransferOp::Move
-            .execute(&t.at("src"), &t.at("dest"))
+            .execute(&t.at("src"), &t.at("dest"), &mut Watcher::default())
             .unwrap();
 
         assert!(!t.at("src").exists(), "source must be gone after a move");
@@ -270,7 +412,7 @@ mod ops_tests {
         std::os::unix::fs::symlink("real.txt", t.at("src/link.txt")).unwrap();
 
         TransferOp::Copy
-            .execute(&t.at("src"), &t.at("dest"))
+            .execute(&t.at("src"), &t.at("dest"), &mut Watcher::default())
             .unwrap();
 
         let copied = t.at("dest/link.txt");
@@ -290,7 +432,7 @@ mod ops_tests {
         std::os::unix::fs::symlink("..", t.at("src/loop")).unwrap();
 
         TransferOp::Copy
-            .execute(&t.at("src"), &t.at("dest"))
+            .execute(&t.at("src"), &t.at("dest"), &mut Watcher::default())
             .unwrap();
 
         assert!(
@@ -314,7 +456,7 @@ mod ops_tests {
         fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
 
         let err = TransferOp::Copy
-            .execute(&t.at("src"), &t.at("dest"))
+            .execute(&t.at("src"), &t.at("dest"), &mut Watcher::default())
             .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
@@ -512,5 +654,80 @@ mod ops_tests {
             "original",
             "existing file must not be clobbered"
         );
+    }
+
+    #[test]
+    fn tree_size_adds_up_every_file_below_a_directory() {
+        let t = TempTree::new();
+        t.make_file("src/a.txt", "aaaa");
+        t.make_file("src/sub/b.txt", "bb");
+
+        assert_eq!(tree_size(&t.at("src")), 6);
+    }
+
+    #[test]
+    fn tree_size_of_something_that_is_not_there_is_zero() {
+        let t = TempTree::new();
+
+        assert_eq!(tree_size(&t.at("missing")), 0);
+    }
+
+    #[test]
+    fn a_copy_reports_every_file_it_writes() {
+        let t = TempTree::new();
+        t.make_file("src/a.txt", "aaaa");
+        t.make_file("src/sub/b.txt", "bb");
+
+        let mut watcher = Watcher::default();
+        TransferOp::Copy
+            .execute(&t.at("src"), &t.at("dest"), &mut watcher)
+            .unwrap();
+
+        assert_eq!(watcher.entries.len(), 2, "{:?}", watcher.entries);
+        // What the observer counted has to match what the pre-walk promised, or
+        // the bar would never reach its own end.
+        assert_eq!(watcher.bytes(), tree_size(&t.at("src")));
+    }
+
+    #[test]
+    fn a_cancelled_copy_leaves_nothing_behind() {
+        let t = TempTree::new();
+        t.make_file("src/a.txt", "aaaa");
+        t.make_file("src/b.txt", "bbbb");
+        t.make_file("src/c.txt", "cccc");
+
+        let mut watcher = Watcher {
+            cancel_after: Some(1),
+            ..Watcher::default()
+        };
+        let err = TransferOp::Copy
+            .execute(&t.at("src"), &t.at("dest"), &mut watcher)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(
+            t.at("dest").symlink_metadata().is_err(),
+            "the partial copy must be cleaned up"
+        );
+        assert!(t.at("src/a.txt").exists(), "the source must be untouched");
+    }
+
+    #[test]
+    fn a_cancelled_move_keeps_the_source() {
+        let t = TempTree::new();
+        t.make_file("src/a.txt", "aaaa");
+        t.make_file("src/b.txt", "bbbb");
+
+        // A rename cannot be interrupted, so only the cross-device path can be
+        // cancelled. Reaching it here would need two filesystems; what this
+        // pins down is that the copy half refuses before it writes anything.
+        let mut watcher = Watcher {
+            cancel_after: Some(0),
+            ..Watcher::default()
+        };
+        let err = copy_recursive(&t.at("src"), &t.at("dest"), &mut watcher).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(t.at("src/a.txt").exists());
     }
 }

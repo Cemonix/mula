@@ -13,6 +13,8 @@ pub enum VerticalDir {
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
     Quit,
+    QuitAnyway,
+    CancelJob,
     ToggleSide,
     MoveCursor(VerticalDir),
     OpenSelected,

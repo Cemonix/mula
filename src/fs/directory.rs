@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, io, path::Path, rc::Rc};
+use std::{cmp::Ordering, io, path::Path, sync::Arc};
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum DirEntryKind {
@@ -23,7 +23,7 @@ impl DirEntryKind {
 
 #[derive(Debug)]
 pub struct DirEntry {
-    pub path: Rc<Path>,
+    pub path: Arc<Path>,
     pub kind: DirEntryKind,
 }
 
@@ -31,7 +31,7 @@ pub struct DirEntry {
 /// nothing mutates it, and a newer listing means reading another one.
 #[derive(Debug)]
 pub struct Directory {
-    path: Rc<Path>,
+    path: Arc<Path>,
     entries: Vec<DirEntry>,
 }
 
@@ -42,12 +42,12 @@ impl Directory {
     ///
     /// `kind` does not follow symlinks: every symlink is reported as
     /// [`DirEntryKind::Symlink`], whatever it points at.
-    pub fn read(path: Rc<Path>) -> Result<Self, io::Error> {
+    pub fn read(path: Arc<Path>) -> Result<Self, io::Error> {
         let mut entries = Vec::new();
 
         if let Some(parent) = path.parent() {
             entries.push(DirEntry {
-                path: Rc::from(parent),
+                path: Arc::from(parent),
                 kind: DirEntryKind::Parent,
             });
         }
@@ -63,7 +63,7 @@ impl Directory {
                 DirEntryKind::File
             };
             entries.push(DirEntry {
-                path: Rc::from(entry.path()),
+                path: Arc::from(entry.path()),
                 kind,
             });
         }
@@ -74,12 +74,12 @@ impl Directory {
     /// Sorts `entries` with [`compare_entries`] and stores them under `path`.
     /// The entries are taken as given: nothing checks that they live in `path`,
     /// and no `Parent` entry is added.
-    pub fn new(path: Rc<Path>, mut entries: Vec<DirEntry>) -> Self {
+    pub fn new(path: Arc<Path>, mut entries: Vec<DirEntry>) -> Self {
         entries.sort_by(compare_entries);
         Self { path, entries }
     }
 
-    pub fn path(&self) -> &Rc<Path> {
+    pub fn path(&self) -> &Arc<Path> {
         &self.path
     }
 
@@ -129,7 +129,7 @@ mod directory_tests {
         names
             .iter()
             .map(|(name, kind)| DirEntry {
-                path: Rc::from(Path::new("/").join(name).as_path()),
+                path: Arc::from(Path::new("/").join(name).as_path()),
                 kind: *kind,
             })
             .collect()
@@ -146,7 +146,7 @@ mod directory_tests {
     #[test]
     fn names_sort_case_insensitively_and_tie_break_on_the_raw_name() {
         let directory = Directory::new(
-            Rc::from(Path::new("/")),
+            Arc::from(Path::new("/")),
             entries(&[
                 ("banana", DirEntryKind::File),
                 ("apple", DirEntryKind::File),
@@ -164,7 +164,7 @@ mod directory_tests {
     #[test]
     fn the_parent_leads_and_directories_come_before_files() {
         let directory = Directory::new(
-            Rc::from(Path::new("/home")),
+            Arc::from(Path::new("/home")),
             entries(&[
                 ("zip", DirEntryKind::File),
                 ("src", DirEntryKind::Directory),
@@ -185,7 +185,7 @@ mod directory_tests {
         // The names run in the opposite order to the ranks, so any listing that
         // came out alphabetically would show here.
         let directory = Directory::new(
-            Rc::from(Path::new("/home")),
+            Arc::from(Path::new("/home")),
             entries(&[
                 ("a-file", DirEntryKind::File),
                 ("b-link", DirEntryKind::Symlink),
@@ -202,7 +202,7 @@ mod directory_tests {
         // Compared by name alone these three close a cycle: the directory z
         // precedes the file a, a precedes the symlink b, and b precedes z.
         let directory = Directory::new(
-            Rc::from(Path::new("/home")),
+            Arc::from(Path::new("/home")),
             entries(&[
                 ("z", DirEntryKind::Directory),
                 ("a", DirEntryKind::File),
@@ -219,7 +219,7 @@ mod directory_tests {
         let nested = base.join("bla").join("blac");
         std::fs::create_dir_all(&nested).unwrap();
 
-        let directory = Directory::read(Rc::from(nested.as_path())).unwrap();
+        let directory = Directory::read(Arc::from(nested.as_path())).unwrap();
         let parent = directory.get(0).unwrap();
         println!("parent path = {:?}", parent.path);
 
@@ -233,7 +233,7 @@ mod directory_tests {
     #[test]
     fn symlinks_sort_among_themselves_by_name() {
         let directory = Directory::new(
-            Rc::from(Path::new("/home")),
+            Arc::from(Path::new("/home")),
             entries(&[
                 ("Link", DirEntryKind::Symlink),
                 ("anchor", DirEntryKind::Symlink),

@@ -219,6 +219,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Deletes marked items, asking first",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::F(9)),
+        msg: Action::CancelJob,
+        bar: None,
+        help: "Stops the running operation",
+    },
+    Binding {
         key: KeyBinding::ctrl(KeyCode::Char('t')),
         msg: Action::NewTab,
         bar: None,
@@ -284,6 +290,18 @@ mod keys_tests {
 
         let BindingError::Duplicate { key } = validate(&table).unwrap_err();
         assert_eq!(key, KeyBinding::plain(KeyCode::F(8)));
+    }
+
+    /// Cancelling sits on a function key rather than on `Ctrl+<letter>`, which
+    /// terminals and their users freely rebind for themselves.
+    #[test]
+    fn f9_reaches_the_cancel_action() {
+        let event = KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE);
+
+        assert!(matches!(
+            resolve(BROWSE_KEYS, &event),
+            Some(Action::CancelJob)
+        ));
     }
 
     #[test]
