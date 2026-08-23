@@ -100,6 +100,35 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
   busy state, no read-only mode.
 - The worker never touches `App`; it sends `Progress`/`Done { summary }`, the
   main loop refreshes panes and raises a toast.
+- Last wins is the mechanism (`Reader<J: ReadJob>`: generations, channels,
+  thread), not the discipline. Folding messages into an answer stays with each
+  job — a search's hits are a delta and every live batch is kept, a preview is
+  a snapshot and only the newest counts.
+- One reader instance per role, each with its own generation. One shared
+  counter would cancel a running walk on every cursor move and would hold
+  together only because the find overlay happens to be modal.
+
+**Preview**
+- Quick View replaces the panel opposite the cursor and is a view toggle on
+  `App`, never a `Mode`: browse keys and every operation under them keep
+  working. A copy still goes into the hidden panel's directory; if that ever
+  bites, show the target path — don't forbid the operation.
+- What to preview is settled once per pass of the loop from side, tab and
+  cursor, not from each action that moves one of them.
+- Cleared to "loading" on request. Panes keep their old listing while reloading
+  because blanking one moves the cursor; a preview has no cursor, and a stale
+  one draws one file's content under another file's name.
+- A fifo, socket or device is turned away on `symlink_metadata` and never
+  opened — `File::open` on one blocks until somebody writes, which is never.
+- What a file is comes from its first bytes. A file claiming a format it does
+  not keep falls back to its hex dump rather than to an error.
+- Half blocks (`▀` fg over bg) are the renderer, not a consolation: the only
+  block trick with exact per-pixel colour, no terminal detection, and it stays
+  inside `Buffer`. The thread sends a bounded RGBA bitmap and the widget fits
+  it, so a graphics protocol is a second backend over the same bitmap.
+- Transparency is composited at drawing time. What is behind the panel is the
+  terminal's own colour and unknowable to the reader, so a cell no part of the
+  picture reaches is left unpainted rather than filled with a guess.
 
 ## ratatui/crossterm gotchas
 
@@ -128,6 +157,9 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - Measure text width with `Span::width()`, never `str::len()`/`chars().count()`.
 - Debug a widget by rendering into a `Buffer` and printing rows symbol by
   symbol — pure function from `Rect` to cells, no terminal needed.
+- Only changed cells are written out. Driving the real binary in a pty and
+  reading the tail shows nothing once the frame settles — capture across the
+  change, not after it.
 - `Paragraph::line_count` needs the `unstable-rendered-line-info` feature; we
   don't use it. A widget that sizes its own box wraps text itself instead of
   handing `Wrap` to `Paragraph` — same function feeds measurement and drawing.
