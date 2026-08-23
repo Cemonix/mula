@@ -124,6 +124,8 @@ fn compare_file_names(a: &Path, b: &Path) -> Ordering {
 mod directory_tests {
     use super::*;
 
+    use crate::fs::temp_tree::TempTree;
+
     /// Builds one entry per `(name, kind)` pair, all directly under `/`.
     fn entries(names: &[(&str, DirEntryKind)]) -> Vec<DirEntry> {
         names
@@ -215,19 +217,15 @@ mod directory_tests {
 
     #[test]
     fn the_parent_entry_holds_the_resolved_parent_path() {
-        let base = std::env::temp_dir().join(format!("mula-parent-{}", std::process::id()));
-        let nested = base.join("bla").join("blac");
-        std::fs::create_dir_all(&nested).unwrap();
+        let tree = TempTree::new();
+        let nested = tree.make_dir("bla/blac");
 
         let directory = Directory::read(Arc::from(nested.as_path())).unwrap();
         let parent = directory.get(0).unwrap();
-        println!("parent path = {:?}", parent.path);
 
         assert_eq!(parent.kind, DirEntryKind::Parent);
-        assert_eq!(parent.path.as_ref(), base.join("bla"));
+        assert_eq!(parent.path.as_ref(), tree.at("bla"));
         assert!(parent.path.is_dir());
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

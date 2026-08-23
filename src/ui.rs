@@ -1,4 +1,5 @@
 pub(crate) mod dialog;
+pub(crate) mod finder;
 pub(crate) mod help;
 pub(crate) mod icon;
 pub(crate) mod infobar;
@@ -6,4 +7,5 @@ pub(crate) mod keybar;
 pub(crate) mod pane;
 pub(crate) mod prompt;
 pub(crate) mod tab;
+pub(crate) mod text_input;
 pub(crate) mod toast;

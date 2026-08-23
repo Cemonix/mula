@@ -28,6 +28,7 @@ pub enum Action {
     CreateEntry,
     NewTab,
     RenameTab,
+    Find,
     DeleteMarked,
     ShowHelp,
 }

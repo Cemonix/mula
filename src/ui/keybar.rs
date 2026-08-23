@@ -65,3 +65,80 @@ impl<'b, T> Widget for Keybar<'b, T> {
         }
     }
 }
+
+#[cfg(test)]
+mod keybar_tests {
+    use super::*;
+    use ratatui::crossterm::event::KeyCode;
+
+    use crate::keys::{BROWSE_KEYS, find};
+    use crate::{action::Action, ui::dialog::Dialog, ui::finder::Finder, ui::prompt::Prompt};
+
+    /// The narrowest terminal the bar is curated against.
+    const COLUMNS: u16 = 80;
+
+    /// Columns the entries carrying a `bar` label take, plus the separators
+    /// between them. Measured the way `render` lays them out.
+    fn bar_width<T>(bindings: &[Binding<T>]) -> u16 {
+        let labelled: Vec<&Binding<T>> = bindings.iter().filter(|b| b.bar.is_some()).collect();
+        let entries: u16 = labelled
+            .iter()
+            .map(|b| b.key.to_span().width() as u16 + 1 + Span::raw(b.bar.unwrap()).width() as u16)
+            .sum();
+        let separators = labelled.len().saturating_sub(1) as u16;
+        entries + separators * Span::raw(Keybar::<T>::SEPARATOR).width() as u16
+    }
+
+    fn help_width() -> u16 {
+        let key = find(BROWSE_KEYS, |a| matches!(a, Action::ShowHelp))
+            .expect("browse keys reach the help overlay");
+        key.key.to_span().width() as u16 + Span::raw(Keybar::<Action>::HELP_LABEL).width() as u16
+    }
+
+    /// The bar is curated rather than truncated: an entry that does not fit
+    /// belongs under `?` instead. The help hint is right-aligned into the same
+    /// row, so it counts against the same 80 columns.
+    #[test]
+    fn the_browse_bar_fits_eighty_columns_beside_the_help_hint() {
+        let width = bar_width(BROWSE_KEYS) + help_width();
+
+        assert!(width <= COLUMNS, "the browse bar takes {width} columns");
+    }
+
+    #[test]
+    fn every_overlay_bar_fits_eighty_columns() {
+        for (name, width) in [
+            ("dialog", bar_width(Dialog::DIALOG_KEYS)),
+            ("prompt", bar_width(Prompt::PROMPT_KEYS)),
+            ("finder", bar_width(Finder::FIND_KEYS)),
+        ] {
+            assert!(width <= COLUMNS, "the {name} bar takes {width} columns");
+        }
+    }
+
+    #[test]
+    fn only_bindings_carrying_a_label_reach_the_bar() {
+        let table = [
+            Binding {
+                key: KeyBinding::plain(KeyCode::F(5)),
+                msg: (),
+                bar: Some("Copy"),
+                help: "labelled",
+            },
+            Binding {
+                key: KeyBinding::plain(KeyCode::F(6)),
+                msg: (),
+                bar: None,
+                help: "unlabelled",
+            },
+        ];
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+
+        Keybar::new(&table).render(area, &mut buf);
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+
+        assert!(row.contains("F5 Copy"), "the row was {row:?}");
+        assert!(!row.contains("F6"), "the row was {row:?}");
+    }
+}

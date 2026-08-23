@@ -94,6 +94,31 @@ impl Pane {
         }
     }
 
+    /// Moves the pane to the directory holding `path` and puts the cursor on
+    /// `path` itself. A path with no parent is its own directory, which is what
+    /// the filesystem root is.
+    ///
+    /// A path that is no longer in the listing leaves the cursor wherever
+    /// `set_directory` puts it: the walk that found it ran against a disk that
+    /// has since moved on, and that is not an error worth reporting.
+    pub fn reveal(&mut self, path: &Path) -> Result<(), PaneError> {
+        let parent = path.parent().unwrap_or(path);
+        let directory = Directory::read(Arc::from(parent))?;
+
+        match directory
+            .entries()
+            .iter()
+            .position(|entry| entry.path.as_ref() == path)
+        {
+            Some(index) => {
+                self.directory = directory;
+                self.list_state.select(Some(index));
+            }
+            None => self.set_directory(directory),
+        }
+        Ok(())
+    }
+
     /// Reads the current directory again. The cursor keeps its index, capped at
     /// the last entry of the new listing.
     pub fn refresh(&mut self) -> Result<(), PaneError> {

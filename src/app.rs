@@ -17,13 +17,16 @@ use crate::{
     action::{Action, VerticalDir},
     fs::{
         directory::DirEntryKind,
+        find::Limits,
         job::{JobKind, JobTag, Outcome, Progress, Work},
         ops::{MutationOp, ProcessedSummary, TransferOp},
+        reader::Reader,
         worker::{Health, Worker},
     },
     keys::{self, KeyBinding},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
+        finder::{FindMsg, Finder},
         help::Help,
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
@@ -59,6 +62,9 @@ pub enum Mode {
     Input {
         prompt: Prompt,
         pending: InputTarget,
+    },
+    Find {
+        finder: Finder,
     },
 }
 
@@ -131,6 +137,10 @@ pub struct App {
     /// job runs cannot drift from the key that actually cancels it.
     cancel_key: Option<KeyBinding>,
     worker: Worker,
+    /// Serves the find overlay. Separate from `worker` because a walk of a
+    /// large tree queued behind a copy would report its first hit minutes late,
+    /// and because reads need no ordering against each other.
+    reader: Reader,
     /// The newest snapshot of the running job, or `None` while the queue is
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
@@ -160,6 +170,7 @@ impl App {
             cancel_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::CancelJob))
                 .map(|binding| binding.key),
             worker: Worker::start(),
+            reader: Reader::start(Limits::default()),
             progress: None,
             queued_marks: Vec::new(),
             tick: 0,
@@ -180,6 +191,7 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
             self.collect_from_worker();
+            self.collect_from_reader();
             self.toasts.retain(|toast| !toast.is_expired());
             self.tick = self.tick.wrapping_add(1);
         }
@@ -241,6 +253,15 @@ impl App {
         if let Mode::Input { prompt, .. } = &self.mode {
             frame.render_widget(prompt, frame.area());
             frame.set_cursor_position(prompt.cursor_screen_position(frame.area()));
+        }
+
+        if let Mode::Find { finder } = &mut self.mode {
+            // The cursor is read before the widget is handed over, since
+            // drawing it takes the overlay by mutable reference.
+            let area = frame.area();
+            let cursor = finder.cursor_screen_position(area);
+            frame.render_widget(finder, area);
+            frame.set_cursor_position(cursor);
         }
 
         // Newest toast in the bottom-right corner, older ones stacked above it.
@@ -306,6 +327,9 @@ impl App {
             Mode::Input { .. } => {
                 frame.render_widget(Keybar::new(Prompt::PROMPT_KEYS), keys_area);
             }
+            Mode::Find { .. } => {
+                frame.render_widget(Keybar::new(Finder::FIND_KEYS), keys_area);
+            }
         }
 
         if self.show_help {
@@ -316,6 +340,9 @@ impl App {
                 }
                 Mode::Input { .. } => {
                     frame.render_widget(Help::new(Prompt::PROMPT_KEYS), frame.area());
+                }
+                Mode::Find { .. } => {
+                    frame.render_widget(Help::new(Finder::FIND_KEYS), frame.area());
                 }
             }
         }
@@ -347,6 +374,7 @@ impl App {
         match &mut self.mode {
             Mode::Confirm { .. } => self.handle_confirm_key(key),
             Mode::Input { .. } => self.handle_input_key(key),
+            Mode::Find { .. } => self.handle_find_key(key),
             Mode::Browse => {
                 if let Some(action) = keys::resolve(keys::BROWSE_KEYS, &key)
                     && let Err(e) = self.dispatch(action)
@@ -415,6 +443,7 @@ impl App {
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
+            Action::Find => self.open_finder(),
             Action::ShowHelp => {
                 self.show_help = true;
                 Ok(())
@@ -485,6 +514,71 @@ impl App {
                 KeyCode::Backspace => prompt.backspace(),
                 _ => (),
             },
+        }
+    }
+
+    /// Opens the find overlay over the directory of the focused panel. The
+    /// root is fixed here and travels with the overlay, so walking the panel
+    /// away while the search runs cannot move where it looks.
+    fn open_finder(&mut self) -> Result<(), AppError> {
+        let root = Arc::clone(self.get_focused_pane().get_current_dir());
+        self.mode = Mode::Find {
+            finder: Finder::new(root),
+        };
+        Ok(())
+    }
+
+    fn handle_find_key(&mut self, key: KeyEvent) {
+        let Mode::Find { finder } = &mut self.mode else {
+            return;
+        };
+
+        // Carries the query out of the borrow of the overlay, so the walk
+        // behind it is replaced once the overlay is done being touched.
+        let mut changed = None;
+
+        match keys::resolve(Finder::FIND_KEYS, &key) {
+            Some(FindMsg::MoveSelection(dir)) => finder.move_selection(dir),
+            Some(FindMsg::MoveCursor(dir)) => finder.move_cursor(dir),
+            Some(FindMsg::Cancel) => {
+                self.reader.cancel();
+                self.mode = Mode::Browse;
+            }
+            Some(FindMsg::Confirm) => {
+                // Nothing to go to leaves the overlay open: the search is still
+                // running and the next hit may be the one.
+                let Some(target) = finder.selected().map(|hit| hit.path.to_path_buf()) else {
+                    return;
+                };
+                self.reader.cancel();
+                self.mode = Mode::Browse;
+
+                if let Err(e) = self.get_focused_pane_mut().reveal(&target) {
+                    self.notify(ToastLevel::Error, e, None);
+                }
+            }
+            None => {
+                match key.code {
+                    KeyCode::Char(c) => finder.insert(c),
+                    KeyCode::Backspace => finder.backspace(),
+                    _ => return,
+                }
+                // The hits of the previous query describe a query nobody is
+                // looking at any more.
+                finder.restart();
+                changed = Some((Arc::clone(finder.root()), finder.query().to_string()));
+            }
+        }
+
+        let Some((root, query)) = changed else {
+            return;
+        };
+        // An empty query would match every entry in the tree, so it searches
+        // for nothing at all.
+        if query.is_empty() {
+            self.reader.cancel();
+        } else if let Err(e) = self.reader.search(root, query) {
+            self.notify(ToastLevel::Error, e, None);
         }
     }
 
@@ -663,6 +757,29 @@ impl App {
         // left to draw once the queue empties.
         if self.worker.is_idle() {
             self.progress = None;
+        }
+    }
+
+    /// Takes the hits the reader has sent and appends them to the overlay that
+    /// asked for them.
+    fn collect_from_reader(&mut self) {
+        let found = self.reader.drain();
+
+        if found.health == Health::Stopped {
+            self.notify(
+                ToastLevel::Error,
+                "The background reader has stopped; restart Mula",
+                None,
+            );
+        }
+
+        // Hits arriving with the overlay already closed have nowhere to go.
+        // Closing it stops the walk, so this is only ever its tail.
+        if let Mode::Find { finder } = &mut self.mode {
+            finder.extend(found.hits);
+            if let Some(ended) = found.ended {
+                finder.finish(ended);
+            }
         }
     }
 
