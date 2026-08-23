@@ -1,4 +1,12 @@
-use std::{collections::HashSet, env, path::Path, rc::Rc};
+use std::{
+    collections::HashSet,
+    env,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use ratatui::{
     Frame,
@@ -29,6 +37,12 @@ pub enum MarkOp {
     Unmark,
 }
 
+/// Names one tab for as long as it exists. Work queued from a tab outlives the
+/// cursor being there, so its marks need a way home that neither the active
+/// index nor the panel can invalidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabId(u64);
+
 #[derive(Debug)]
 pub struct TabList {
     tabs: Vec<Tab>,
@@ -50,6 +64,12 @@ impl TabList {
 
     pub fn active_tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active]
+    }
+
+    /// Finds a tab by the id it was given when it was created, which is `None`
+    /// once that tab is gone.
+    pub fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find(|tab| tab.id == id)
     }
 
     pub fn toggle(&mut self, dir: ToggleDirection) {
@@ -82,20 +102,28 @@ impl TabList {
 
 #[derive(Debug)]
 pub struct Tab {
+    id: TabId,
     title: String,
     pane: Pane,
-    selected_items: HashSet<Rc<Path>>,
+    selected_items: HashSet<Arc<Path>>,
 }
 
 impl Tab {
     pub fn new(title: String) -> Result<Self, PaneError> {
-        let curr_dir: Rc<Path> = env::current_dir()?.into();
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+        let curr_dir: Arc<Path> = env::current_dir()?.into();
 
         Ok(Self {
+            id: TabId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             title,
             pane: Pane::new(Directory::read(curr_dir)?),
             selected_items: HashSet::new(),
         })
+    }
+
+    pub fn id(&self) -> TabId {
+        self.id
     }
 
     pub fn get_pane(&self) -> &Pane {
@@ -106,7 +134,7 @@ impl Tab {
         &mut self.pane
     }
 
-    pub fn get_selected_items(&self) -> &HashSet<Rc<Path>> {
+    pub fn get_selected_items(&self) -> &HashSet<Arc<Path>> {
         &self.selected_items
     }
 
@@ -127,12 +155,12 @@ impl Tab {
 
         match op {
             MarkOp::Toggle => {
-                if !self.selected_items.insert(Rc::clone(&selected.path)) {
+                if !self.selected_items.insert(Arc::clone(&selected.path)) {
                     self.selected_items.remove(&selected.path);
                 }
             }
             MarkOp::Mark => {
-                self.selected_items.insert(Rc::clone(&selected.path));
+                self.selected_items.insert(Arc::clone(&selected.path));
             }
             MarkOp::Unmark => {
                 self.selected_items.remove(&selected.path);
@@ -143,6 +171,14 @@ impl Tab {
 
     pub fn deselect_items(&mut self) {
         self.selected_items.clear();
+    }
+
+    /// Marks paths that need not be in this tab's directory, which is how the
+    /// items a batch could not handle come back: marks are absolute and simply
+    /// stay invisible until their own directory is on screen again.
+    pub fn mark_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        self.selected_items
+            .extend(paths.into_iter().map(Arc::<Path>::from));
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {

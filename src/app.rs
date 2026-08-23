@@ -1,4 +1,10 @@
-use std::{collections::VecDeque, io, path::Path, rc::Rc, time::Duration};
+use std::{
+    collections::VecDeque,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use ratatui::{
     DefaultTerminal, Frame,
@@ -11,17 +17,19 @@ use crate::{
     action::{Action, VerticalDir},
     fs::{
         directory::DirEntryKind,
-        ops::{MutationOp, TransferOp},
+        job::{JobKind, JobTag, Outcome, Progress, Work},
+        ops::{MutationOp, ProcessedSummary, TransferOp},
+        worker::{Health, Worker},
     },
     keys::{self, KeyBinding},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
         help::Help,
-        infobar::InfoBar,
+        infobar::{InfoBar, ProgressView},
         keybar::Keybar,
         pane::{Pane, PaneError},
         prompt::{InputMsg, Prompt},
-        tab::{MarkOp, Tab, TabList},
+        tab::{MarkOp, Tab, TabId, TabList},
         toast::{Toast, ToastLevel},
     },
 };
@@ -57,8 +65,8 @@ pub enum Mode {
 /// A filesystem mutation that still needs the name being typed.
 #[derive(Debug, Clone)]
 pub enum PendingMutation {
-    Rename(Rc<Path>),
-    CreateEntry(Rc<Path>),
+    Rename(Arc<Path>),
+    CreateEntry(Arc<Path>),
 }
 
 impl PendingMutation {
@@ -93,55 +101,13 @@ pub enum InputTarget {
     RenameTab,
 }
 
-/// How a batch of filesystem operations ended. `total` is the size of the
-/// batch, fixed when it starts, so a run that stops early is still reported
-/// against what it set out to do. A batch never fails as a whole: an item that
-/// cannot be handled is counted, and the run carries on to the next one.
+/// Where the marks a queued job took came from, so the items that fail can be
+/// put back even after the user has switched tabs or panels.
 #[derive(Debug)]
-pub struct ProcessedSummary {
-    processed: usize,
-    skipped: usize,
-    failed: usize,
-    total: usize,
-}
-
-impl ProcessedSummary {
-    pub fn new(total: usize) -> Self {
-        Self {
-            processed: 0,
-            skipped: 0,
-            failed: 0,
-            total,
-        }
-    }
-
-    pub fn process(&mut self) {
-        self.processed += 1;
-    }
-
-    pub fn skip(&mut self) {
-        self.skipped += 1;
-    }
-
-    pub fn fail(&mut self) {
-        self.failed += 1;
-    }
-
-    /// Whether nothing went through, either because nothing was marked or
-    /// because every item was skipped or failed.
-    pub fn nothing_processed(&self) -> bool {
-        self.processed == 0
-    }
-
-    pub fn has_failures(&self) -> bool {
-        self.failed > 0
-    }
-
-    /// Whether the disk may have changed. A failed item counts: an op can give
-    /// up half way through and still leave something behind.
-    pub fn touched_disk(&self) -> bool {
-        self.processed > 0 || self.failed > 0
-    }
+struct QueuedMarks {
+    tag: JobTag,
+    side: Side,
+    tab: TabId,
 }
 
 #[derive(Error, Debug)]
@@ -161,6 +127,18 @@ pub struct App {
     mode: Mode,
     show_help: bool,
     help_key: Option<KeyBinding>,
+    /// Resolved from the key table once, so the hint the info bar draws while a
+    /// job runs cannot drift from the key that actually cancels it.
+    cancel_key: Option<KeyBinding>,
+    worker: Worker,
+    /// The newest snapshot of the running job, or `None` while the queue is
+    /// empty. Derived from the worker and true only while it works, so it
+    /// belongs in the info bar rather than in a toast.
+    progress: Option<Progress>,
+    queued_marks: Vec<QueuedMarks>,
+    /// Turns once per pass of the loop and drives the spinner. Nothing else
+    /// reads it, so wrapping is harmless.
+    tick: u64,
     exit: bool,
 }
 
@@ -179,11 +157,21 @@ impl App {
             show_help: false,
             help_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::ShowHelp))
                 .map(|binding| binding.key),
+            cancel_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::CancelJob))
+                .map(|binding| binding.key),
+            worker: Worker::start(),
+            progress: None,
+            queued_marks: Vec::new(),
+            tick: 0,
             exit: false,
         })
     }
 
-    /// Draws, waits up to `TICK` for a key, then drops the toasts that ran out.
+    /// Draws, waits up to `TICK` for a key, then takes whatever the worker has
+    /// sent and drops the toasts that ran out. The wait is what paces the loop:
+    /// it already had to come back around to expire toasts, so the worker's
+    /// channel needs no waking of its own.
+    ///
     /// Errors that reach this far come from reading the terminal itself and end
     /// the loop; everything an action can fail at is turned into a toast by
     /// `handle_events`.
@@ -191,7 +179,9 @@ impl App {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
+            self.collect_from_worker();
             self.toasts.retain(|toast| !toast.is_expired());
+            self.tick = self.tick.wrapping_add(1);
         }
 
         Ok(())
@@ -289,7 +279,21 @@ impl App {
             .active_tab()
             .get_selected_items()
             .len();
-        frame.render_widget(InfoBar::new().marked(marked), info_area);
+        let progress = self.progress.as_ref().map(|progress| ProgressView {
+            ratio: progress.ratio(),
+            current: &progress.current,
+            done: progress.items_done,
+            total: progress.items_total,
+        });
+        frame.render_widget(
+            InfoBar::new()
+                .progress(progress)
+                .marked(marked)
+                .queued(self.worker.queued())
+                .cancel_key(self.cancel_key)
+                .tick(self.tick),
+            info_area,
+        );
 
         match self.mode {
             Mode::Browse => frame.render_widget(
@@ -356,8 +360,13 @@ impl App {
 
     fn dispatch(&mut self, action: Action) -> Result<(), AppError> {
         match action {
-            Action::Quit => {
+            Action::Quit => self.confirm_quit(),
+            Action::QuitAnyway => {
                 self.exit = true;
+                Ok(())
+            }
+            Action::CancelJob => {
+                self.worker.cancel();
                 Ok(())
             }
             Action::ToggleSide => {
@@ -400,21 +409,9 @@ impl App {
                 }
                 Ok(())
             }
-            Action::Transfer { op } => {
-                let summary = self.transfer(op);
-                let verb = match op {
-                    TransferOp::Copy => "copied",
-                    TransferOp::Move => "moved",
-                };
-                self.notify_summary(verb, &summary);
-                self.refresh_after(&summary)
-            }
+            Action::Transfer { op } => self.queue_transfer(op),
             Action::Delete => self.confirm_delete(),
-            Action::DeleteMarked => {
-                let summary = self.delete_marked();
-                self.notify_summary("deleted", &summary);
-                self.refresh_after(&summary)
-            }
+            Action::DeleteMarked => self.queue_delete(),
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
@@ -496,7 +493,7 @@ impl App {
         if entry.kind == DirEntryKind::Parent {
             return Ok(());
         }
-        let target = Rc::clone(&entry.path);
+        let target = Arc::clone(&entry.path);
         let name = entry
             .path
             .file_name()
@@ -514,7 +511,7 @@ impl App {
     }
 
     fn prompt_create_entry(&mut self) -> Result<(), AppError> {
-        let parent = Rc::clone(self.get_focused_pane().get_current_dir());
+        let parent = Arc::clone(self.get_focused_pane().get_current_dir());
         self.mode = Mode::Input {
             prompt: Prompt::new("New"),
             pending: InputTarget::Mutation(PendingMutation::CreateEntry(parent)),
@@ -533,56 +530,80 @@ impl App {
     }
 
     fn mutate(&mut self, mutation: PendingMutation, name: String) -> Result<(), AppError> {
-        mutation.op(name).execute()?;
-        self.refresh_panes()
+        let side = self.focused_side;
+        let tab = self.get_focused_tabs().active_tab().id();
+        // Renames and creations are instant, but they still go through the
+        // queue: a rename of a directory a queued copy writes into has to
+        // happen after that copy, not while it runs.
+        let tag = self.worker.queue(Work::Mutate(mutation.op(name)))?;
+        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        Ok(())
     }
 
-    fn transfer(&mut self, op: TransferOp) -> ProcessedSummary {
-        let (from, to) = match self.focused_side {
-            Side::Left => (
-                self.left_tabs.active_tab_mut(),
-                self.right_tabs.active_tab_mut(),
-            ),
-            Side::Right => (
-                self.right_tabs.active_tab_mut(),
-                self.left_tabs.active_tab_mut(),
-            ),
-        };
-
-        let to_dir = Rc::clone(to.get_pane().get_current_dir());
-
-        let mut summary = ProcessedSummary::new(from.get_selected_items().len());
-        for item in from.get_selected_items() {
-            // The same directory on both sides is a skip, not a failure. A path
-            // without a parent has nowhere to come from and skips too.
-            if item.parent().is_none_or(|source| source == to_dir.as_ref()) {
-                summary.skip();
-                continue;
-            }
-
-            let Some(file_name) = item.file_name() else {
-                summary.fail();
-                tracing::error!(path = ?item, "no file name to transfer under");
-                continue;
+    /// Takes the marks of the focused tab and hands them to the worker. The
+    /// paths are copied out here and never read again, so the batch is settled
+    /// the moment the key is pressed.
+    fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
+        let side = self.focused_side;
+        let (items, to_dir, tab) = {
+            let (from, to) = match side {
+                Side::Left => (
+                    self.left_tabs.active_tab_mut(),
+                    self.right_tabs.active_tab_mut(),
+                ),
+                Side::Right => (
+                    self.right_tabs.active_tab_mut(),
+                    self.left_tabs.active_tab_mut(),
+                ),
             };
 
-            match op.execute(item, &to_dir.join(file_name)) {
-                Ok(()) => summary.process(),
-                Err(e) => {
-                    summary.fail();
-                    tracing::error!(path = ?item, error = %e, "transfer failed");
-                }
-            }
-        }
+            let to_dir = to.get_pane().get_current_dir().to_path_buf();
+            let items: Vec<PathBuf> = from
+                .get_selected_items()
+                .iter()
+                .map(|item| item.to_path_buf())
+                .collect();
+            let tab = from.id();
 
-        // Marks clear only when nothing failed and at least one item moved: a
-        // batch that broke or changed nothing keeps its marks so it can be
-        // retried or aimed somewhere else.
-        if !summary.has_failures() && !summary.nothing_processed() {
+            // Marks go now rather than on success: the user keeps marking while
+            // the batch runs, so there would be no telling ours from theirs by
+            // the time it finishes. What fails comes back in the outcome.
             from.deselect_items();
+            (items, to_dir, tab)
+        };
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
         }
 
-        summary
+        let tag = self.worker.queue(Work::Transfer { op, items, to_dir })?;
+        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        Ok(())
+    }
+
+    fn queue_delete(&mut self) -> Result<(), AppError> {
+        let side = self.focused_side;
+        let (items, tab) = {
+            let tab = self.get_focused_tabs_mut().active_tab_mut();
+            let items: Vec<PathBuf> = tab
+                .get_selected_items()
+                .iter()
+                .map(|item| item.to_path_buf())
+                .collect();
+            let id = tab.id();
+            tab.deselect_items();
+            (items, id)
+        };
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
+        }
+
+        let tag = self.worker.queue(Work::Delete { items })?;
+        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        Ok(())
     }
 
     fn confirm_delete(&mut self) -> Result<(), AppError> {
@@ -599,44 +620,97 @@ impl App {
         Ok(())
     }
 
-    fn delete_marked(&mut self) -> ProcessedSummary {
-        let tab = self.get_focused_tabs_mut().active_tab_mut();
+    /// Asks before leaving with work still queued, since quitting drops it.
+    fn confirm_quit(&mut self) -> Result<(), AppError> {
+        if self.worker.is_idle() {
+            self.exit = true;
+            return Ok(());
+        }
 
-        let mut summary = ProcessedSummary::new(tab.get_selected_items().len());
-        for item in tab.get_selected_items() {
-            match (MutationOp::Delete {
-                path: item.to_path_buf(),
-            })
-            .execute()
-            {
-                Ok(()) => summary.process(),
-                // A mark can outlive the file it points at: marks survive a directory
-                // change, and a retried batch walks over what the first pass removed.
-                Err(e) if e.kind() == io::ErrorKind::NotFound => summary.skip(),
-                Err(e) => {
-                    summary.fail();
-                    tracing::error!(path = ?item, error = %e, "delete failed");
+        let queued = self.worker.queued();
+        self.mode = Mode::Confirm {
+            dialog: Dialog::new(
+                "Quit",
+                format!("{queued} operation(s) still running. Quit?"),
+            ),
+            pending: Action::QuitAnyway,
+        };
+        Ok(())
+    }
+
+    /// Takes everything the worker has sent and folds it into the state the
+    /// next frame draws from.
+    fn collect_from_worker(&mut self) {
+        let drained = self.worker.drain();
+
+        if let Some(progress) = drained.progress {
+            self.progress = Some(progress);
+        }
+        for outcome in drained.finished {
+            self.finish_job(outcome);
+        }
+
+        if drained.health == Health::Stopped {
+            self.queued_marks.clear();
+            self.notify(
+                ToastLevel::Error,
+                "The background worker has stopped; restart Mula",
+                None,
+            );
+        }
+
+        // The last progress of a job describes a job that is over. Nothing is
+        // left to draw once the queue empties.
+        if self.worker.is_idle() {
+            self.progress = None;
+        }
+    }
+
+    /// Reports a finished job and puts back the marks of whatever it could not
+    /// handle, so a partial failure can be retried with one keypress.
+    fn finish_job(&mut self, outcome: Outcome) {
+        if let Some(index) = self
+            .queued_marks
+            .iter()
+            .position(|queued| queued.tag == outcome.tag)
+        {
+            let queued = self.queued_marks.remove(index);
+            if !outcome.failed.is_empty() {
+                let tabs = match queued.side {
+                    Side::Left => &mut self.left_tabs,
+                    Side::Right => &mut self.right_tabs,
+                };
+                if let Some(tab) = tabs.tab_mut(queued.tab) {
+                    tab.mark_paths(outcome.failed);
                 }
             }
         }
 
-        // Marks clear only when nothing failed and at least one item went: a
-        // batch that broke or changed nothing keeps its marks so it can be
-        // retried.
-        if !summary.has_failures() && !summary.nothing_processed() {
-            tab.deselect_items();
+        let reason = outcome.reason.as_deref();
+        match outcome.kind {
+            JobKind::Transfer(TransferOp::Copy) => {
+                self.notify_summary("copied", &outcome.summary, reason)
+            }
+            JobKind::Transfer(TransferOp::Move) => {
+                self.notify_summary("moved", &outcome.summary, reason)
+            }
+            JobKind::Delete => self.notify_summary("deleted", &outcome.summary, reason),
+            // A single mutation has nothing worth counting: it either happened,
+            // or the error itself is the whole report.
+            JobKind::Mutate => {
+                if let Some(reason) = reason {
+                    self.notify(ToastLevel::Error, reason, None);
+                }
+            }
         }
 
-        summary
-    }
-
-    /// Refreshes both panes when a batch could have changed the disk, so a run
-    /// that only skipped costs no reads.
-    fn refresh_after(&mut self, summary: &ProcessedSummary) -> Result<(), AppError> {
-        if summary.touched_disk() {
-            self.refresh_panes()?;
+        // Only reads the disk when the job could have changed it, so a run that
+        // skipped everything costs nothing.
+        if outcome.summary.touched_disk()
+            && let Err(e) = self.refresh_panes()
+        {
+            self.notify(ToastLevel::Error, e, None);
         }
-        Ok(())
     }
 
     /// Refreshes the active pane on both sides. Both run even when the first fails;
@@ -650,24 +724,35 @@ impl App {
     /// Reports how a batch ended, taking the operation's past tense (`copied`)
     /// to build the message. A batch that touched nothing is a warning rather
     /// than an info, so silently doing nothing cannot read as success.
-    fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary) {
-        if summary.total == 0 {
+    ///
+    /// `reason` is the last error the batch met. Counts alone say that
+    /// something went wrong but never what, and the log is no help while the
+    /// toast is still on screen.
+    fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary, reason: Option<&str>) {
+        if summary.total() == 0 {
             self.notify(ToastLevel::Warning, "Nothing is marked", None);
             return;
         }
 
         let mut message = if summary.nothing_processed() {
             format!("Nothing {verb}")
-        } else if summary.processed == summary.total {
-            format!("{} item(s) {verb}", summary.processed)
+        } else if summary.processed() == summary.total() {
+            format!("{} item(s) {verb}", summary.processed())
         } else {
-            format!("{} of {} {verb}", summary.processed, summary.total)
+            format!("{} of {} {verb}", summary.processed(), summary.total())
         };
-        if summary.skipped > 0 {
-            message.push_str(&format!(", {} skipped", summary.skipped));
+        if summary.skipped() > 0 {
+            message.push_str(&format!(", {} skipped", summary.skipped()));
         }
         if summary.has_failures() {
-            message.push_str(&format!(", {} failed", summary.failed));
+            message.push_str(&format!(", {} failed", summary.failed()));
+            // One error cannot speak for several failures, so with more than
+            // one it is offered as the latest rather than as the explanation.
+            match (reason, summary.failed()) {
+                (Some(reason), 1) => message.push_str(&format!(": {reason}")),
+                (Some(reason), _) => message.push_str(&format!(", last: {reason}")),
+                (None, _) => (),
+            }
         }
 
         let level = if summary.has_failures() {

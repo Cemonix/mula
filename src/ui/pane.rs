@@ -1,4 +1,4 @@
-use std::{collections::HashSet, io, path::Path, rc::Rc};
+use std::{collections::HashSet, io, path::Path, sync::Arc};
 
 use ratatui::{
     Frame,
@@ -53,7 +53,7 @@ impl Pane {
         }
     }
 
-    pub fn get_current_dir(&self) -> &Rc<Path> {
+    pub fn get_current_dir(&self) -> &Arc<Path> {
         self.directory.path()
     }
 
@@ -70,7 +70,7 @@ impl Pane {
     pub fn change_directory(&mut self) -> Result<(), PaneError> {
         let entry = self.selected_entry()?;
         if entry.path.is_dir() {
-            let path = Rc::clone(&entry.path);
+            let path = Arc::clone(&entry.path);
             self.set_directory(Directory::read(path)?);
         }
         Ok(())
@@ -97,7 +97,7 @@ impl Pane {
     /// Reads the current directory again. The cursor keeps its index, capped at
     /// the last entry of the new listing.
     pub fn refresh(&mut self) -> Result<(), PaneError> {
-        let path = Rc::clone(self.directory.path());
+        let path = Arc::clone(self.directory.path());
         self.set_directory(Directory::read(path)?);
         Ok(())
     }
@@ -116,7 +116,7 @@ impl Pane {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        selected_items: &HashSet<Rc<Path>>,
+        selected_items: &HashSet<Arc<Path>>,
         focused: bool,
     ) {
         let title = Line::from(self.directory.path().to_string_lossy().to_string().bold());
@@ -188,11 +188,11 @@ mod pane_tests {
     fn directory(count: usize) -> Directory {
         let entries = (0..count)
             .map(|i| DirEntry {
-                path: Rc::from(Path::new(&format!("/{i}"))),
+                path: Arc::from(Path::new(&format!("/{i}"))),
                 kind: DirEntryKind::File,
             })
             .collect();
-        Directory::new(Rc::from(Path::new("/")), entries)
+        Directory::new(Arc::from(Path::new("/")), entries)
     }
 
     #[test]

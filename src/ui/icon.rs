@@ -219,12 +219,13 @@ const DEFAULT_FILE: Icon = Icon::new('\u{f15b}', 0x9a, 0xa5, 0xb1);
 
 #[cfg(test)]
 mod icon_tests {
+    use std::sync::Arc;
+
     use super::*;
-    use std::rc::Rc;
 
     fn entry(path: &str, kind: DirEntryKind) -> DirEntry {
         DirEntry {
-            path: Rc::from(Path::new(path)),
+            path: Arc::from(Path::new(path)),
             kind,
         }
     }
