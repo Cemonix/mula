@@ -17,7 +17,7 @@ use crate::{
     action::{Action, VerticalDir},
     fs::{
         directory::DirEntryKind,
-        find::Limits,
+        find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
         ops::{MutationOp, ProcessedSummary, TransferOp},
         reader::Reader,
@@ -140,7 +140,7 @@ pub struct App {
     /// Serves the find overlay. Separate from `worker` because a walk of a
     /// large tree queued behind a copy would report its first hit minutes late,
     /// and because reads need no ordering against each other.
-    reader: Reader,
+    reader: Reader<Search>,
     /// The newest snapshot of the running job, or `None` while the queue is
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
@@ -170,7 +170,7 @@ impl App {
             cancel_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::CancelJob))
                 .map(|binding| binding.key),
             worker: Worker::start(),
-            reader: Reader::start(Limits::default()),
+            reader: Reader::<Search>::start(Limits::default()),
             progress: None,
             queued_marks: Vec::new(),
             tick: 0,
@@ -577,7 +577,7 @@ impl App {
         // for nothing at all.
         if query.is_empty() {
             self.reader.cancel();
-        } else if let Err(e) = self.reader.search(root, query) {
+        } else if let Err(e) = self.reader.send(Search { root, query }) {
             self.notify(ToastLevel::Error, e, None);
         }
     }
@@ -763,7 +763,7 @@ impl App {
     /// Takes the hits the reader has sent and appends them to the overlay that
     /// asked for them.
     fn collect_from_reader(&mut self) {
-        let found = self.reader.drain();
+        let found = Found::fold(self.reader.drain());
 
         if found.health == Health::Stopped {
             self.notify(
