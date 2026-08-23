@@ -5,6 +5,7 @@ pub(crate) mod icon;
 pub(crate) mod infobar;
 pub(crate) mod keybar;
 pub(crate) mod pane;
+pub(crate) mod preview;
 pub(crate) mod prompt;
 pub(crate) mod tab;
 pub(crate) mod text_input;

@@ -191,6 +191,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Renames the item under the cursor",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::F(3)),
+        msg: Action::ToggleQuickView,
+        bar: None,
+        help: "Shows what is under the cursor in the other panel",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::F(4)),
         msg: Action::Find,
         bar: None,

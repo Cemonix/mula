@@ -1,10 +1,25 @@
-//! Walking a tree for names that match. Pure: no threads, no channels. What
-//! runs it decides where the hits go and when to stop, the same way `ops`
-//! leaves that to its [`Observer`](crate::fs::ops::Observer).
+//! Walking a tree for names that match. [`walk`] is pure: no threads, no
+//! channels. What runs it decides where the hits go and when to stop, the same
+//! way `ops` leaves that to its [`Observer`](crate::fs::ops::Observer).
+//!
+//! [`Search`] is what runs it on a [`Reader`](crate::fs::reader::Reader), and
+//! [`Found`] is how the answer comes back. Both live here rather than beside
+//! the reader because batching hits and folding them into a list is the
+//! discipline of *this* read and of no other.
 
-use std::{collections::VecDeque, ffi::OsString, path::Path, sync::Arc};
+use std::{
+    collections::VecDeque,
+    ffi::OsString,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use crate::fs::directory::{DirEntry, DirEntryKind, Directory};
+use crate::fs::{
+    directory::{DirEntry, DirEntryKind, Directory},
+    reader::{Drained, Live, Outbox, ReadJob},
+    worker::Health,
+};
 
 /// Watches a walk while it runs. A hit is handed over the moment it is found
 /// rather than collected into a list at the end, which is what lets a caller
@@ -139,6 +154,125 @@ pub fn walk(root: Arc<Path>, query: &str, limits: &Limits, observer: &mut dyn Ob
 fn fold_into(text: &str, buf: &mut String) {
     buf.clear();
     buf.extend(text.chars().flat_map(char::to_lowercase));
+}
+
+/// A search on its way to the reader thread. Like a `Job`, it holds a snapshot
+/// of what it needs and never reads back.
+#[derive(Debug)]
+pub struct Search {
+    pub root: Arc<Path>,
+    pub query: String,
+}
+
+/// What a running search says. [`Found::fold`] turns a drain of these into the
+/// shape the overlay draws from.
+#[derive(Debug)]
+pub enum SearchMsg {
+    /// Hits to append, in the order the walk reported them.
+    Hits(Vec<DirEntry>),
+    Done(Ended),
+}
+
+impl ReadJob for Search {
+    /// The bounds belong to the searcher rather than to one question asked of
+    /// it, so they are fixed when the reader starts.
+    type Config = Limits;
+    type Msg = SearchMsg;
+
+    fn run(self, limits: &Limits, live: &Live<'_>, out: &Outbox<'_, SearchMsg>) {
+        let mut emitter = Emitter::new(live, out);
+        let ended = walk(self.root, &self.query, limits, &mut emitter);
+        emitter.flush();
+        out.send(SearchMsg::Done(ended));
+    }
+}
+
+/// Everything the reader sent since the last drain that still belongs to the
+/// newest search.
+#[derive(Debug, Default)]
+pub struct Found {
+    /// Hits to append, in the order the walk reported them. A drain that
+    /// caught nothing new leaves this empty.
+    pub hits: Vec<DirEntry>,
+    /// Set once, on the drain that catches the end of the search.
+    pub ended: Option<Ended>,
+    pub health: Health,
+}
+
+impl Found {
+    /// Folds a drain into one answer. Unlike a snapshot, a batch of hits is a
+    /// delta, so every batch that arrived is kept: dropping one would lose the
+    /// hits it carried for good.
+    pub fn fold(drained: Drained<SearchMsg>) -> Self {
+        let mut found = Found {
+            health: drained.health,
+            ..Found::default()
+        };
+
+        for msg in drained.msgs {
+            match msg {
+                SearchMsg::Hits(hits) => found.hits.extend(hits),
+                SearchMsg::Done(ended) => found.ended = Some(ended),
+            }
+        }
+
+        found
+    }
+}
+
+/// Turns a running walk into messages. Hits are gathered and sent in batches:
+/// the main loop redraws ten times a second, so a message per hit would only
+/// fill the channel.
+struct Emitter<'a> {
+    live: &'a Live<'a>,
+    out: &'a Outbox<'a, SearchMsg>,
+    buffer: Vec<DirEntry>,
+    last_sent: Instant,
+}
+
+impl<'a> Emitter<'a> {
+    /// The longest a hit sits in the buffer. Below the main loop's own tick,
+    /// so a batch is never what the next frame waits for.
+    const FLUSH_EVERY: Duration = Duration::from_millis(50);
+
+    /// The buffer length that sends without waiting for the clock, so a query
+    /// matching thousands of names does not grow one message.
+    const FLUSH_AT: usize = 64;
+
+    fn new(live: &'a Live<'a>, out: &'a Outbox<'a, SearchMsg>) -> Self {
+        Self {
+            live,
+            out,
+            buffer: Vec::new(),
+            last_sent: Instant::now(),
+        }
+    }
+
+    /// Sends what has been gathered, if anything. Nothing here may be dropped
+    /// the way a stale `Progress` is: a hit that is not sent is a hit the list
+    /// never shows.
+    fn flush(&mut self) {
+        if self.buffer.is_empty() {
+            return;
+        }
+
+        self.last_sent = Instant::now();
+        self.out
+            .send(SearchMsg::Hits(std::mem::take(&mut self.buffer)));
+    }
+}
+
+impl Observer for Emitter<'_> {
+    fn found(&mut self, entry: DirEntry) {
+        self.buffer.push(entry);
+        if self.buffer.len() >= Self::FLUSH_AT || self.last_sent.elapsed() >= Self::FLUSH_EVERY {
+            self.flush();
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.live.cancelled()
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +455,143 @@ mod find_tests {
         let mut names = collected.names();
         names.sort();
         assert_eq!(names, ["target-a", "target-loop"]);
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    use std::{thread, time::Duration};
+
+    use crate::fs::{reader::Reader, temp_tree::TempTree};
+
+    /// Drains the way the main loop does until the live search reports its
+    /// end, and gives up rather than hanging if it never does.
+    fn settle(reader: &mut Reader<Search>) -> Found {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut found = Found::default();
+
+        while found.ended.is_none() {
+            assert!(Instant::now() < deadline, "the search never reported back");
+            let drained = Found::fold(reader.drain());
+            found.hits.extend(drained.hits);
+            found.ended = drained.ended;
+            found.health = drained.health;
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        found
+    }
+
+    fn names(found: &Found) -> Vec<String> {
+        found
+            .hits
+            .iter()
+            .map(|hit| hit.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn search(reader: &mut Reader<Search>, tree: &TempTree, query: &str) {
+        reader
+            .send(Search {
+                root: Arc::from(tree.path()),
+                query: query.into(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_search_reports_its_hits_and_then_its_end() {
+        let tree = TempTree::of(["target-a", "sub/target-b", "other"]);
+
+        let mut reader = Reader::<Search>::start(Limits::default());
+        search(&mut reader, &tree, "target");
+        let found = settle(&mut reader);
+
+        assert_eq!(found.ended, Some(Ended::Exhausted));
+        assert_eq!(names(&found), ["target-a", "target-b"]);
+    }
+
+    #[test]
+    fn hits_come_back_in_walk_order_across_batches() {
+        // More files than one batch holds, so the list is assembled from
+        // several messages and any reordering between them would show.
+        let files: Vec<String> = (0..200).map(|i| format!("sub/target-{i:03}")).collect();
+        let tree = TempTree::of(&files);
+
+        let mut reader = Reader::<Search>::start(Limits {
+            max_hits: 500,
+            ..Limits::default()
+        });
+        search(&mut reader, &tree, "target-");
+        let found = settle(&mut reader);
+
+        let mut expected = names(&found);
+        expected.sort();
+        assert_eq!(found.hits.len(), files.len());
+        // One directory is listed sorted, so walk order is name order here.
+        assert_eq!(names(&found), expected);
+    }
+
+    #[test]
+    fn the_results_of_a_replaced_search_never_surface() {
+        let tree = TempTree::of(["alpha", "beta"]);
+
+        let mut reader = Reader::<Search>::start(Limits::default());
+        search(&mut reader, &tree, "alpha");
+        search(&mut reader, &tree, "beta");
+        let found = settle(&mut reader);
+
+        // Nothing of the first search is here, whether it ran before being
+        // replaced or was skipped in the queue.
+        assert_eq!(names(&found), ["beta"]);
+    }
+
+    #[test]
+    fn cancelling_leaves_nothing_to_be_drained() {
+        let tree = TempTree::of(["target-a"]);
+
+        let mut reader = Reader::<Search>::start(Limits::default());
+        search(&mut reader, &tree, "target");
+        reader.cancel();
+
+        // The walk is short enough that it may well have finished already; the
+        // point is that its messages are stale either way.
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            let found = Found::fold(reader.drain());
+            assert!(found.hits.is_empty());
+            assert_eq!(found.ended, None);
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_search_after_a_cancel_is_live_again() {
+        let tree = TempTree::of(["target-a"]);
+
+        let mut reader = Reader::<Search>::start(Limits::default());
+        search(&mut reader, &tree, "target");
+        reader.cancel();
+        search(&mut reader, &tree, "target");
+
+        assert_eq!(names(&settle(&mut reader)), ["target-a"]);
+    }
+
+    #[test]
+    fn the_end_says_the_walk_stopped_at_the_hit_limit() {
+        let files: Vec<String> = (0..10).map(|i| format!("target-{i}")).collect();
+        let tree = TempTree::of(&files);
+
+        let mut reader = Reader::<Search>::start(Limits {
+            max_hits: 3,
+            ..Limits::default()
+        });
+        search(&mut reader, &tree, "target");
+        let found = settle(&mut reader);
+
+        assert_eq!(found.ended, Some(Ended::HitLimit));
+        assert_eq!(found.hits.len(), 3);
     }
 }
