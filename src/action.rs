@@ -29,6 +29,7 @@ pub enum Action {
     NewTab,
     RenameTab,
     Find,
+    ToggleQuickView,
     DeleteMarked,
     ShowHelp,
 }

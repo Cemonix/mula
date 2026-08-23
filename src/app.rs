@@ -20,6 +20,7 @@ use crate::{
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
         ops::{MutationOp, ProcessedSummary, TransferOp},
+        preview::{self, Content, Preview},
         reader::Reader,
         worker::{Health, Worker},
     },
@@ -31,6 +32,7 @@ use crate::{
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
         pane::{Pane, PaneError},
+        preview::PreviewPane,
         prompt::{InputMsg, Prompt},
         tab::{MarkOp, Tab, TabId, TabList},
         toast::{Toast, ToastLevel},
@@ -48,6 +50,26 @@ impl Side {
         match self {
             Side::Left => Side::Right,
             Side::Right => Side::Left,
+        }
+    }
+}
+
+/// What the panel opposite the cursor shows.
+///
+/// Deliberately not a `Mode`. A mode takes over the key table; this only
+/// changes what is drawn, so the browse keys and every operation under them
+/// go on working while the preview is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Opposite {
+    Listing,
+    Preview,
+}
+
+impl Opposite {
+    pub fn toggle(self) -> Self {
+        match self {
+            Opposite::Listing => Opposite::Preview,
+            Opposite::Preview => Opposite::Listing,
         }
     }
 }
@@ -141,6 +163,18 @@ pub struct App {
     /// large tree queued behind a copy would report its first hit minutes late,
     /// and because reads need no ordering against each other.
     reader: Reader<Search>,
+    /// What the panel opposite the cursor shows.
+    opposite: Opposite,
+    /// Serves the Quick View panel. A reader of its own rather than another
+    /// job on `reader`: one generation counter for both would cancel a running
+    /// walk every time the cursor moved, and would hold together only because
+    /// the find overlay happens to be modal.
+    previewer: Reader<Preview>,
+    /// The path the outstanding preview was asked for, and so the thing that
+    /// says whether a new one is needed.
+    previewing: Option<Arc<Path>>,
+    /// The newest answer, or `None` while one is on its way.
+    preview: Option<Content>,
     /// The newest snapshot of the running job, or `None` while the queue is
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
@@ -171,6 +205,10 @@ impl App {
                 .map(|binding| binding.key),
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
+            opposite: Opposite::Listing,
+            previewer: Reader::<Preview>::start(preview::Limits::default()),
+            previewing: None,
+            preview: None,
             progress: None,
             queued_marks: Vec::new(),
             tick: 0,
@@ -192,6 +230,10 @@ impl App {
             self.handle_events()?;
             self.collect_from_worker();
             self.collect_from_reader();
+            // After the worker, since finishing a job refreshes the panes and
+            // can move the cursor onto something else.
+            self.sync_preview();
+            self.collect_from_previewer();
             self.toasts.retain(|toast| !toast.is_expired());
             self.tick = self.tick.wrapping_add(1);
         }
@@ -241,10 +283,31 @@ impl App {
         )
         .split(main_layout[0]);
 
-        self.left_tabs
-            .render(frame, layout[0], self.focused_side == Side::Left);
-        self.right_tabs
-            .render(frame, layout[1], self.focused_side == Side::Right);
+        match self.opposite {
+            Opposite::Listing => {
+                self.left_tabs
+                    .render(frame, layout[0], self.focused_side == Side::Left);
+                self.right_tabs
+                    .render(frame, layout[1], self.focused_side == Side::Right);
+            }
+            // The preview sits opposite the cursor, so it follows a change of
+            // side without anything having to be told about it. The other
+            // panel is only hidden: it keeps its directory, which is what a
+            // copy still goes into.
+            Opposite::Preview => {
+                let preview = PreviewPane::new(self.previewing.as_deref(), self.preview.as_ref());
+                match self.focused_side {
+                    Side::Left => {
+                        self.left_tabs.render(frame, layout[0], true);
+                        frame.render_widget(&preview, layout[1]);
+                    }
+                    Side::Right => {
+                        frame.render_widget(&preview, layout[0]);
+                        self.right_tabs.render(frame, layout[1], true);
+                    }
+                }
+            }
+        }
 
         if let Mode::Confirm { dialog, .. } = &self.mode {
             frame.render_widget(dialog, frame.area());
@@ -444,6 +507,10 @@ impl App {
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
             Action::Find => self.open_finder(),
+            Action::ToggleQuickView => {
+                self.opposite = self.opposite.toggle();
+                Ok(())
+            }
             Action::ShowHelp => {
                 self.show_help = true;
                 Ok(())
@@ -757,6 +824,63 @@ impl App {
         // left to draw once the queue empties.
         if self.worker.is_idle() {
             self.progress = None;
+        }
+    }
+
+    /// Sends a preview request whenever what the panel would show has changed,
+    /// and cancels the running one once there is nothing to show.
+    ///
+    /// The preview is a function of the focused side, its active tab and where
+    /// the cursor sits, so it is settled here once a pass rather than from
+    /// every action that could move one of them. One place cannot forget the
+    /// cursor, a directory change, a tab, a side, or a refresh after a job.
+    fn sync_preview(&mut self) {
+        let wanted = match self.opposite {
+            Opposite::Listing => None,
+            Opposite::Preview => self
+                .get_focused_pane()
+                .selected_entry()
+                .ok()
+                .map(|entry| Arc::clone(&entry.path)),
+        };
+
+        if wanted == self.previewing {
+            return;
+        }
+
+        // What is on screen belongs to the path that was under the cursor
+        // before. Keeping it would draw one file's content under another
+        // file's name, which the panel has no way of hedging.
+        self.preview = None;
+        match &wanted {
+            Some(path) => {
+                if let Err(e) = self.previewer.send(Preview {
+                    path: Arc::clone(path),
+                }) {
+                    self.notify(ToastLevel::Error, e, None);
+                }
+            }
+            None => self.previewer.cancel(),
+        }
+        self.previewing = wanted;
+    }
+
+    /// Takes the newest answer the previewer has sent. Unlike the hits of a
+    /// search, these are snapshots of one panel: an older one is not a piece
+    /// of the answer but an out of date whole, so only the last is kept.
+    fn collect_from_previewer(&mut self) {
+        let drained = self.previewer.drain();
+
+        if drained.health == Health::Stopped {
+            self.notify(
+                ToastLevel::Error,
+                "The background reader has stopped; restart Mula",
+                None,
+            );
+        }
+
+        if let Some(content) = drained.msgs.into_iter().next_back() {
+            self.preview = Some(content);
         }
     }
 

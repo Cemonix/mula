@@ -42,7 +42,14 @@ pub struct Live<'a> {
     generation: Generation,
 }
 
-impl Live<'_> {
+impl<'a> Live<'a> {
+    /// A handle over a counter of the test's own, so a job can be run without
+    /// a thread behind it.
+    #[cfg(test)]
+    pub fn at(latest: &'a AtomicU64, generation: Generation) -> Self {
+        Self { latest, generation }
+    }
+
     /// `true` once another request has been sent, or the reader cancelled.
     /// A job that runs longer than a few milliseconds is expected to ask
     /// before every expensive step.

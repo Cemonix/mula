@@ -32,7 +32,7 @@ impl Pane {
     /// Border colour of the pane the cursor is in.
     const FOCUSED: Color = Color::Blue;
     /// Border colour of every other pane.
-    const UNFOCUSED: Color = Color::White;
+    pub(crate) const UNFOCUSED: Color = Color::White;
     /// Colour of the bar drawn in the mark column of a marked row.
     const MARK: Color = Color::Rgb(0x98, 0xc3, 0x79);
     /// Background of a marked row.
