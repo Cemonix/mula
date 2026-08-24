@@ -67,6 +67,10 @@ A placement is identified by a number that turns on every answer the reader
 gives, rather than by the path it came from. The same file read twice is two
 pictures, and the second one has to reach the screen.
 
+It also outlives the process that made it, so it is taken back on the way out
+— including the way out through a panic, ahead of the hook that restores the
+terminal, while the screen it was placed on is still the one in front.
+
 ## The widget says where, the surface says how
 
 Writing escape sequences from inside `render` would end the widget being a

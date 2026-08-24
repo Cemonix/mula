@@ -76,6 +76,14 @@ pub fn forget(out: &mut dyn Write) -> io::Result<()> {
     write!(out, "\x1b_Ga=d,d=I,i={IMAGE},q=2\x1b\\")
 }
 
+/// Takes back every picture the terminal is showing, named or not.
+///
+/// `d=A` is what a caller reaches for when it cannot say what is on the
+/// screen, which on the way out of a panic nothing can.
+pub fn forget_all(out: &mut dyn Write) -> io::Result<()> {
+    write!(out, "\x1b_Ga=d,d=A,q=2\x1b\\")
+}
+
 /// The `m` a chunk carries: one while more of the payload follows, zero on the
 /// one that ends it.
 fn more(follows: bool) -> u8 {
@@ -226,5 +234,13 @@ mod kitty_tests {
         let mut out = Vec::new();
         forget(&mut out).expect("a vector never fails to be written to");
         assert_eq!(out, b"\x1b_Ga=d,d=I,i=1,q=2\x1b\\");
+    }
+
+    /// The panic path cannot say what is on the screen, so it names nothing.
+    #[test]
+    fn forgetting_everything_names_no_image_at_all() {
+        let mut out = Vec::new();
+        forget_all(&mut out).expect("a vector never fails to be written to");
+        assert_eq!(out, b"\x1b_Ga=d,d=A,q=2\x1b\\");
     }
 }

@@ -121,6 +121,19 @@ impl Surface {
     }
 }
 
+/// Takes back every picture on the screen, whatever put it there.
+///
+/// Belongs to no `Surface`: it is for the way out of a panic, where the one
+/// that made the placements cannot be reached and what is on the screen is no
+/// longer known.
+pub fn forget_all(protocol: Protocol, out: &mut impl Write) -> io::Result<()> {
+    match protocol {
+        Protocol::Kitty => kitty::forget_all(out)?,
+    }
+
+    out.flush()
+}
+
 /// Turns a change on the screen into the bytes that carry it out.
 trait Encode {
     /// Puts `bitmap` on the screen over `area`, scaled to fill it.
