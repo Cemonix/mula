@@ -1,5 +1,6 @@
 pub(crate) mod dialog;
 pub(crate) mod finder;
+pub(crate) mod graphics;
 pub(crate) mod help;
 pub(crate) mod icon;
 pub(crate) mod infobar;

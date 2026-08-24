@@ -13,7 +13,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Widget},
+    widgets::{Block, Clear, Paragraph, StatefulWidget, Widget},
 };
 
 use crate::{
@@ -21,7 +21,11 @@ use crate::{
         directory::DirEntryKind,
         preview::{Bitmap, Content, LinkTarget, Refused},
     },
-    ui::{icon::Icon, pane::Pane},
+    ui::{
+        graphics::capabilities::{CellSize, Graphics},
+        icon::Icon,
+        pane::Pane,
+    },
 };
 
 /// Wording the panel puts on screen when there is nothing to draw. Gathered
@@ -58,6 +62,9 @@ const OPAQUE_ENOUGH: u8 = 0x20;
 pub struct PreviewPane<'a> {
     path: Option<&'a Path>,
     content: Option<&'a Content>,
+    /// How the terminal draws pictures of its own, or `None` where half blocks
+    /// are all there is.
+    graphics: Option<Graphics>,
 }
 
 /// What the panel has to put in its area, in the two shapes it comes in. Kept
@@ -76,9 +83,18 @@ impl<'a> PreviewPane<'a> {
     const HEX: Color = Color::Gray;
 
     /// `path` names what is being looked at and `content` is the answer, which
-    /// is `None` for as long as the read is still running.
-    pub fn new(path: Option<&'a Path>, content: Option<&'a Content>) -> Self {
-        Self { path, content }
+    /// is `None` for as long as the read is still running. `graphics` decides
+    /// which of the two backends a picture goes to.
+    pub fn new(
+        path: Option<&'a Path>,
+        content: Option<&'a Content>,
+        graphics: Option<Graphics>,
+    ) -> Self {
+        Self {
+            path,
+            content,
+            graphics,
+        }
     }
 
     /// The title: the name of what is under the cursor, or nothing at all
@@ -192,8 +208,19 @@ impl<'a> PreviewPane<'a> {
     }
 }
 
-impl Widget for &PreviewPane<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+/// Draws the panel and says where a picture the terminal holds itself has to
+/// go.
+///
+/// The area comes back rather than the sequence that puts it there: a widget
+/// stays a function from a `Rect` to cells, and the writing belongs to the one
+/// place that owns what is on the screen. `None` is a panel with no picture of
+/// that kind in it, which a half-block panel always is.
+impl StatefulWidget for &PreviewPane<'_> {
+    type State = Option<Rect>;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        *state = None;
+
         let block = Block::bordered()
             .title_top(self.title().centered())
             .border_style(Pane::UNFOCUSED);
@@ -203,7 +230,17 @@ impl Widget for &PreviewPane<'_> {
 
         match self.body(inner) {
             Body::Lines(lines) => Paragraph::new(lines).render(inner, buf),
-            Body::Image(bitmap) => draw_image(bitmap, inner, buf),
+            Body::Image(bitmap) => match self.graphics {
+                None => draw_image(bitmap, inner, buf),
+                // The cells under a picture the terminal draws have to be
+                // blank, and have to be *known* to be blank: what ratatui
+                // takes for unchanged it never writes out, and whatever stood
+                // here would show through the moment the picture went away.
+                Some(graphics) => {
+                    Clear.render(inner, buf);
+                    *state = Some(placement_area(bitmap, inner, graphics.cell));
+                }
+            },
         }
     }
 }
@@ -346,6 +383,38 @@ fn scaled(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32
     }
 }
 
+/// The cells a picture the terminal draws itself is placed into: centred in
+/// `area` and as near its own shape as whole cells allow.
+///
+/// The fit is worked out in pixels, which is where the shape is, and rounded
+/// back to cells after. The protocol scales the picture into exactly the cells
+/// it is handed, so that rounding is the whole of the distortion: under half a
+/// cell on each side.
+fn placement_area(bitmap: &Bitmap, area: Rect, cell: CellSize) -> Rect {
+    let (width, height) = scaled(
+        bitmap.width,
+        bitmap.height,
+        u32::from(area.width) * u32::from(cell.width.get()),
+        u32::from(area.height) * u32::from(cell.height.get()),
+    );
+
+    let columns = cells(width, cell.width.get()).clamp(1, area.width.max(1));
+    let rows = cells(height, cell.height.get()).clamp(1, area.height.max(1));
+
+    Rect {
+        x: area.x + (area.width.saturating_sub(columns)) / 2,
+        y: area.y + (area.height.saturating_sub(rows)) / 2,
+        width: columns,
+        height: rows,
+    }
+}
+
+/// A length in pixels as one in cells, to the nearest whole cell.
+fn cells(pixels: u32, per_cell: u16) -> u16 {
+    let per_cell = u32::from(per_cell);
+    ((pixels + per_cell / 2) / per_cell) as u16
+}
+
 /// Draws `bitmap` into `area`, two pixels to a cell.
 ///
 /// A cell that no part of the picture reaches is left alone rather than
@@ -387,7 +456,9 @@ fn draw_image(bitmap: &Bitmap, area: Rect, buf: &mut Buffer) {
 mod preview_pane_tests {
     use super::*;
 
-    use std::{path::PathBuf, sync::Arc};
+    use std::{num::NonZeroU16, path::PathBuf, sync::Arc};
+
+    use crate::ui::graphics::capabilities::Protocol;
 
     use crate::fs::directory::{DirEntry, Directory};
 
@@ -409,7 +480,7 @@ mod preview_pane_tests {
     fn rendered(pane: &PreviewPane, width: u16, height: u16) -> Buffer {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        pane.render(area, &mut buf);
+        StatefulWidget::render(pane, area, &mut buf, &mut None);
         buf
     }
 
@@ -425,7 +496,7 @@ mod preview_pane_tests {
     #[test]
     fn the_title_is_the_name_of_what_is_under_the_cursor() {
         let path = PathBuf::from("/home/user/notes.txt");
-        let pane = PreviewPane::new(Some(&path), None);
+        let pane = PreviewPane::new(Some(&path), None, None);
 
         assert!(rows(&pane, 30, 4)[0].contains("notes.txt"));
     }
@@ -437,7 +508,7 @@ mod preview_pane_tests {
             clipped: false,
         };
         let path = PathBuf::from("notes.txt");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let rows = rows(&pane, 30, 5);
         assert_eq!(rows[1], "first");
@@ -451,7 +522,7 @@ mod preview_pane_tests {
             clipped: true,
         };
         let path = PathBuf::from("big.txt");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         // Four rows of border and body, so only two lines of the file fit.
         let rows = rows(&pane, 30, 4);
@@ -466,7 +537,7 @@ mod preview_pane_tests {
             clipped: false,
         };
         let path = PathBuf::from("data.bin");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let rows = rows(&pane, 40, 4);
         assert!(rows[1].starts_with("000000"), "the row was {:?}", rows[1]);
@@ -501,7 +572,7 @@ mod preview_pane_tests {
         );
         let content = Content::Directory(listing);
         let path = PathBuf::from("/home");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].contains("inside.txt"), "the row was {:?}", rows[1]);
@@ -518,7 +589,7 @@ mod preview_pane_tests {
             points_to: LinkTarget::File,
         };
         let path = PathBuf::from("hosts");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].contains("/etc/hosts"));
@@ -527,7 +598,7 @@ mod preview_pane_tests {
 
     #[test]
     fn nothing_under_the_cursor_draws_an_empty_panel() {
-        let pane = PreviewPane::new(None, None);
+        let pane = PreviewPane::new(None, None, None);
 
         let rows = rows(&pane, 30, 4);
         assert!(rows[1].contains(words::NOTHING_SELECTED));
@@ -540,7 +611,7 @@ mod preview_pane_tests {
         // One column, two rows: exactly the two halves of one cell.
         let content = Content::Image(bitmap(1, 2, &[RED, BLUE]));
         let path = PathBuf::from("flag.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         // One cell of body inside a border on every side.
         let buf = rendered(&pane, 3, 3);
@@ -557,7 +628,7 @@ mod preview_pane_tests {
         const GREEN: [u8; 4] = [0, 255, 0, 255];
         let content = Content::Image(bitmap(1, 2, &[CLEAR, GREEN]));
         let path = PathBuf::from("logo.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let buf = rendered(&pane, 3, 3);
         let cell = &buf[(1, 1)];
@@ -588,12 +659,113 @@ mod preview_pane_tests {
         // picture is one half-pixel high, so the second row is outside it.
         let content = Content::Image(bitmap(4, 1, &[RED, RED, RED, RED]));
         let path = PathBuf::from("stripe.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content));
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
 
         let buf = rendered(&pane, 8, 4);
 
         assert_eq!(buf[(1, 2)].symbol(), " ");
         assert_eq!(buf[(1, 2)].fg, Color::Reset);
         assert_eq!(buf[(1, 2)].bg, Color::Reset);
+    }
+
+    /// A cell ten pixels across and twenty tall, which is roughly the shape a
+    /// terminal cell has.
+    fn graphics() -> Graphics {
+        Graphics {
+            protocol: Protocol::Kitty,
+            cell: CellSize {
+                width: NonZeroU16::new(10).expect("ten is not zero"),
+                height: NonZeroU16::new(20).expect("twenty is not zero"),
+            },
+        }
+    }
+
+    /// The whole point of measuring in pixels: forty columns of a cell twice
+    /// as tall as it is wide hold a square picture in twenty rows, not forty.
+    #[test]
+    fn a_square_picture_is_placed_in_cells_that_make_it_square() {
+        let area = Rect::new(0, 0, 40, 40);
+        let placed = placement_area(&bitmap(1, 1, &[[0, 0, 0, 255]]), area, graphics().cell);
+
+        assert_eq!(placed.width, 40);
+        assert_eq!(placed.height, 20);
+        assert_eq!(
+            placed.width * 10,
+            placed.height * 20,
+            "the placement is square in pixels"
+        );
+    }
+
+    #[test]
+    fn a_placement_is_centred_in_what_it_does_not_fill() {
+        let area = Rect::new(4, 6, 40, 40);
+        let placed = placement_area(&bitmap(1, 1, &[[0, 0, 0, 255]]), area, graphics().cell);
+
+        assert_eq!(placed.x, 4);
+        assert_eq!(placed.y, 6 + (40 - 20) / 2);
+    }
+
+    /// A picture far wider than it is tall comes out a row rather than
+    /// nothing, and never reaches past the panel.
+    #[test]
+    fn a_placement_stays_inside_the_panel() {
+        let area = Rect::new(0, 0, 6, 4);
+        let wide = Content::Image(bitmap(4, 1, &[[0, 0, 0, 255]; 4]));
+        let Content::Image(wide) = &wide else {
+            unreachable!("it was built as an image")
+        };
+
+        let placed = placement_area(wide, area, graphics().cell);
+
+        assert!(placed.width >= 1 && placed.width <= area.width);
+        assert!(placed.height >= 1 && placed.height <= area.height);
+    }
+
+    /// Where the terminal draws the picture itself, the panel must leave the
+    /// cells under it blank rather than half blocks: ratatui writes out only
+    /// what changed, and anything left here would outlive the picture.
+    #[test]
+    fn a_picture_the_terminal_draws_leaves_the_panel_blank() {
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        let content = Content::Image(bitmap(2, 2, &[RED, RED, RED, RED]));
+        let path = PathBuf::from("photo.png");
+        let pane = PreviewPane::new(Some(&path), Some(&content), Some(graphics()));
+
+        let area = Rect::new(0, 0, 12, 8);
+        let mut buf = Buffer::empty(area);
+        let mut placed = None;
+        StatefulWidget::render(&pane, area, &mut buf, &mut placed);
+
+        let placed = placed.expect("a picture the terminal draws asks for an area");
+        assert!(area.contains(ratatui::layout::Position::new(placed.x, placed.y)));
+
+        // Everything inside the border, not only the cells the picture covers.
+        for y in 1..area.height - 1 {
+            for x in 1..area.width - 1 {
+                assert_eq!(buf[(x, y)].symbol(), " ", "at {x},{y}");
+            }
+        }
+    }
+
+    /// The same panel without a protocol still paints half blocks, so the two
+    /// backends are told apart by nothing but this.
+    #[test]
+    fn the_same_panel_without_a_protocol_paints_half_blocks() {
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        let content = Content::Image(bitmap(2, 2, &[RED, RED, RED, RED]));
+        let path = PathBuf::from("photo.png");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let area = Rect::new(0, 0, 12, 8);
+        let mut buf = Buffer::empty(area);
+        let mut placed = None;
+        StatefulWidget::render(&pane, area, &mut buf, &mut placed);
+
+        assert_eq!(placed, None);
+        assert!(
+            (1..area.height - 1)
+                .flat_map(|y| (1..area.width - 1).map(move |x| (x, y)))
+                .any(|(x, y)| buf[(x, y)].symbol() == UPPER_HALF)
+        );
     }
 }

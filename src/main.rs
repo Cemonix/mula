@@ -1,7 +1,10 @@
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::app::{App, AppError};
+use crate::{
+    app::{App, AppError},
+    ui::graphics::capabilities::Capabilities,
+};
 
 mod action;
 mod app;
@@ -25,5 +28,12 @@ fn main() -> Result<(), AppError> {
     let _guard = init_logging();
 
     tracing::info!("App starting...");
-    ratatui::run(|terminal| App::new()?.run(terminal))
+    ratatui::run(|terminal| {
+        // Asked before the loop starts: the terminal answers on standard
+        // input, and `handle_events` would read the answer as keystrokes.
+        let capabilities = Capabilities::detect();
+        tracing::info!(?capabilities, "terminal graphics");
+
+        App::new(capabilities)?.run(terminal)
+    })
 }

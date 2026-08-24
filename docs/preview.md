@@ -46,6 +46,49 @@ The thread sends a bounded RGBA bitmap and the widget fits it to the area. A
 graphics protocol (Kitty, Sixel) is therefore a second backend over the same
 bitmap, not a rewrite.
 
+## A placement is state, not drawing
+
+`Buffer` is declarative: draw the same thing every pass and ratatui works out
+what changed. A graphics protocol is not. A placement is an object the terminal
+holds and goes on drawing under whatever text arrives later, and sending the
+same one twice leaves two.
+
+Ratatui cannot help here, because no cell of a picture it never drew ever
+changes. So the screen is reconciled the way `Buffer` is diffed, one level up:
+what should be on it against what is. Everything that would otherwise be a
+separate case — the cursor moving, the panel changing sides, the window being
+resized, an overlay opening, Quick View closing — becomes the same comparison
+of two `Placement`s, and two passes that agree write nothing at all.
+
+Nothing writes because they agree is what keeps a bitmap off the wire sixty
+times a second. It is the property to hold on to; the rest follows from it.
+
+A placement is identified by a number that turns on every answer the reader
+gives, rather than by the path it came from. The same file read twice is two
+pictures, and the second one has to reach the screen.
+
+## The widget says where, the surface says how
+
+Writing escape sequences from inside `render` would end the widget being a
+function from a `Rect` to cells. So it stays one and gives back a second
+answer: the area it wants a picture in. Nothing else changes hands.
+
+Fitting a bitmap to an area is the same arithmetic whichever backend draws it,
+which is why it stays in the widget rather than moving to `App` — half blocks
+measure in half-pixels and a protocol measures in cell pixels, and that is the
+whole of the difference.
+
+The cells under a picture are cleared rather than left alone. They have to be
+blank, and they have to be *known* to be blank: what ratatui takes for
+unchanged it never writes out, so anything left there would show through the
+moment the picture goes.
+
+## What can be drawn is not what a terminal has
+
+`Protocol` names what the panel knows how to write, not what terminals offer.
+A protocol detected but unimplemented would blank the half blocks and put
+nothing in their place, so it must not be nameable until it can be written.
+
 ## Transparency is composited at drawing time
 
 What sits behind the panel is the terminal's own colour, and the reader thread

@@ -28,6 +28,10 @@ use crate::{
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
+        graphics::{
+            capabilities::Capabilities,
+            surface::{Placement, Surface, Wanted},
+        },
         help::Help,
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
@@ -175,6 +179,15 @@ pub struct App {
     previewing: Option<Arc<Path>>,
     /// The newest answer, or `None` while one is on its way.
     preview: Option<Content>,
+    /// Counts the answers the panel has been given, so a picture is told from
+    /// the one it replaced even where both were read from the same path.
+    preview_generation: u64,
+    /// Where the panel put a picture the terminal draws itself, settled by the
+    /// last frame and `None` for a panel drawing half blocks or nothing.
+    preview_placement: Option<Placement>,
+    /// The pictures the terminal is holding. Only this writes them, and only
+    /// after a frame has been drawn.
+    surface: Surface,
     /// The newest snapshot of the running job, or `None` while the queue is
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
@@ -191,7 +204,17 @@ impl App {
     /// toasts. Also the coarsest delay a toast can outlive its duration by.
     const TICK: Duration = Duration::from_millis(100);
 
-    pub fn new() -> Result<Self, AppError> {
+    /// A terminal that draws its own pictures is worth reading more pixels
+    /// for: a panel is tens of cells across and a cell is tens of pixels, so
+    /// the ceiling is roughly what a full-screen panel could ask for.
+    const GRAPHICS_BITMAP_SIDE: u32 = 1536;
+
+    pub fn new(capabilities: Capabilities) -> Result<Self, AppError> {
+        let mut preview_limits = preview::Limits::default();
+        if capabilities.graphics().is_some() {
+            preview_limits.max_bitmap_side = Self::GRAPHICS_BITMAP_SIDE;
+        }
+
         Ok(Self {
             left_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
             right_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
@@ -206,9 +229,12 @@ impl App {
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
-            previewer: Reader::<Preview>::start(preview::Limits::default()),
+            previewer: Reader::<Preview>::start(preview_limits),
             previewing: None,
             preview: None,
+            preview_generation: 0,
+            preview_placement: None,
+            surface: Surface::new(capabilities),
             progress: None,
             queued_marks: Vec::new(),
             tick: 0,
@@ -227,6 +253,9 @@ impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), AppError> {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
+            // After the draw and not inside it: a picture is laid over the
+            // text, so the text has to have reached the screen first.
+            self.place_preview();
             self.handle_events()?;
             self.collect_from_worker();
             self.collect_from_reader();
@@ -238,7 +267,31 @@ impl App {
             self.tick = self.tick.wrapping_add(1);
         }
 
+        // A placement belongs to the terminal rather than to the screen it was
+        // made on, so leaving the alternate screen would leave it over the
+        // shell.
+        if let Err(error) = self.surface.clear(&mut io::stdout()) {
+            tracing::warn!(%error, "the picture could not be taken back");
+        }
+
         Ok(())
+    }
+
+    /// Brings the picture the terminal holds in line with the panel that was
+    /// just drawn.
+    ///
+    /// The placement the frame settled and the bitmap it was settled for are
+    /// held apart — one is the panel's arithmetic, the other the reader's
+    /// answer — and are only ever put together here.
+    fn place_preview(&mut self) {
+        let wanted = match (self.preview_placement, &self.preview) {
+            (Some(placement), Some(Content::Image(bitmap))) => Some(Wanted { placement, bitmap }),
+            _ => None,
+        };
+
+        if let Err(error) = self.surface.reconcile(wanted, &mut io::stdout()) {
+            tracing::warn!(%error, "the picture could not be placed");
+        }
     }
 
     pub fn get_focused_tabs(&self) -> &TabList {
@@ -270,6 +323,11 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        // Cleared every pass and set again only by a panel that draws a
+        // picture, so a panel that stopped wanting one says so by saying
+        // nothing.
+        self.preview_placement = None;
+
         let main_layout = Layout::new(
             Direction::Vertical,
             [Constraint::Min(0), Constraint::Length(2)],
@@ -295,18 +353,39 @@ impl App {
             // panel is only hidden: it keeps its directory, which is what a
             // copy still goes into.
             Opposite::Preview => {
-                let preview = PreviewPane::new(self.previewing.as_deref(), self.preview.as_ref());
+                let preview = PreviewPane::new(
+                    self.previewing.as_deref(),
+                    self.preview.as_ref(),
+                    self.surface.graphics(),
+                );
+                // Where the panel wants a picture the terminal draws itself.
+                // It comes back from the widget rather than being worked out
+                // here: fitting a bitmap to an area is the same arithmetic
+                // whichever of the two backends ends up drawing it.
+                let mut area = None;
                 match self.focused_side {
                     Side::Left => {
                         self.left_tabs.render(frame, layout[0], true);
-                        frame.render_widget(&preview, layout[1]);
+                        frame.render_stateful_widget(&preview, layout[1], &mut area);
                     }
                     Side::Right => {
-                        frame.render_widget(&preview, layout[0]);
+                        frame.render_stateful_widget(&preview, layout[0], &mut area);
                         self.right_tabs.render(frame, layout[1], true);
                     }
                 }
+
+                self.preview_placement = area.map(|area| Placement {
+                    image: self.preview_generation,
+                    area,
+                });
             }
+        }
+
+        // Every overlay covers the whole screen, and a placement sits over the
+        // text rather than under it. Wanting no picture is what takes one off
+        // the screen; the surface does the rest of it.
+        if !matches!(self.mode, Mode::Browse) || self.show_help {
+            self.preview_placement = None;
         }
 
         if let Mode::Confirm { dialog, .. } = &self.mode {
@@ -851,7 +930,7 @@ impl App {
         // What is on screen belongs to the path that was under the cursor
         // before. Keeping it would draw one file's content under another
         // file's name, which the panel has no way of hedging.
-        self.preview = None;
+        self.set_preview(None);
         match &wanted {
             Some(path) => {
                 if let Err(e) = self.previewer.send(Preview {
@@ -880,8 +959,18 @@ impl App {
         }
 
         if let Some(content) = drained.msgs.into_iter().next_back() {
-            self.preview = Some(content);
+            self.set_preview(Some(content));
         }
+    }
+
+    /// Replaces what the panel draws and gives it a number of its own.
+    ///
+    /// The number is what a placement is told apart by, so it has to turn on
+    /// every replacement rather than on every change of path: the same file
+    /// read twice is two pictures, and the second one has to reach the screen.
+    fn set_preview(&mut self, content: Option<Content>) {
+        self.preview = content;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
     }
 
     /// Takes the hits the reader has sent and appends them to the overlay that
