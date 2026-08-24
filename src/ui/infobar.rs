@@ -50,6 +50,12 @@ impl<'a> InfoBar<'a> {
     /// cannot push the counts off the row.
     const NAME_WIDTH: usize = 24;
 
+    /// Follows the count of marked items.
+    const MARKED_LABEL: &'static str = " marked";
+
+    /// Follows the count of jobs waiting behind the running one.
+    const QUEUED_LABEL: &'static str = " queued";
+
     /// Follows the cancel key, which is drawn from the key table.
     const CANCEL_LABEL: &'static str = " cancel";
 
@@ -115,14 +121,16 @@ impl<'a> InfoBar<'a> {
         }
 
         if self.marked > 0 {
-            segments.push(vec![Span::raw(format!("{} marked", self.marked)).bold()]);
+            segments.push(vec![
+                Span::raw(format!("{}{}", self.marked, Self::MARKED_LABEL)).bold(),
+            ]);
         }
 
         // Counts the running job too, so the row never reads as empty while
         // something is still on the queue.
         if self.queued > 1 {
             segments.push(vec![
-                Span::raw(format!("{} queued", self.queued - 1)).fg(Color::Gray),
+                Span::raw(format!("{}{}", self.queued - 1, Self::QUEUED_LABEL)).fg(Color::Gray),
             ]);
         }
 
@@ -250,7 +258,7 @@ mod infobar_tests {
 
     #[test]
     fn the_marked_count_is_drawn() {
-        assert_eq!(render(InfoBar::new().marked(3), 40), "3 marked");
+        assert_eq!(render(InfoBar::new().marked(3), 40), marked(3));
     }
 
     #[test]
@@ -274,7 +282,7 @@ mod infobar_tests {
     #[test]
     fn progress_comes_before_the_marked_count() {
         let row = render(InfoBar::new().progress(Some(halfway())).marked(3), 80);
-        assert!(row.ends_with("6 / 12 | 3 marked"), "{row}");
+        assert!(row.ends_with(&format!("6 / 12 | {}", marked(3))), "{row}");
     }
 
     #[test]
@@ -328,12 +336,28 @@ mod infobar_tests {
         Some(KeyBinding::plain(ratatui::crossterm::event::KeyCode::F(9)))
     }
 
+    /// How the widget renders that key. It is the half of the hint the label's
+    /// wording cannot move, so absence of the hint is asserted against this.
+    fn cancel_key_text() -> String {
+        cancel_key().unwrap().to_string()
+    }
+
+    /// The hint as `segments` assembles it: the key, then the label.
+    fn cancel_hint() -> String {
+        format!("{}{}", cancel_key_text(), InfoBar::CANCEL_LABEL)
+    }
+
+    /// A count as `segments` draws it, taking the label from the widget.
+    fn marked(count: usize) -> String {
+        format!("{count}{}", InfoBar::MARKED_LABEL)
+    }
+
     #[test]
     fn the_cancel_hint_shows_only_while_a_job_runs() {
         let key = cancel_key();
 
         let running = render(InfoBar::new().progress(Some(halfway())).cancel_key(key), 80);
-        assert!(running.ends_with("F9 cancel"), "{running}");
+        assert!(running.ends_with(&cancel_hint()), "{running}");
 
         // Nothing queued, so there is nothing the key would do.
         assert_eq!(render(InfoBar::new().cancel_key(key), 80), "");
@@ -350,7 +374,7 @@ mod infobar_tests {
             InfoBar::new().progress(Some(done)).cancel_key(cancel_key()),
             80,
         );
-        assert!(!row.contains("cancel"), "{row}");
+        assert!(!row.contains(&cancel_key_text()), "{row}");
     }
 
     #[test]
@@ -365,13 +389,16 @@ mod infobar_tests {
             60,
         );
 
-        assert!(row.contains("3 marked"), "{row}");
-        assert!(!row.contains("cancel"), "{row}");
+        assert!(row.contains(&marked(3)), "{row}");
+        assert!(!row.contains(&cancel_key_text()), "{row}");
     }
 
     #[test]
     fn the_queue_counts_only_what_is_waiting() {
         assert_eq!(render(InfoBar::new().queued(1), 40), "");
-        assert_eq!(render(InfoBar::new().queued(3), 40), "2 queued");
+        assert_eq!(
+            render(InfoBar::new().queued(3), 40),
+            format!("2{}", InfoBar::QUEUED_LABEL)
+        );
     }
 }
