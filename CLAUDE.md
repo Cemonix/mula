@@ -3,7 +3,13 @@
 Dual-pane TUI file manager. Rust + ratatui + crossterm.
 
 `tasks/` holds open work, one file per task, excluded via `.git/info/exclude` —
-never committed. This file is what stays, so nothing durable goes in a task file.
+never committed. This file and `docs/` are what stay, so nothing durable goes
+in a task file.
+
+`docs/` holds the reasoning behind the rules below, one file per subsystem:
+`background-io.md`, `preview.md`, `keys-overlays.md`, `marks-operations.md`.
+Read the one covering what you are about to change. A rule that acquires a
+rationale worth keeping puts it there, not here.
 
 ## Architecture
 
@@ -43,7 +49,15 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - One commit = one logical unit, across as many files as needed.
 - Whole files, not hunks — stage the file.
 
-## Decisions
+## Rules
+
+Constraints on new code. Why each one holds is in `docs/`.
+
+These are defaults, not gospel. Where the code and a rule disagree, the code is
+the evidence — say so instead of silently following either one. Most of them
+are conventions and cannot go stale; the few that rest on a fact about the
+world carry a **Holds while** clause, and when that stops being true the rule
+is open again, not broken.
 
 **Errors/invariants**
 - "Cannot happen" = type-guaranteed or exhaustive match, not "nothing else does
@@ -51,88 +65,43 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
   `Result` or swallowing the case.
 
 **Keys/overlays**
+- At most one overlay, no stack. **Holds while** nothing needs to open an
+  overlay over another one; paginated help is the case that would end it.
 - `DialogMsg` never becomes an `Action`; only the result leaves the dialog.
-- `show_help` is a `bool`, not a `Mode` variant — it only displays keys.
-- At most one overlay, no stack.
-- `bar: Option<&'static str>` is itself the "belongs in the bar" flag.
-- Key bar is curated, not truncated: fixed set fitting 80 columns (~55 today).
-  Rest goes under `?`. Guard with a test over summed `Span::width()`.
-- Table order = output order; `resolve` takes the first match.
-- Config file shortcuts are a layer over the tables (key→action name), not a
-  replacement; `bar`/`help`/order stay in code.
+- Key bar is curated, not truncated: a fixed set fitting 80 columns, rest under
+  `?`. Guard with a test over summed `Span::width()`, never against a constant
+  of our own.
 
 **Marks/operations**
-- Marks survive a directory change (yazi style); invisible outside their own
-  dir — hence InfoBar count and delete confirmation lists names, not a count.
-- InfoBar = derivable from `App` and true while state lasts. Toast = a
-  one-off event, recorded nowhere. Nothing non-derivable goes in InfoBar.
-- InfoBar row is reserved even empty (avoids pane/cursor shift on marking).
 - `pending` is never an action that opens a dialog: `Action::Delete` opens,
-  `Action::DeleteMarked` performs.
-- Same directory in `transfer` is skipped silently, not an error.
+  `Action::DeleteMarked` performs. This follows from there being no overlay
+  stack; it goes when that goes.
+- Nothing non-derivable goes in the InfoBar: it must be computable from `App`
+  and true while the state lasts. A one-off event is a toast.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
-  errors — so a partial failure can say "Deleted 3 of 5".
-- Marks clear when a batch is queued, not when it finishes — the user keeps
-  marking while it runs. `Done` carries the failed paths and they are marked
-  again, so a partial failure is still retryable.
-- Confirmation dialogs open on `Choice::No` (harmless answer as default focus).
-
-**Rendering**
-- Style goes on `Span`, never `Line` (a `Line` repaints its whole area).
+  errors, so a partial failure can say "Deleted 3 of 5".
+- Confirmation dialogs open on `Choice::No`.
 
 **Background I/O**
-- All `fs::` access behind one boundary (needed by SSH panes, background I/O).
-- I/O in threads, not async — regular files have no non-blocking API (`epoll`
-  and `kqueue` can't watch them), so `tokio::fs` is a thread pool over the same
-  blocking syscalls. Cancelling a copy is an `AtomicBool` between entries
-  either way, since one `fs::copy` is a single syscall.
-- One worker, not a pool. One FIFO queue makes "which operation wins" a
-  question of which key was pressed first, so overlapping paths can't conflict
-  and nothing needs locking. Parallel I/O on one disk doesn't pay; two devices
-  at once is what a second Mula instance is for.
-- Every mutation goes through the worker. Reads stay synchronous until SSH
-  panes need otherwise — a `Directory::read` queued behind a 4 GB copy would
-  freeze navigation. A second worker for reads then, since only writes need
-  ordering.
+- All `fs::` access goes behind one boundary.
+- Threads, not async. **Holds while** the I/O is local file syscalls, which
+  have no non-blocking API; SSH panes are sockets and do.
+- One worker for mutations, no pool. One `Reader` instance per role, each with
+  its own generation. **Holds while** a batch stays on one device.
 - A job owns a snapshot of its paths, taken when it is queued, and never reads
-  `App` again. Whatever the user changes afterwards can only turn into a
-  skipped entry, so nothing has to be forbidden while a job runs: no modal
-  busy state, no read-only mode.
-- The worker never touches `App`; it sends `Progress`/`Done { summary }`, the
-  main loop refreshes panes and raises a toast.
-- Last wins is the mechanism (`Reader<J: ReadJob>`: generations, channels,
-  thread), not the discipline. Folding messages into an answer stays with each
-  job — a search's hits are a delta and every live batch is kept, a preview is
-  a snapshot and only the newest counts.
-- One reader instance per role, each with its own generation. One shared
-  counter would cancel a running walk on every cursor move and would hold
-  together only because the find overlay happens to be modal.
+  `App` again. Nothing is forbidden while a job runs: no modal busy state, no
+  read-only mode.
+- The worker never touches `App`; it sends `Progress`/`Done { summary }` and
+  the main loop acts on them.
 
 **Preview**
-- Quick View replaces the panel opposite the cursor and is a view toggle on
-  `App`, never a `Mode`: browse keys and every operation under them keep
-  working. A copy still goes into the hidden panel's directory; if that ever
-  bites, show the target path — don't forbid the operation.
-- What to preview is settled once per pass of the loop from side, tab and
-  cursor, not from each action that moves one of them.
-- Cleared to "loading" on request. Panes keep their old listing while reloading
-  because blanking one moves the cursor; a preview has no cursor, and a stale
-  one draws one file's content under another file's name.
-- A fifo, socket or device is turned away on `symlink_metadata` and never
-  opened — `File::open` on one blocks until somebody writes, which is never.
-- What a file is comes from its first bytes. A file claiming a format it does
-  not keep falls back to its hex dump rather than to an error.
-- Half blocks (`▀` fg over bg) are the renderer, not a consolation: the only
-  block trick with exact per-pixel colour, no terminal detection, and it stays
-  inside `Buffer`. The thread sends a bounded RGBA bitmap and the widget fits
-  it, so a graphics protocol is a second backend over the same bitmap.
-- Transparency is composited at drawing time. What is behind the panel is the
-  terminal's own colour and unknowable to the reader, so a cell no part of the
-  picture reaches is left unpainted rather than filled with a guess.
-- Shrinking with `thumbnail`, not `resize(Triangle)`: at 4000 → 512 it is less
-  than half the time, and an area average is what a reduction that large wants
-  anyway. Measured, because the guess was wrong — in a debug build the resize
-  cost three times the PNG decode, not the other way round.
+- Quick View is a view toggle on `App`, never a `Mode`: browse keys and every
+  operation under them keep working.
+- What to preview is settled once per pass of the loop, not from each action
+  that moves the cursor, the tab or the side.
+- A fifo, socket or device is turned away on `symlink_metadata`, never opened.
+- What a file is comes from its first bytes; a file that lies about its format
+  falls back to a hex dump, not to an error.
 
 ## ratatui/crossterm gotchas
 
@@ -152,6 +121,7 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - `Ctrl+<letter>` is contested ground even beyond terminal defaults — a user's
   own config takes what it likes, and the key then never reaches the app at
   all. Function keys are the safe family, which is what Cancel sits on.
+- Style goes on `Span`, never `Line` — a `Line` repaints its whole area.
 - `Self` in `impl Widget for &Foo` means `&Foo`; associated consts need
   `Foo::<T>::CONST`.
 - `Block` doesn't erase what it covers (`set_style` changes colours, not
