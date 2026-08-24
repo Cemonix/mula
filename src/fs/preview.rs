@@ -110,6 +110,12 @@ impl Bitmap {
         ]
     }
 
+    /// The pixels as they are stored, for a protocol that carries a bitmap
+    /// whole rather than sampling it a point at a time.
+    pub fn rgba(&self) -> &[u8] {
+        &self.pixels
+    }
+
     /// A bitmap of `width` by `height` from raw RGBA bytes.
     #[cfg(test)]
     pub fn of(width: u32, height: u32, pixels: Vec<u8>) -> Self {

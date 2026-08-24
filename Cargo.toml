@@ -7,6 +7,7 @@ license = "GPL-3.0-only"
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 ratatui = "0.30.2"
+rustix = { version = "1.1.4", features = ["termios"] }
 thiserror = "2.0.20"
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
