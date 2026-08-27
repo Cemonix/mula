@@ -86,8 +86,12 @@ is open again, not broken.
 - All `fs::` access goes behind one boundary.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
   have no non-blocking API; SSH panes are sockets and do.
-- One worker for mutations, no pool. One `Reader` instance per role, each with
-  its own generation. **Holds while** a batch stays on one device.
+- One worker for mutations, no pool. **Holds while** a batch stays on one
+  device. One `Reader` instance per answer that can be outstanding on its own,
+  each with its own generation — the two panels are two of those, not one
+  "listing" role.
+- A pane keeps its listing while the next one is read, and asks for it once per
+  pass of the loop rather than from the action that moved it.
 - A job owns a snapshot of its paths, taken when it is queued, and never reads
   `App` again. Nothing is forbidden while a job runs: no modal busy state, no
   read-only mode.

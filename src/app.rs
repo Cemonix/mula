@@ -19,6 +19,7 @@ use crate::{
         directory::DirEntryKind,
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
+        listing::Listing,
         ops::{MutationOp, ProcessedSummary, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
@@ -167,6 +168,12 @@ pub struct App {
     /// large tree queued behind a copy would report its first hit minutes late,
     /// and because reads need no ordering against each other.
     reader: Reader<Search>,
+    /// Serve the panels, one each. Not one reader for the role: `Reader` is
+    /// last wins, and both panels are refreshed together after a job finishes,
+    /// so a shared counter would drop the left answer and leave that panel
+    /// waiting for a generation that never comes.
+    left_listings: Reader<Listing>,
+    right_listings: Reader<Listing>,
     /// What the panel opposite the cursor shows.
     opposite: Opposite,
     /// Serves the Quick View panel. A reader of its own rather than another
@@ -228,6 +235,8 @@ impl App {
                 .map(|binding| binding.key),
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
+            left_listings: Reader::<Listing>::start(()),
+            right_listings: Reader::<Listing>::start(()),
             opposite: Opposite::Listing,
             previewer: Reader::<Preview>::start(preview_limits),
             previewing: None,
@@ -259,8 +268,14 @@ impl App {
             self.handle_events()?;
             self.collect_from_worker();
             self.collect_from_reader();
-            // After the worker, since finishing a job refreshes the panes and
-            // can move the cursor onto something else.
+            // After the worker, since finishing a job asks both panes to read
+            // their directories again. Sending before draining is what keeps a
+            // replaced request's answer from being folded in: the send raises
+            // the generation, and the drain that follows drops what is stale.
+            self.sync_listings();
+            self.collect_from_listings();
+            // After the listings, since a new one can move the cursor onto
+            // something else.
             self.sync_preview();
             self.collect_from_previewer();
             self.toasts.retain(|toast| !toast.is_expired());
@@ -316,9 +331,22 @@ impl App {
     }
 
     pub fn get_focused_pane_mut(&mut self) -> &mut Pane {
-        match self.focused_side {
+        self.active_pane_mut(self.focused_side)
+    }
+
+    /// The pane of `side`'s active tab, which is the only one of that side on
+    /// screen and the only one that reads.
+    fn active_pane_mut(&mut self, side: Side) -> &mut Pane {
+        match side {
             Side::Left => self.left_tabs.active_tab_mut().get_pane_mut(),
             Side::Right => self.right_tabs.active_tab_mut().get_pane_mut(),
+        }
+    }
+
+    fn listings_mut(&mut self, side: Side) -> &mut Reader<Listing> {
+        match side {
+            Side::Left => &mut self.left_listings,
+            Side::Right => &mut self.right_listings,
         }
     }
 
@@ -699,9 +727,7 @@ impl App {
                 self.reader.cancel();
                 self.mode = Mode::Browse;
 
-                if let Err(e) = self.get_focused_pane_mut().reveal(&target) {
-                    self.notify(ToastLevel::Error, e, None);
-                }
+                self.get_focused_pane_mut().reveal(&target);
             }
             None => {
                 match key.code {
@@ -906,6 +932,49 @@ impl App {
         }
     }
 
+    /// Sends the listings the panes are waiting for.
+    ///
+    /// Which directory a pane shows is settled here once a pass rather than
+    /// from each action that changes it, so a `cd`, a jump out of find, a new
+    /// tab and a refresh after a job all take the same road. A pane whose
+    /// request has already gone out asks for nothing.
+    fn sync_listings(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            let Some(path) = self.active_pane_mut(side).take_unsent() else {
+                continue;
+            };
+
+            let sent = self.listings_mut(side).send(Listing { path });
+            if let Err(e) = sent {
+                self.notify(ToastLevel::Error, e, None);
+            }
+        }
+    }
+
+    /// Takes the newest listing each side has been sent and hands it to the
+    /// pane that asked for it. An older one describes a directory that pane has
+    /// already left, and the reader has dropped it.
+    fn collect_from_listings(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            let drained = self.listings_mut(side).drain();
+
+            if drained.health == Health::Stopped {
+                self.notify(
+                    ToastLevel::Error,
+                    "The background reader has stopped; restart Mula",
+                    None,
+                );
+            }
+
+            if let Some(listing) = drained.msgs.into_iter().next_back() {
+                let listed = self.active_pane_mut(side).listed(listing);
+                if let Err(e) = listed {
+                    self.notify(ToastLevel::Error, e, None);
+                }
+            }
+        }
+    }
+
     /// Sends a preview request whenever what the panel would show has changed,
     /// and cancels the running one once there is nothing to show.
     ///
@@ -1036,19 +1105,18 @@ impl App {
 
         // Only reads the disk when the job could have changed it, so a run that
         // skipped everything costs nothing.
-        if outcome.summary.touched_disk()
-            && let Err(e) = self.refresh_panes()
-        {
-            self.notify(ToastLevel::Error, e, None);
+        if outcome.summary.touched_disk() {
+            self.refresh_panes();
         }
     }
 
-    /// Refreshes the active pane on both sides. Both run even when the first fails;
-    /// the error of the left one is returned first.
-    fn refresh_panes(&mut self) -> Result<(), AppError> {
-        let left = self.left_tabs.active_tab_mut().get_pane_mut().refresh();
-        let right = self.right_tabs.active_tab_mut().get_pane_mut().refresh();
-        left.and(right).map_err(AppError::from)
+    /// Asks the active pane on both sides for its listing again. Nothing is
+    /// read here: the loop sends the requests and the answers arrive later, so
+    /// the toast reporting a job is raised before the panes have caught up
+    /// with what it did.
+    fn refresh_panes(&mut self) {
+        self.active_pane_mut(Side::Left).refresh();
+        self.active_pane_mut(Side::Right).refresh();
     }
 
     /// Reports how a batch ended, taking the operation's past tense (`copied`)

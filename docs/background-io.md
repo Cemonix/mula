@@ -29,9 +29,8 @@ The serial queue exists for the *order of writes*. Reads change nothing, so
 they never need to be ordered against a mutation; the worst case is a listing
 that is briefly stale and refreshes anyway.
 
-Reads stay synchronous for now. Not because they are ordered, but because a
-`Directory::read` sitting in the mutation queue behind a 4 GB copy would
-freeze navigation for as long as the copy runs.
+What kept them out of the queue is that a `Directory::read` sitting behind a
+4 GB copy would freeze navigation for as long as the copy runs.
 
 Reading a directory is itself cheap on a local disk — measured on APFS, one
 `read_dir` plus `file_type()` per entry:
@@ -42,9 +41,17 @@ Reading a directory is itself cheap on a local disk — measured on APFS, one
 | ~60 entries | 0.03 ms |
 
 The main loop already ticks every 100 ms for toast expiry, so even the
-pathological case hides inside one tick. What changes the answer is a network
-mount, a sleeping external disk or an SSH pane, where every entry costs a
-round trip. That is when directory reads move onto the reader.
+pathological case hides inside one tick. That is why reads stayed synchronous
+for as long as they did, and on a local disk moving them buys nothing.
+
+They moved onto the reader anyway, ahead of the network mount and the sleeping
+external disk that would have forced it. The cost of the move is not the
+thread — that was written and tested already — but a panel that can say "not
+yet": two listings held at once, a cursor that must not jump, and a copy whose
+target is the directory on screen rather than the one still being read. Paying
+that while every answer comes back in a millisecond is what makes it
+checkable. Paying it for the first time against a listing that crosses a wire
+would mean debugging the panel and the wire at once.
 
 ## A job owns a snapshot
 
@@ -76,8 +83,17 @@ differs per job:
 
 Folding therefore stays with each job.
 
-## One reader instance per role
+## One reader per outstanding answer
 
-Each role gets its own generation counter. One shared counter would cancel a
+Each reader gets its own generation counter. One shared counter would cancel a
 running tree walk on every cursor move, and would only hold together because
 the find overlay happens to be modal today — an accident, not a guarantee.
+
+The unit is not the *kind* of read but how many answers can be outstanding at
+once. Find and preview are one each: there is one overlay, and there is one
+cursor. The panels are two, and `refresh_panes` asks both in the same breath —
+sharing a counter there would raise the generation on the second request and
+drop the first panel's answer, leaving that panel waiting for a generation
+that never comes. Not a slow panel: a stuck one. It is worth saying that this
+was never about remote panels; it was already true of two local directories
+being refreshed after a copy.
