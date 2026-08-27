@@ -19,7 +19,6 @@ use crate::{
         directory::DirEntryKind,
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
-        listing::Listing,
         ops::{MutationOp, ProcessedSummary, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
@@ -37,6 +36,7 @@ use crate::{
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
         pane::{Pane, PaneError},
+        panel::Panel,
         preview::PreviewPane,
         prompt::{InputMsg, Prompt},
         tab::{MarkOp, Tab, TabId, TabList},
@@ -153,8 +153,8 @@ pub enum AppError {
 
 #[derive(Debug)]
 pub struct App {
-    left_tabs: TabList,
-    right_tabs: TabList,
+    left: Panel,
+    right: Panel,
     focused_side: Side,
     toasts: VecDeque<Toast>,
     mode: Mode,
@@ -168,12 +168,6 @@ pub struct App {
     /// large tree queued behind a copy would report its first hit minutes late,
     /// and because reads need no ordering against each other.
     reader: Reader<Search>,
-    /// Serve the panels, one each. Not one reader for the role: `Reader` is
-    /// last wins, and both panels are refreshed together after a job finishes,
-    /// so a shared counter would drop the left answer and leave that panel
-    /// waiting for a generation that never comes.
-    left_listings: Reader<Listing>,
-    right_listings: Reader<Listing>,
     /// What the panel opposite the cursor shows.
     opposite: Opposite,
     /// Serves the Quick View panel. A reader of its own rather than another
@@ -223,8 +217,8 @@ impl App {
         }
 
         Ok(Self {
-            left_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
-            right_tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
+            left: Panel::new()?,
+            right: Panel::new()?,
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
@@ -235,8 +229,6 @@ impl App {
                 .map(|binding| binding.key),
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
-            left_listings: Reader::<Listing>::start(()),
-            right_listings: Reader::<Listing>::start(()),
             opposite: Opposite::Listing,
             previewer: Reader::<Preview>::start(preview_limits),
             previewing: None,
@@ -309,45 +301,34 @@ impl App {
         }
     }
 
-    pub fn get_focused_tabs(&self) -> &TabList {
-        match self.focused_side {
-            Side::Left => &self.left_tabs,
-            Side::Right => &self.right_tabs,
+    fn panel(&self, side: Side) -> &Panel {
+        match side {
+            Side::Left => &self.left,
+            Side::Right => &self.right,
         }
+    }
+
+    fn panel_mut(&mut self, side: Side) -> &mut Panel {
+        match side {
+            Side::Left => &mut self.left,
+            Side::Right => &mut self.right,
+        }
+    }
+
+    pub fn get_focused_tabs(&self) -> &TabList {
+        self.panel(self.focused_side).tabs()
     }
 
     pub fn get_focused_tabs_mut(&mut self) -> &mut TabList {
-        match self.focused_side {
-            Side::Left => &mut self.left_tabs,
-            Side::Right => &mut self.right_tabs,
-        }
+        self.panel_mut(self.focused_side).tabs_mut()
     }
 
     pub fn get_focused_pane(&self) -> &Pane {
-        match self.focused_side {
-            Side::Left => self.left_tabs.active_tab().get_pane(),
-            Side::Right => self.right_tabs.active_tab().get_pane(),
-        }
+        self.panel(self.focused_side).active_pane()
     }
 
     pub fn get_focused_pane_mut(&mut self) -> &mut Pane {
-        self.active_pane_mut(self.focused_side)
-    }
-
-    /// The pane of `side`'s active tab, which is the only one of that side on
-    /// screen and the only one that reads.
-    fn active_pane_mut(&mut self, side: Side) -> &mut Pane {
-        match side {
-            Side::Left => self.left_tabs.active_tab_mut().get_pane_mut(),
-            Side::Right => self.right_tabs.active_tab_mut().get_pane_mut(),
-        }
-    }
-
-    fn listings_mut(&mut self, side: Side) -> &mut Reader<Listing> {
-        match side {
-            Side::Left => &mut self.left_listings,
-            Side::Right => &mut self.right_listings,
-        }
+        self.panel_mut(self.focused_side).active_pane_mut()
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -371,10 +352,13 @@ impl App {
 
         match self.opposite {
             Opposite::Listing => {
-                self.left_tabs
-                    .render(frame, layout[0], self.focused_side == Side::Left);
-                self.right_tabs
-                    .render(frame, layout[1], self.focused_side == Side::Right);
+                let focused = self.focused_side;
+                self.left
+                    .tabs_mut()
+                    .render(frame, layout[0], focused == Side::Left);
+                self.right
+                    .tabs_mut()
+                    .render(frame, layout[1], focused == Side::Right);
             }
             // The preview sits opposite the cursor, so it follows a change of
             // side without anything having to be told about it. The other
@@ -393,12 +377,12 @@ impl App {
                 let mut area = None;
                 match self.focused_side {
                     Side::Left => {
-                        self.left_tabs.render(frame, layout[0], true);
+                        self.left.tabs_mut().render(frame, layout[0], true);
                         frame.render_stateful_widget(&preview, layout[1], &mut area);
                     }
                     Side::Right => {
                         frame.render_stateful_widget(&preview, layout[0], &mut area);
-                        self.right_tabs.render(frame, layout[1], true);
+                        self.right.tabs_mut().render(frame, layout[1], true);
                     }
                 }
 
@@ -814,12 +798,12 @@ impl App {
         let (items, to_dir, tab) = {
             let (from, to) = match side {
                 Side::Left => (
-                    self.left_tabs.active_tab_mut(),
-                    self.right_tabs.active_tab_mut(),
+                    self.left.tabs_mut().active_tab_mut(),
+                    self.right.tabs_mut().active_tab_mut(),
                 ),
                 Side::Right => (
-                    self.right_tabs.active_tab_mut(),
-                    self.left_tabs.active_tab_mut(),
+                    self.right.tabs_mut().active_tab_mut(),
+                    self.left.tabs_mut().active_tab_mut(),
                 ),
             };
 
@@ -940,11 +924,7 @@ impl App {
     /// request has already gone out asks for nothing.
     fn sync_listings(&mut self) {
         for side in [Side::Left, Side::Right] {
-            let Some(path) = self.active_pane_mut(side).take_unsent() else {
-                continue;
-            };
-
-            let sent = self.listings_mut(side).send(Listing { path });
+            let sent = self.panel_mut(side).send_wanted();
             if let Err(e) = sent {
                 self.notify(ToastLevel::Error, e, None);
             }
@@ -956,9 +936,9 @@ impl App {
     /// already left, and the reader has dropped it.
     fn collect_from_listings(&mut self) {
         for side in [Side::Left, Side::Right] {
-            let drained = self.listings_mut(side).drain();
+            let collected = self.panel_mut(side).collect_listing();
 
-            if drained.health == Health::Stopped {
+            if collected.health == Health::Stopped {
                 self.notify(
                     ToastLevel::Error,
                     "The background reader has stopped; restart Mula",
@@ -966,11 +946,8 @@ impl App {
                 );
             }
 
-            if let Some(listing) = drained.msgs.into_iter().next_back() {
-                let listed = self.active_pane_mut(side).listed(listing);
-                if let Err(e) = listed {
-                    self.notify(ToastLevel::Error, e, None);
-                }
+            if let Some(e) = collected.error {
+                self.notify(ToastLevel::Error, e, None);
             }
         }
     }
@@ -1075,10 +1052,7 @@ impl App {
         {
             let queued = self.queued_marks.remove(index);
             if !outcome.failed.is_empty() {
-                let tabs = match queued.side {
-                    Side::Left => &mut self.left_tabs,
-                    Side::Right => &mut self.right_tabs,
-                };
+                let tabs = self.panel_mut(queued.side).tabs_mut();
                 if let Some(tab) = tabs.tab_mut(queued.tab) {
                     tab.mark_paths(outcome.failed);
                 }
@@ -1115,8 +1089,8 @@ impl App {
     /// the toast reporting a job is raised before the panes have caught up
     /// with what it did.
     fn refresh_panes(&mut self) {
-        self.active_pane_mut(Side::Left).refresh();
-        self.active_pane_mut(Side::Right).refresh();
+        self.left.active_pane_mut().refresh();
+        self.right.active_pane_mut().refresh();
     }
 
     /// Reports how a batch ended, taking the operation's past tense (`copied`)
