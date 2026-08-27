@@ -591,6 +591,10 @@ impl App {
                 }
                 Ok(())
             }
+            Action::CloseTab => {
+                self.get_focused_tabs_mut().close_active();
+                Ok(())
+            }
             Action::Transfer { op } => self.queue_transfer(op),
             Action::Delete => self.confirm_delete(),
             Action::DeleteMarked => self.queue_delete(),

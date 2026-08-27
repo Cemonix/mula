@@ -58,6 +58,26 @@ impl TabList {
         self.tabs.push(tab);
     }
 
+    /// Closes the active tab, leaving the cursor on the one that followed it or
+    /// on the new last tab, and answers with the id it closed under.
+    ///
+    /// The only tab of a panel is never closed, which is what keeps
+    /// [`Self::active_tab`] and [`Self::toggle`] indexing a list that has
+    /// something in it. Nothing is said about it: closing the last tab is a
+    /// key that does nothing, not a failure.
+    ///
+    /// Whatever the tab was marking goes with it, and so does any listing on
+    /// its way — a job queued from it still reports, and finds its tab gone.
+    pub fn close_active(&mut self) -> Option<TabId> {
+        if self.tabs.len() == 1 {
+            return None;
+        }
+
+        let closed = self.tabs.remove(self.active);
+        self.active = self.active.min(self.tabs.len() - 1);
+        Some(closed.id)
+    }
+
     pub fn active_tab(&self) -> &Tab {
         &self.tabs[self.active]
     }
@@ -189,5 +209,59 @@ impl Tab {
 impl<'a> From<&'a Tab> for Line<'a> {
     fn from(tab: &'a Tab) -> Line<'a> {
         Line::from(tab.title.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tab_list_tests {
+    use super::*;
+
+    /// A list of `count` tabs titled `0`, `1`, … in that order, with the first
+    /// one active.
+    fn tabs(count: usize) -> TabList {
+        TabList::new(
+            (0..count)
+                .map(|i| Tab::new(i.to_string()).unwrap())
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn closing_a_tab_leaves_the_cursor_on_the_one_that_followed_it() {
+        let mut tabs = tabs(3);
+        tabs.toggle(ToggleDirection::Next);
+
+        assert!(tabs.close_active().is_some());
+        assert_eq!(tabs.active_tab().get_title(), "2");
+    }
+
+    #[test]
+    fn closing_the_last_tab_steps_the_cursor_back() {
+        let mut tabs = tabs(2);
+        tabs.toggle(ToggleDirection::Next);
+
+        tabs.close_active();
+
+        assert_eq!(tabs.active_tab().get_title(), "0");
+    }
+
+    #[test]
+    fn the_only_tab_is_never_closed() {
+        let mut tabs = tabs(1);
+
+        // Both `active_tab` and `toggle` index the list, so an empty one is
+        // not a state to draw but a panic waiting to happen.
+        assert!(tabs.close_active().is_none());
+        assert_eq!(tabs.active_tab().get_title(), "0");
+    }
+
+    #[test]
+    fn a_closed_tab_can_no_longer_be_found_by_its_id() {
+        let mut tabs = tabs(2);
+        let closed = tabs.close_active().unwrap();
+
+        // Work queued from a tab outlives the tab, and this is how it finds
+        // out: marks that fail have nowhere to go home to.
+        assert!(tabs.tab_mut(closed).is_none());
     }
 }
