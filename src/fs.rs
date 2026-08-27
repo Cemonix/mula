@@ -1,6 +1,7 @@
 pub(crate) mod directory;
 pub(crate) mod find;
 pub(crate) mod job;
+pub(crate) mod listing;
 pub(crate) mod ops;
 pub(crate) mod preview;
 pub(crate) mod reader;

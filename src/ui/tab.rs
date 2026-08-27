@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 use crate::{
-    fs::directory::{DirEntryKind, Directory},
+    fs::directory::DirEntryKind,
     ui::pane::{Pane, PaneError},
 };
 
@@ -117,7 +117,7 @@ impl Tab {
         Ok(Self {
             id: TabId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             title,
-            pane: Pane::new(Directory::read(curr_dir)?),
+            pane: Pane::empty(curr_dir),
             selected_items: HashSet::new(),
         })
     }
