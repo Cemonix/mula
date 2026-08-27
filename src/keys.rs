@@ -237,13 +237,19 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Stops the running operation",
     },
     Binding {
-        key: KeyBinding::ctrl(KeyCode::Char('t')),
+        key: KeyBinding::plain(KeyCode::Char('t')),
         msg: Action::NewTab,
         bar: None,
         help: "Opens a new tab in the focused panel",
     },
     Binding {
-        key: KeyBinding::ctrl(KeyCode::Char('r')),
+        key: KeyBinding::plain(KeyCode::Char('w')),
+        msg: Action::CloseTab,
+        bar: None,
+        help: "Closes the active tab, unless it is the only one",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Char('r')),
         msg: Action::RenameTab,
         bar: None,
         help: "Renames the active tab",

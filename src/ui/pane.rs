@@ -169,6 +169,16 @@ impl Pane {
         Some(path)
     }
 
+    /// Puts a request that has gone out back to being unsent, so it is asked
+    /// again. What the pane waits for does not change, only whether the reader
+    /// has been told about it — a panel serves every one of its tabs from one
+    /// reader, and the tab that loses it has to ask a second time.
+    pub fn unsend(&mut self) {
+        if let Awaited::Sent(request) = &self.awaited {
+            self.awaited = Awaited::ToSend(request.clone());
+        }
+    }
+
     /// Folds in the answer to the read the pane was waiting for: the listing
     /// replaces what is on screen, and a failure leaves the pane on the one it
     /// already had and comes back to be reported.

@@ -29,9 +29,6 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 
 ## Working on this codebase
 
-- User-visible text (labels, help, dialogs, toasts) and key tables are written
-  by the repo owner, not an agent. Leave placeholder wording alone; flag it
-  instead. Logic and widgets are the working area.
 - Widgets are dumb: `App` computes content, the widget draws it. Never `&App`.
 - Test a widget by rendering into a `Buffer` and asserting on symbols.
 - `cargo fmt` and `cargo test` before reporting anything done.
@@ -119,9 +116,10 @@ is open again, not broken.
 - Terminals add bits; `matches` masks through `RELEVANT`. Debug a dead key by
   logging the `KeyEvent` at `debug` (`logs/mula.log`).
 - A terminal with its own tabs claims tab-switching keys (WezTerm:
-  `Ctrl+PageUp/Down`, `Ctrl+Tab`/`Ctrl+Shift+Tab`). Plain printable chars can't
-  be intercepted this way; free in Browse since every text-reading mode has
-  its own key table.
+  `Ctrl+PageUp/Down`, `Ctrl+Tab`/`Ctrl+Shift+Tab`, and `Ctrl+W` closes its tab).
+  Plain printable chars can't be intercepted this way; free in Browse since
+  every text-reading mode has its own key table. The tab family sits on
+  `t`/`w`/`r`/`[`/`]` for exactly that reason.
 - `Ctrl+<letter>` is contested ground even beyond terminal defaults — a user's
   own config takes what it likes, and the key then never reaches the app at
   all. Function keys are the safe family, which is what Cancel sits on.

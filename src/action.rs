@@ -27,6 +27,7 @@ pub enum Action {
     Rename,
     CreateEntry,
     NewTab,
+    CloseTab,
     RenameTab,
     Find,
     ToggleQuickView,
