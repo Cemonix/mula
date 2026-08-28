@@ -9,14 +9,18 @@
 //! Every cell is padded to a fixed width, so the columns line up down the pane
 //! whatever the names above and below are.
 
-use std::mem::MaybeUninit;
-
+use chrono::{DateTime, Local};
 use ratatui::{
     style::{Color, Style},
     text::Span,
 };
 
 use crate::fs::directory::{Detail, DirEntry, DirEntryKind};
+
+/// Stands in the size column for a row that has no size to show. A dash rather
+/// than a word: the icon already says what a directory is, and `<DIR>` down the
+/// column says it again in the place the eye goes looking for a number.
+const NO_SIZE: &str = "\u{2014}";
 
 /// What each row of a listing shows besides its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,25 +31,30 @@ pub enum Columns {
 }
 
 impl Columns {
-    /// Colour of the size cell.
+    /// Colour of a size.
     const SIZE: Color = Color::Gray;
-    /// Colour of the modification time, which is the column a reader scans
-    /// past most often.
-    const TIME: Color = Color::DarkGray;
-    /// Columns of the size cell. `1023B` and `<DIR>` are the widest things it
-    /// holds; [`size_cell`] keeps everything else inside them.
+    /// Colour of the time, and of a size cell with no size in it. Both are
+    /// things the eye should pass over on its way to a name.
+    const MUTED: Color = Color::DarkGray;
+    /// Columns of the size cell. `1023B` is the widest thing it holds;
+    /// [`bytes`] keeps everything else inside it.
     const SIZE_WIDTH: usize = 5;
-    /// Columns of the time cell, which is `2026-08-28 18:45`.
+    /// Columns of the time cell, which is what [`format_time`] draws:
+    /// `2026-08-28 18:45`.
     const TIME_WIDTH: usize = 16;
     /// Blank columns between the name and a cell, and between two cells.
     const GAP: usize = 1;
 
-    /// The next setting in the cycle, wrapping back to the name alone.
+    /// The next setting in the cycle: one column fewer each time, and back to
+    /// all of them from the name alone.
+    ///
+    /// Narrowing rather than widening, because a listing starts with every
+    /// column drawn, and what the key is reached for is room for the names.
     pub fn next(self) -> Self {
         match self {
-            Columns::Name => Columns::Size,
-            Columns::Size => Columns::SizeAndTime,
-            Columns::SizeAndTime => Columns::Name,
+            Columns::SizeAndTime => Columns::Size,
+            Columns::Size => Columns::Name,
+            Columns::Name => Columns::SizeAndTime,
         }
     }
 
@@ -74,46 +83,50 @@ impl Columns {
     /// An entry with no metadata leaves its cells blank rather than dropping
     /// them: the row still has to line up with the rows around it.
     pub fn cells(self, entry: &DirEntry) -> Vec<Span<'static>> {
-        let mut cells = Vec::new();
-        if self == Columns::Name {
-            return cells;
+        match self {
+            Columns::Name => Vec::new(),
+            Columns::Size => vec![size_cell(entry)],
+            Columns::SizeAndTime => vec![size_cell(entry), time_cell(entry)],
         }
-
-        cells.push(Span::styled(
-            format!(
-                "{:>width$}",
-                size_cell(entry),
-                width = Self::GAP + Self::SIZE_WIDTH
-            ),
-            Style::new().fg(Self::SIZE),
-        ));
-
-        if self == Columns::SizeAndTime {
-            let time = entry.meta.map(|meta| time_cell(meta.modified));
-            cells.push(Span::styled(
-                format!(
-                    "{:>width$}",
-                    time.unwrap_or_default(),
-                    width = Self::GAP + Self::TIME_WIDTH
-                ),
-                Style::new().fg(Self::TIME),
-            ));
-        }
-
-        cells
     }
 }
 
-/// What goes in the size column. A directory has none worth showing: its own
-/// `st_size` is the size of the record the filesystem keeps, not of anything
-/// inside it, so it says what it is instead.
-fn size_cell(entry: &DirEntry) -> String {
-    match entry.kind {
-        DirEntryKind::Parent | DirEntryKind::Directory => String::from("<DIR>"),
-        DirEntryKind::Symlink | DirEntryKind::File => {
-            entry.meta.map(|meta| bytes(meta.size)).unwrap_or_default()
-        }
-    }
+/// The size column of `entry`, padded to its width.
+///
+/// A directory has no size worth showing: its own `st_size` is the size of the
+/// record the filesystem keeps, not of anything inside it. It draws a dash, in
+/// the colour the time is drawn in, so a column of them stays quiet under the
+/// sizes that mean something.
+fn size_cell(entry: &DirEntry) -> Span<'static> {
+    let (text, colour) = match entry.kind {
+        DirEntryKind::Parent | DirEntryKind::Directory => (String::from(NO_SIZE), Columns::MUTED),
+        DirEntryKind::Symlink | DirEntryKind::File => (
+            entry.meta.map(|meta| bytes(meta.size)).unwrap_or_default(),
+            Columns::SIZE,
+        ),
+    };
+
+    cell(&text, Columns::SIZE_WIDTH, colour)
+}
+
+/// The time column of `entry`, padded to its width. An entry read without
+/// metadata leaves it blank.
+fn time_cell(entry: &DirEntry) -> Span<'static> {
+    let text = entry
+        .meta
+        .map(|meta| format_time(meta.modified))
+        .unwrap_or_default();
+
+    cell(&text, Columns::TIME_WIDTH, Columns::MUTED)
+}
+
+/// One cell: `text` right-aligned in `width` columns, behind the gap that holds
+/// it off whatever is in front of it.
+fn cell(text: &str, width: usize, colour: Color) -> Span<'static> {
+    Span::styled(
+        format!("{text:>width$}", width = Columns::GAP + width),
+        Style::new().fg(colour),
+    )
 }
 
 /// A byte count in at most [`Columns::SIZE_WIDTH`] columns: exact below a
@@ -140,43 +153,27 @@ fn bytes(count: u64) -> String {
     }
 }
 
-/// The local calendar time of `seconds` since the epoch, and an empty cell for
-/// one that cannot be broken down.
-fn time_cell(seconds: i64) -> String {
-    local(seconds).map(format_local).unwrap_or_default()
-}
-
-/// `seconds` in the local zone.
+/// The local calendar time of `seconds` since the epoch as
+/// `YYYY-MM-DD hh:mm`, and an empty string for one no calendar reaches.
 ///
-/// `localtime_r` is what applies that zone: it reads `TZ`, or the system zone
-/// when that is unset, so a file written on the other side of a daylight saving
+/// The whole date, every row, whatever the row is: one shape reads down a
+/// column, and a listing that abbreviates old files the way `ls` does saves
+/// four columns by making the reader work out which shape they are looking at.
+/// The four columns are worth having back on a narrow pane, but the answer to
+/// a narrow pane is to drop a column, not to shorten one — and eventually to
+/// choose which columns fit from the width the pane actually has.
+///
+/// `Local` is what applies the zone: it reads `TZ`, or the system zone when
+/// that is unset, so a file written on the other side of a daylight saving
 /// change reads back at the wall clock time it was written at.
-fn local(seconds: i64) -> Option<libc::tm> {
-    let seconds = seconds as libc::time_t;
-    let mut broken = MaybeUninit::<libc::tm>::uninit();
+fn format_time(seconds: i64) -> String {
+    let Some(time) = DateTime::from_timestamp(seconds, 0) else {
+        return String::new();
+    };
 
-    // SAFETY: both pointers are to locals that outlive the call, and
-    // `localtime_r` writes through the second alone.
-    let filled = unsafe { libc::localtime_r(&seconds, broken.as_mut_ptr()) };
-    if filled.is_null() {
-        return None;
-    }
-
-    // SAFETY: a non-null return says the struct was filled in.
-    Some(unsafe { broken.assume_init() })
-}
-
-/// A broken-down time as `YYYY-MM-DD hh:mm`. `tm_year` counts from 1900 and
-/// `tm_mon` from zero, which is the whole of what this puts back.
-fn format_local(broken: libc::tm) -> String {
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        broken.tm_year + 1900,
-        broken.tm_mon + 1,
-        broken.tm_mday,
-        broken.tm_hour,
-        broken.tm_min
-    )
+    time.with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -205,9 +202,20 @@ mod columns_tests {
         )
     }
 
+    /// What the cell holds without its padding, which is what the tests below
+    /// are about.
+    fn text_of(cell: Span<'static>) -> String {
+        cell.content.trim().to_string()
+    }
+
     #[test]
-    fn the_cycle_comes_back_to_the_name_alone() {
-        assert_eq!(Columns::Name.next().next().next(), Columns::Name);
+    fn the_cycle_drops_a_column_at_a_time_and_comes_back_to_all_of_them() {
+        assert_eq!(Columns::SizeAndTime.next(), Columns::Size);
+        assert_eq!(Columns::SizeAndTime.next().next(), Columns::Name);
+        assert_eq!(
+            Columns::SizeAndTime.next().next().next(),
+            Columns::SizeAndTime
+        );
     }
 
     /// The columns are only worth a `stat` per entry while one of them is
@@ -249,36 +257,49 @@ mod columns_tests {
         assert_eq!(bytes(u64::MAX).len(), 3);
     }
 
+    /// A directory has no size to show, and the dash says that without
+    /// spelling out what the icon beside it already says.
     #[test]
-    fn a_directory_says_so_rather_than_showing_the_size_of_its_record() {
-        assert_eq!(size_cell(&entry(DirEntryKind::Directory, None)), "<DIR>");
-        assert_eq!(size_cell(&entry(DirEntryKind::Parent, None)), "<DIR>");
+    fn a_directory_draws_a_dash_rather_than_the_size_of_its_record() {
+        assert_eq!(
+            text_of(size_cell(&entry(DirEntryKind::Directory, None))),
+            NO_SIZE
+        );
+        assert_eq!(
+            text_of(size_cell(&entry(DirEntryKind::Parent, None))),
+            NO_SIZE
+        );
     }
 
     /// An entry read without metadata, or one that went away before the
     /// `stat`, leaves the cell blank rather than showing a size of zero.
     #[test]
     fn a_file_with_no_metadata_has_an_empty_size_cell() {
-        assert_eq!(size_cell(&entry(DirEntryKind::File, None)), "");
+        assert_eq!(text_of(size_cell(&entry(DirEntryKind::File, None))), "");
     }
 
+    /// The zone the test runs in is whatever the machine is set to, so the
+    /// shape is asserted rather than the hour. The date itself is far enough
+    /// from a year boundary to be the same year in every zone on earth.
     #[test]
-    fn a_broken_down_time_is_written_out_as_a_calendar_date() {
-        // SAFETY: `libc::tm` is a struct of integers, and a zeroed one is the
-        // start of an ordinary day.
-        let mut broken: libc::tm = unsafe { std::mem::zeroed() };
-        broken.tm_year = 126;
-        broken.tm_mon = 7;
-        broken.tm_mday = 28;
-        broken.tm_hour = 18;
-        broken.tm_min = 45;
+    fn a_time_comes_out_as_the_whole_local_calendar_date() {
+        // Late August 2024.
+        let drawn = format_time(1_724_800_000);
 
-        assert_eq!(format_local(broken), "2026-08-28 18:45");
+        assert_eq!(drawn.len(), Columns::TIME_WIDTH, "it came out as {drawn:?}");
+        assert!(drawn.starts_with("2024-08-2"), "it came out as {drawn:?}");
+        let separators: String = drawn
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        assert_eq!(separators, "dddd-dd-dd dd:dd");
     }
 
+    /// A day the calendar does not reach leaves the cell blank rather than
+    /// drawing something wrong beside a real name.
     #[test]
-    fn a_time_cell_is_as_wide_as_the_column_that_holds_it() {
-        assert_eq!(time_cell(1_756_400_000).len(), Columns::TIME_WIDTH);
+    fn a_time_no_calendar_reaches_has_an_empty_cell() {
+        assert_eq!(format_time(i64::MAX), "");
     }
 
     #[test]

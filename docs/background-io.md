@@ -76,9 +76,12 @@ main loop wants back inside its 100 ms tick.
 
 So `Listing` carries a `Detail`, and `Directory::read` takes one. `Columns` is
 what settles it: the panes ask for metadata while a column is drawn and stop
-asking when it is not. The tree walk behind the find overlay reads names only
-and always will — it reads every directory below the root, so it would pay the
-`stat` for the whole tree to draw a hit list that has no column to put it in.
+asking when it is not. Every column is drawn by default — a file manager that
+hides the size until you ask for it is answering the wrong question — so the
+`stat` is the normal case and dropping a column is the exception that buys it
+back. The tree walk behind the find overlay reads names only and always will:
+it reads every directory below the root, so it would pay the `stat` for the
+whole tree to draw a hit list that has no column to put it in.
 
 The pane compares rather than matches. `Detail` is ordered, and a pane asks
 again only when what it holds is *thinner* than what it draws: turning the

@@ -278,7 +278,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Char('c')),
         msg: Action::CycleColumns,
         bar: None,
-        help: "Cycles the listing between name, size, and size with date",
+        help: "Drops a column from the listing, and brings them all back",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Char('/')),

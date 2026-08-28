@@ -270,7 +270,7 @@ impl App {
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
-            columns: Columns::Name,
+            columns: Columns::SizeAndTime,
             previewer: Reader::<Preview>::start(preview_limits),
             previewing: None,
             preview: None,

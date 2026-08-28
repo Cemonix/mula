@@ -21,11 +21,13 @@ its own marks, and can be renamed so a long path is one word on the tab bar.
 unmark the same way, and `Esc` clears the panel. F5, F6 and F8 then act on
 everything marked.
 
-**Columns.** `c` cycles the listing through *name*, *name and size*, and *name,
-size and modification time*. It is a cycle rather than a setting because the
-columns are only paid for while they are drawn: names come free with reading a
-directory, sizes and dates are a `stat` per entry, and turning them off turns
-those syscalls off with them.
+**Size and date, by default.** A listing shows the name, the size and the
+modification time — the three things you open two panels side by side to
+compare. `c` drops a column when you would rather have the room, and brings
+them all back from the name alone. It is a cycle rather than a setting because
+the columns are only paid for while they are drawn: names come free with
+reading a directory, sizes and dates are a `stat` per entry, and dropping them
+drops those syscalls with them.
 
 **Quick View.** `v` replaces the panel opposite the cursor with the contents of
 whatever the cursor is on: text as text, a directory as its listing, an image
@@ -100,7 +102,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `F8` | Delete the marked items, asking first |
 | `F9` | Cancel the running operation |
 | `v` | Quick View in the opposite panel |
-| `c` | Cycle the listing columns |
+| `c` | Drop a listing column, and bring them all back from the name alone |
 | `/` | Find by name below this panel |
 | `t` / `w` / `r` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
