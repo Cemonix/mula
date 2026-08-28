@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::fs::{
-    directory::{DirEntry, DirEntryKind, Directory},
+    directory::{Detail, DirEntry, DirEntryKind, Directory},
     reader::{Drained, Live, Outbox, ReadJob},
     worker::Health,
 };
@@ -106,8 +106,10 @@ pub fn walk(root: Arc<Path>, query: &str, limits: &Limits, observer: &mut dyn Ob
         }
 
         // A directory that cannot be listed contributes nothing, the way
-        // `tree_size` returns zero instead of an error.
-        let Ok(listing) = Directory::read(Arc::clone(&dir)) else {
+        // `tree_size` returns zero instead of an error. Names alone: a walk
+        // reads every directory below the root, so a `stat` per entry would
+        // cost the whole tree rather than one screen of it.
+        let Ok(listing) = Directory::read(Arc::clone(&dir), Detail::NamesOnly) else {
             continue;
         };
 
@@ -126,6 +128,7 @@ pub fn walk(root: Arc<Path>, query: &str, limits: &Limits, observer: &mut dyn Ob
                 observer.found(DirEntry {
                     path: Arc::clone(&entry.path),
                     kind: entry.kind,
+                    meta: entry.meta,
                 });
                 hits += 1;
                 if hits >= limits.max_hits {

@@ -452,7 +452,7 @@ mod preview_pane_tests {
 
     use crate::ui::graphics::capabilities::Protocol;
 
-    use crate::fs::directory::{DirEntry, Directory};
+    use crate::fs::directory::{Detail, DirEntry, Directory};
 
     /// Renders into a buffer and gives the rows back as strings, without the
     /// border the block draws around them and without trailing blanks.
@@ -555,12 +555,15 @@ mod preview_pane_tests {
                 DirEntry {
                     path: Arc::from(Path::new("/")),
                     kind: DirEntryKind::Parent,
+                    meta: None,
                 },
                 DirEntry {
                     path: Arc::from(Path::new("/home/inside.txt")),
                     kind: DirEntryKind::File,
+                    meta: None,
                 },
             ],
+            Detail::NamesOnly,
         );
         let content = Content::Directory(listing);
         let path = PathBuf::from("/home");

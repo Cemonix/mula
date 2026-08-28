@@ -13,7 +13,7 @@
 use std::{fs, io, path::Path, sync::Arc};
 
 use crate::fs::{
-    directory::Directory,
+    directory::{Detail, Directory},
     preview,
     reader::{Live, Outbox, ReadJob},
 };
@@ -25,9 +25,14 @@ const SNIFFED_BYTES: usize = 8 * 1024;
 
 /// One directory to read, taken when the request was sent. Like every job, it
 /// never reads back.
+///
+/// `detail` travels with the path rather than being settled on the reading
+/// thread, because how much of each entry is worth reading is a question about
+/// what the pane draws, and only the pane knows the answer.
 #[derive(Debug)]
 pub struct Listing {
     pub path: Arc<Path>,
+    pub detail: Detail,
 }
 
 /// What a path is, when it is not a directory. Enough to tell what should open
@@ -63,14 +68,14 @@ impl ReadJob for Listing {
     /// replaced before it started, and a listing reports nothing on its way,
     /// so there is no point between those two to check.
     fn run(self, _config: &Self::Config, _live: &Live<'_>, out: &Outbox<'_, Self::Msg>) {
-        out.send(read(self.path));
+        out.send(read(self.path, self.detail));
     }
 }
 
 /// Reads `path` as a directory, and works out what it is instead when it is
 /// not one.
-fn read(path: Arc<Path>) -> io::Result<Listed> {
-    match Directory::read(Arc::clone(&path)) {
+fn read(path: Arc<Path>, detail: Detail) -> io::Result<Listed> {
+    match Directory::read(Arc::clone(&path), detail) {
         Ok(directory) => Ok(Listed::Directory(directory)),
         Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
             Ok(Listed::NotADirectory(kind_of(&path)?))
@@ -144,6 +149,7 @@ mod listing_tests {
         reader
             .send(Listing {
                 path: Arc::from(path),
+                detail: Detail::NamesOnly,
             })
             .unwrap();
         settle(&mut reader)

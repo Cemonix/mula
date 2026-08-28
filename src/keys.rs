@@ -275,6 +275,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Shows what is under the cursor in the other panel",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::Char('c')),
+        msg: Action::CycleColumns,
+        bar: None,
+        help: "Cycles the listing between name, size, and size with date",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::Char('/')),
         msg: Action::Find,
         bar: None,

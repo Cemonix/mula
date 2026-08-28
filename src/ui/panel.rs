@@ -15,6 +15,7 @@ use std::io;
 
 use crate::{
     fs::{
+        directory::Detail,
         listing::{Listed, Listing},
         reader::{Drained, Reader},
         worker::Health,
@@ -78,14 +79,19 @@ impl Panel {
     }
 
     /// Hands the reader what the active tab is waiting for and has not asked
-    /// for yet.
+    /// for yet, reading each entry to `detail`.
     ///
     /// One reader serves every tab, so a request replaces whatever was in
     /// flight. The tab that loses it goes back to wanting its listing, or it
     /// would sit on a request whose answer was thrown away and never ask
     /// again.
-    pub fn send_wanted(&mut self) -> io::Result<()> {
+    ///
+    /// `detail` is asked of the active tab alone. A tab in the background
+    /// draws nothing, and the pass that makes it active is the pass that finds
+    /// its listing too thin for the columns and reads it again.
+    pub fn send_wanted(&mut self, detail: Detail) -> io::Result<()> {
         let id = self.tabs.active_tab().id();
+        self.active_pane_mut().want_detail(detail);
         let Some(path) = self.active_pane_mut().take_unsent() else {
             return Ok(());
         };
@@ -97,7 +103,7 @@ impl Panel {
             tab.get_pane_mut().unsend();
         }
 
-        self.listings.send(Listing { path }).map(|_| ())
+        self.listings.send(Listing { path, detail }).map(|_| ())
     }
 
     /// Takes the newest listing the reader has sent and gives it to the tab
@@ -153,7 +159,11 @@ mod panel_tests {
             panel.active_pane_mut().take_unsent();
             panel
                 .active_pane_mut()
-                .listed(Ok(Listed::Directory(Directory::new(path, Vec::new()))))
+                .listed(Ok(Listed::Directory(Directory::new(
+                    path,
+                    Vec::new(),
+                    Detail::NamesOnly,
+                ))))
                 .unwrap();
             panel.tabs.toggle(ToggleDirection::Next);
         }
@@ -161,7 +171,7 @@ mod panel_tests {
     }
 
     fn listing(path: &str) -> Directory {
-        Directory::new(Arc::from(Path::new(path)), Vec::new())
+        Directory::new(Arc::from(Path::new(path)), Vec::new(), Detail::NamesOnly)
     }
 
     fn current_dir_of(panel: &mut Panel, tab: TabId) -> Arc<Path> {
@@ -181,7 +191,7 @@ mod panel_tests {
         let asked = panel.tabs.active_tab().id();
 
         panel.active_pane_mut().reveal(Path::new("/somewhere/deep"));
-        panel.send_wanted().unwrap();
+        panel.send_wanted(Detail::NamesOnly).unwrap();
         // The cursor moves on before the answer lands, which is the whole of
         // the race: the tab on screen is no longer the tab that asked.
         panel.tabs.toggle(ToggleDirection::Next);
@@ -201,17 +211,46 @@ mod panel_tests {
         );
     }
 
+    /// The columns are drawn for the tab on screen. A tab behind it pays for
+    /// them on the pass that brings it forward, not on the one that turns them
+    /// on.
+    #[test]
+    fn a_tab_reads_its_directory_again_once_the_columns_reach_it() {
+        let mut panel = settled_panel();
+        let behind = panel.tabs.active_tab().id();
+        panel.tabs.toggle(ToggleDirection::Next);
+        let front = panel.tabs.active_tab().id();
+
+        panel.send_wanted(Detail::WithMetadata).unwrap();
+
+        assert_eq!(panel.listing_for, Some(front));
+        assert!(
+            panel
+                .tabs
+                .tab_mut(behind)
+                .unwrap()
+                .get_pane_mut()
+                .take_unsent()
+                .is_none()
+        );
+
+        panel.tabs.toggle(ToggleDirection::Previous);
+        panel.send_wanted(Detail::WithMetadata).unwrap();
+
+        assert_eq!(panel.listing_for, Some(behind));
+    }
+
     #[test]
     fn a_tab_that_loses_the_reader_asks_again() {
         let mut panel = settled_panel();
         let first = panel.tabs.active_tab().id();
 
         panel.active_pane_mut().reveal(Path::new("/one/deep"));
-        panel.send_wanted().unwrap();
+        panel.send_wanted(Detail::NamesOnly).unwrap();
 
         panel.tabs.toggle(ToggleDirection::Next);
         panel.active_pane_mut().reveal(Path::new("/two/deep"));
-        panel.send_wanted().unwrap();
+        panel.send_wanted(Detail::NamesOnly).unwrap();
 
         // The first answer went out under a generation that has been raised
         // since, so it is never coming; the tab has to want its listing again.
@@ -225,9 +264,9 @@ mod panel_tests {
         let only = panel.tabs.active_tab().id();
 
         panel.active_pane_mut().reveal(Path::new("/one/deep"));
-        panel.send_wanted().unwrap();
+        panel.send_wanted(Detail::NamesOnly).unwrap();
         panel.active_pane_mut().reveal(Path::new("/two/deep"));
-        panel.send_wanted().unwrap();
+        panel.send_wanted(Detail::NamesOnly).unwrap();
 
         // Taking the reader back from itself would leave the tab wanting a
         // listing it has already asked for, and it would ask on every pass.

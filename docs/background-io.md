@@ -53,6 +53,40 @@ that while every answer comes back in a millisecond is what makes it
 checkable. Paying it for the first time against a listing that crosses a wire
 would mean debugging the panel and the wire at once.
 
+## A listing carries what to read
+
+`read_dir` gives away the name and the type of every entry. The size and the
+modification time do not come with them: each is a `stat`, so the columns cost
+one syscall per name on top of the single pass over the directory.
+
+Measured again for this, release build, warm cache, 50 000 empty files in one
+flat APFS directory, three runs:
+
+| what the listing reads | time |
+| --- | --- |
+| names and types | 68–72 ms |
+| and the metadata | 133–166 ms |
+
+Twice the work, not ten times it — which is worth writing down, because the
+guess going in was an order of magnitude. Two things keep the decision
+standing anyway. The doubling is measured against a warm cache, where a `stat`
+is a lookup in memory; cold, or across a wire, it is a round trip per entry
+against one for the directory. And it is a real 65–95 ms on a directory the
+main loop wants back inside its 100 ms tick.
+
+So `Listing` carries a `Detail`, and `Directory::read` takes one. `Columns` is
+what settles it: the panes ask for metadata while a column is drawn and stop
+asking when it is not. The tree walk behind the find overlay reads names only
+and always will — it reads every directory below the root, so it would pay the
+`stat` for the whole tree to draw a hit list that has no column to put it in.
+
+The pane compares rather than matches. `Detail` is ordered, and a pane asks
+again only when what it holds is *thinner* than what it draws: turning the
+columns off draws fewer of them, and re-reading 50 000 files to show less would
+be the one cost with nothing on the other side of it. A tab in the background
+is not asked at all; the pass that brings it forward is the pass that finds its
+listing too thin.
+
 ## A job owns a snapshot
 
 A job takes its paths when it is queued and never reads `App` again.

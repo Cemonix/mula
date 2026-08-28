@@ -286,6 +286,7 @@ mod finder_tests {
         finder.extend(hits.iter().map(|name| DirEntry {
             path: Arc::from(PathBuf::from("/root").join(name).as_path()),
             kind: DirEntryKind::File,
+            meta: None,
         }));
         finder
     }
@@ -325,6 +326,7 @@ mod finder_tests {
         finder.extend([DirEntry {
             path: Arc::from(Path::new("/root/three")),
             kind: DirEntryKind::File,
+            meta: None,
         }]);
 
         assert_eq!(finder.list_state.selected(), Some(1));
