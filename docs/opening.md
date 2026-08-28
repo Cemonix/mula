@@ -14,6 +14,40 @@ cursor.
 The end of the pass rather than the start, because a request can be raised by
 anything in it, not only by the key that was pressed.
 
+## Two shapes, not one
+
+`Launch::Handover` gives the program the screen, the cursor and cooked mode,
+and waits. `Launch::Detached` gives it none of them and does not wait. They are
+opposites in every respect, which is why the choice is a named enum rather than
+something read off the opener at each use.
+
+A picture viewer started the first way would be three bugs at once: Mula frozen
+until the window is closed, the program's startup warnings written over the
+drawn frame, and the program killed by SIGHUP when the terminal it was tied to
+goes away. So a detached program gets `/dev/null` for all three of its standard
+streams and `setsid` for a session of its own.
+
+Nothing waits for a detached program, but something has to ask about it. A
+child that has exited and that nobody ever asked about stays in the process
+table. `App` keeps the `Child` values only for that: one `try_wait` each per
+pass, which returns at once, and the ones that have ended are dropped.
+
+Dropping a `Child` on Unix kills nothing, so quitting Mula leaves them running.
+That is the point of detaching them.
+
+## What opens what
+
+Two rules, which is all an association table amounts to here:
+
+| what the listing found | opener |
+| --- | --- |
+| a directory | the pane enters it |
+| a regular file whose first bytes hold no NUL | `$EDITOR`, handed the terminal |
+| any other regular file | the system's opener, detached |
+| a fifo, a socket, a device | nothing, and a toast |
+
+F3 and F4 override it: the user named the program, so nothing is sniffed.
+
 ## Signals
 
 This is the part that is easy to get wrong and expensive to get wrong.
@@ -90,14 +124,28 @@ next frame draws every cell. It needs a size, which comes from an ioctl on the
 device rather than from the terminal, and it costs no round trip. Passing the
 size that was just read also picks up a window resized while the program ran.
 
+## Entering asks one question
+
+Enter does not consult `DirEntryKind`. It asks the reader to list the entry,
+and the reader answers with the listing or with what the entry is instead. One
+round trip, and symlinks come out right because they were actually followed
+rather than guessed at from a listing that reports every link as a link.
+
+That is why `Listed::NotADirectory` is a variant rather than an
+`io::ErrorKind::NotADirectory`: for a pane that is entering something, "it is a
+file" is the answer, not a failure.
+
+`Intent` on the request is what keeps a refresh out of it. A pane catching up
+with the disk goes through the same call, and a directory replaced by a file
+between two passes must not open an editor nobody asked for.
+
 ## What is not checked
 
-A fifo, a socket or a device handed to `$PAGER` will block it. The listing
-reports all three as `File` — `Directory::read` only separates directories and
-symlinks — so turning them away would need a `symlink_metadata` the panel has
-not done, and doing it here would be a blocking read on the main thread.
+F3 and F4 hand over whatever is under the cursor, a directory aside. A fifo
+given to `$PAGER` will block it — the listing reports fifos, sockets and
+devices as `File`, and telling them apart would need a `symlink_metadata` the
+panel has not done.
 
-F3 and F4 are explicit: the user named the program and named the file. If it
-blocks, Ctrl-C now gets out of it, which is exactly what the signal work above
-buys. What the preview does instead — refusing on the metadata it already had
-to read — is the right thing for a preview, which nobody asked for.
+Enter does check, because it was already reading. F3 and F4 do not, because the
+user named both the program and the file, and because Ctrl-C now gets out of
+it — which is what the signal work above buys.

@@ -10,7 +10,10 @@ use ratatui::{
 use thiserror::Error;
 
 use crate::{
-    fs::directory::{DirEntry, Directory},
+    fs::{
+        directory::{DirEntry, Directory},
+        listing::{Kind, Listed},
+    },
     ui::icon::Icon,
 };
 
@@ -22,6 +25,15 @@ pub enum PaneError {
     IO(#[from] io::Error),
 }
 
+/// Why a listing was asked for. Only entering an entry turns "that is not a
+/// directory" into something to open; a pane catching up with the disk finds a
+/// directory replaced by a file and says nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Intent {
+    Enter,
+    Refresh,
+}
+
 /// A listing the pane has asked for, or is about to.
 #[derive(Clone, Debug)]
 struct Request {
@@ -29,6 +41,18 @@ struct Request {
     /// The entry the cursor lands on once the listing arrives, when the
     /// listing holds it. `None` leaves the cursor to [`Pane::set_directory`].
     focus: Option<Arc<Path>>,
+    intent: Intent,
+}
+
+/// What the pane wants done about an answer, beyond what it did with it
+/// itself.
+#[derive(Debug)]
+pub enum Entered {
+    /// Nothing. The listing is on screen, or the answer was to a question the
+    /// pane has moved on from.
+    Nothing,
+    /// The entry the user entered is not a directory, and is this to open.
+    Open { path: Arc<Path>, kind: Kind },
 }
 
 /// The listing a pane is waiting for. A pane showing what it wants awaits
@@ -81,7 +105,7 @@ impl Pane {
     /// the border shows until that listing arrives.
     pub fn empty(path: Arc<Path>) -> Self {
         let mut pane = Self::new(Directory::new(Arc::clone(&path), Vec::new()));
-        pane.want(path, None);
+        pane.want(path, None, Intent::Refresh);
         pane
     }
 
@@ -97,8 +121,8 @@ impl Pane {
     }
 
     /// Waits for the listing of the selected entry, whatever that entry turns
-    /// out to be. A path that is not a directory comes back as
-    /// [`io::ErrorKind::NotADirectory`] and leaves the pane alone.
+    /// out to be. A path that is not a directory comes back saying what it is
+    /// instead, which [`Pane::listed`] hands on as [`Entered::Open`].
     ///
     /// Nothing is read here, not even to find out whether the entry is a
     /// directory at all: a symlink says what it points at only once it is
@@ -107,7 +131,7 @@ impl Pane {
     /// either, since it reports every symlink as a symlink.
     pub fn change_directory(&mut self) -> Result<(), PaneError> {
         let path = Arc::clone(&self.selected_entry()?.path);
-        self.want(path, None);
+        self.want(path, None, Intent::Enter);
         Ok(())
     }
 
@@ -138,21 +162,25 @@ impl Pane {
     /// has since moved on, and that is not an error worth reporting.
     pub fn reveal(&mut self, path: &Path) {
         let parent = path.parent().unwrap_or(path);
-        self.want(Arc::from(parent), Some(Arc::from(path)));
+        self.want(Arc::from(parent), Some(Arc::from(path)), Intent::Refresh);
     }
 
     /// Waits for the current directory to be read again. The cursor keeps its
     /// index, capped at the last entry of the new listing.
     pub fn refresh(&mut self) {
         let path = Arc::clone(self.directory.path());
-        self.want(path, None);
+        self.want(path, None, Intent::Refresh);
     }
 
     /// Puts down what the pane is waiting for, replacing whatever it waited
     /// for before. A request that had already gone out is left behind: its
     /// answer belongs to an older generation, and the reader drops it.
-    fn want(&mut self, path: Arc<Path>, focus: Option<Arc<Path>>) {
-        self.awaited = Awaited::ToSend(Request { path, focus });
+    fn want(&mut self, path: Arc<Path>, focus: Option<Arc<Path>>, intent: Intent) {
+        self.awaited = Awaited::ToSend(Request {
+            path,
+            focus,
+            intent,
+        });
     }
 
     /// The listing the pane is waiting for and has not asked for yet, marked
@@ -183,31 +211,36 @@ impl Pane {
     /// replaces what is on screen, and a failure leaves the pane on the one it
     /// already had and comes back to be reported.
     ///
-    /// [`io::ErrorKind::NotADirectory`] is the one failure that is not
-    /// reported. Entering the entry under the cursor asks for the listing of
-    /// something that may be a file, and finding that out is what the question
-    /// was for; every other failure, a directory that cannot be opened
-    /// included, is the pane's news to tell.
+    /// An answer of "not a directory" is not a failure. Entering the entry
+    /// under the cursor asks for the listing of something that may be a file,
+    /// and finding that out is what the question was for; it comes back as
+    /// [`Entered::Open`] for the caller to open. A pane merely catching up with
+    /// the disk asked no such question and is told nothing.
     ///
     /// Either way the pane stops waiting, so a directory that cannot be read
     /// is not asked for again on every pass that follows.
-    pub fn listed(&mut self, listing: io::Result<Directory>) -> Result<(), PaneError> {
-        let focus = match mem::replace(&mut self.awaited, Awaited::Nothing) {
-            Awaited::Sent(request) => request.focus,
+    pub fn listed(&mut self, listing: io::Result<Listed>) -> Result<Entered, PaneError> {
+        let request = match mem::replace(&mut self.awaited, Awaited::Nothing) {
+            Awaited::Sent(request) => Some(request),
             Awaited::Nothing | Awaited::ToSend(_) => None,
         };
 
-        let directory = match listing {
-            Ok(directory) => directory,
-            Err(e) if e.kind() == io::ErrorKind::NotADirectory => return Ok(()),
-            Err(e) => return Err(e.into()),
-        };
-
-        self.set_directory(directory);
-        if let Some(focus) = focus {
-            self.select_path(&focus);
+        match listing? {
+            Listed::Directory(directory) => {
+                self.set_directory(directory);
+                if let Some(focus) = request.and_then(|request| request.focus) {
+                    self.select_path(&focus);
+                }
+                Ok(Entered::Nothing)
+            }
+            Listed::NotADirectory(kind) => Ok(match request {
+                Some(request) if request.intent == Intent::Enter => Entered::Open {
+                    path: request.path,
+                    kind,
+                },
+                _ => Entered::Nothing,
+            }),
         }
-        Ok(())
     }
 
     /// Replaces the listing and brings the selection back into range.
@@ -383,7 +416,8 @@ mod pane_tests {
         let mut pane = Pane::empty(Arc::from(Path::new("/a")));
         pane.take_unsent();
 
-        pane.listed(Ok(directory_at("/a", 2))).unwrap();
+        pane.listed(Ok(Listed::Directory(directory_at("/a", 2))))
+            .unwrap();
 
         assert_eq!(pane.directory.len(), 2);
         assert!(pane.take_unsent().is_none());
@@ -413,14 +447,31 @@ mod pane_tests {
     }
 
     #[test]
-    fn an_entry_that_is_not_a_directory_is_not_worth_reporting() {
+    fn entering_something_that_is_not_a_directory_hands_it_back_to_be_opened() {
         let mut pane = pane(3);
+        pane.select_next();
         pane.change_directory().unwrap();
         pane.take_unsent();
 
-        let result = pane.listed(Err(io::Error::from(io::ErrorKind::NotADirectory)));
+        let entered = pane.listed(Ok(Listed::NotADirectory(Kind::Text))).unwrap();
 
-        assert!(result.is_ok());
+        assert!(matches!(entered, Entered::Open { path, kind }
+                if path.as_ref() == Path::new("/1") && kind == Kind::Text));
+        assert_eq!(pane.get_current_dir().as_ref(), Path::new("/"));
+        assert!(pane.take_unsent().is_none());
+    }
+
+    /// A pane catching up with the disk asked no question about opening
+    /// anything. Finding a directory replaced by a file leaves it where it is.
+    #[test]
+    fn a_refresh_onto_something_that_is_not_a_directory_opens_nothing() {
+        let mut pane = pane(3);
+        pane.refresh();
+        pane.take_unsent();
+
+        let entered = pane.listed(Ok(Listed::NotADirectory(Kind::Text))).unwrap();
+
+        assert!(matches!(entered, Entered::Nothing));
         assert_eq!(pane.get_current_dir().as_ref(), Path::new("/"));
         assert!(pane.take_unsent().is_none());
     }
@@ -431,7 +482,8 @@ mod pane_tests {
         pane.reveal(Path::new("/b/2"));
 
         assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/b")));
-        pane.listed(Ok(directory_at("/b", 4))).unwrap();
+        pane.listed(Ok(Listed::Directory(directory_at("/b", 4))))
+            .unwrap();
 
         assert_eq!(
             pane.selected_entry().unwrap().path.as_ref(),

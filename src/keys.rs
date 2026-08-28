@@ -135,7 +135,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         key: KeyBinding::plain(KeyCode::Enter),
         msg: Action::OpenSelected,
         bar: None,
-        help: "Enters the directory under the cursor",
+        help: "Enters a directory, or opens a file with what belongs to it",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Char(' ')),

@@ -13,8 +13,10 @@ use std::{
         process::CommandExt,
     },
     path::Path,
-    process::{Command, ExitStatus},
+    process::{Child, Command, ExitStatus, Stdio},
 };
+
+use rustix::process;
 
 use ratatui::{
     DefaultTerminal,
@@ -32,6 +34,16 @@ use crate::ui::graphics::surface::Surface;
 /// program itself.
 const FROM_THE_TERMINAL: [i32; 2] = [libc::SIGINT, libc::SIGQUIT];
 
+/// How a program is started. The two are opposites in every respect, and which
+/// one an opener wants follows from the kind of program it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launch {
+    /// It is given the screen, the cursor and cooked mode, and Mula waits.
+    Handover,
+    /// It is given none of them, and Mula goes on drawing.
+    Detached,
+}
+
 /// Which program a file is handed to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Opener {
@@ -39,15 +51,37 @@ pub enum Opener {
     Edit,
     /// `$PAGER`, then `less`.
     View,
+    /// Whatever the system has the file associated with. It is the only opener
+    /// that does not want the terminal, so it is the only one that is
+    /// [`detach`]ed rather than handed the screen.
+    System,
 }
 
 impl Opener {
+    /// Which of the two shapes starts this opener.
+    pub fn launch(self) -> Launch {
+        match self {
+            Opener::Edit | Opener::View => Launch::Handover,
+            Opener::System => Launch::Detached,
+        }
+    }
+
     /// The variables consulted, in order, and the program used when none of
     /// them names one.
     const fn spec(self) -> (&'static [&'static str], &'static str) {
         match self {
             Opener::Edit => (&["VISUAL", "EDITOR"], "vi"),
             Opener::View => (&["PAGER"], "less"),
+            // `$OPENER` is what lf and yazi read; the fallback is the system's
+            // own, which is `open` only on macOS.
+            Opener::System => (
+                &["OPENER"],
+                if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                },
+            ),
         }
     }
 
@@ -58,7 +92,7 @@ impl Opener {
         let (names, fallback) = self.spec();
         names
             .iter()
-            .filter_map(|name| env::var_os(name))
+            .filter_map(env::var_os)
             .find_map(|spec| Program::parse(&spec))
             .unwrap_or_else(|| Program::of(fallback))
     }
@@ -187,6 +221,48 @@ fn run(program: &Program, path: &Path) -> Handover {
     match command.status() {
         Ok(status) => Handover::Exited(status),
         Err(e) => Handover::NotStarted(e),
+    }
+}
+
+/// Starts `program` on `path` without giving it the terminal, and does not
+/// wait for it.
+///
+/// The screen stays Mula's: the program is given `/dev/null` for all three of
+/// its standard streams, so nothing it writes can land on the drawn frame and
+/// nothing it reads can take a keystroke. `setsid` puts it in a session of its
+/// own with no controlling terminal, so closing the one Mula runs in does not
+/// send it SIGHUP.
+///
+/// The returned [`Child`] is not the program's leash — it has none, and
+/// dropping it kills nothing. It is only what the caller asks `try_wait` on,
+/// so a program that has ended is let go of rather than left in the process
+/// table.
+pub fn detach(program: &Program, path: &Path) -> io::Result<Child> {
+    let mut command = Command::new(&program.command);
+    command
+        .args(&program.args)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(parent) = path.parent() {
+        command.current_dir(parent);
+    }
+    leave_the_session(&mut command);
+
+    command.spawn()
+}
+
+/// Puts the program about to run in a session of its own.
+fn leave_the_session(command: &mut Command) {
+    // SAFETY: the closure runs in the forked child between `fork` and `exec`,
+    // where only async-signal-safe calls are allowed. `setsid` is one of them,
+    // and the closure neither allocates nor takes a lock.
+    unsafe {
+        command.pre_exec(|| {
+            process::setsid()?;
+            Ok(())
+        });
     }
 }
 

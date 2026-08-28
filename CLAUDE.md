@@ -83,6 +83,13 @@ is open again, not broken.
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once
   per pass. Only `run` holds the terminal.
+- Two launch shapes, never one. A detached program gets `/dev/null` and its own
+  session, is never waited for, and is `try_wait`ed once a pass so it cannot
+  stay in the process table.
+- What opens a file follows from what the file is, not from which key was
+  pressed. F3 and F4 are the named exceptions.
+- Entering asks the reader one question. `Listed::NotADirectory` is an answer,
+  not a failure, and only `Intent::Enter` acts on it.
 - Nothing reaches a shell. `$EDITOR` splits on whitespace and the path is one
   element of `argv`.
 - Paths handed to another program are absolute. **Holds while** listings grow
