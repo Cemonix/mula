@@ -43,13 +43,13 @@ impl Prompt {
             key: KeyBinding::plain(KeyCode::Enter),
             msg: InputMsg::Confirm,
             bar: Some("Confirm"),
-            help: "Answers with the highlighted button",
+            help: "Accepts the name that was typed",
         },
         Binding {
             key: KeyBinding::plain(KeyCode::Esc),
             msg: InputMsg::Cancel,
             bar: Some("Cancel"),
-            help: "Closes the dialog and does nothing",
+            help: "Closes the prompt and does nothing",
         },
     ];
 
