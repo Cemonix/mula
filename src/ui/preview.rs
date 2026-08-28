@@ -24,6 +24,7 @@ use crate::{
     ui::{
         graphics::capabilities::{CellSize, Graphics},
         icon::Icon,
+        name_of,
         pane::Pane,
     },
 };
@@ -242,15 +243,6 @@ impl StatefulWidget for &PreviewPane<'_> {
                 }
             },
         }
-    }
-}
-
-/// The last component of `path`, or the whole path when it has none, which is
-/// what the filesystem root is.
-fn name_of(path: &Path) -> String {
-    match path.file_name() {
-        Some(name) => name.to_string_lossy().to_string(),
-        None => path.to_string_lossy().to_string(),
     }
 }
 

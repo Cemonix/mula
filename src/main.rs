@@ -1,6 +1,9 @@
-use std::{io, panic};
+use std::{env, io, panic, path::PathBuf};
 
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::{
+    non_blocking::WorkerGuard,
+    rolling::{RollingFileAppender, Rotation},
+};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -18,16 +21,41 @@ mod keys;
 mod open;
 mod ui;
 
-fn init_logging() -> WorkerGuard {
-    let file_appender = tracing_appender::rolling::never("logs", "mula.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+/// Where a log goes: `$XDG_STATE_HOME/mula`, or the directory the platform
+/// keeps state in. `None` when there is no home to put it under.
+fn log_dir() -> Option<PathBuf> {
+    if let Some(state) = env::var_os("XDG_STATE_HOME").filter(|dir| !dir.is_empty()) {
+        return Some(PathBuf::from(state).join("mula"));
+    }
+
+    let home = PathBuf::from(env::var_os("HOME").filter(|dir| !dir.is_empty())?);
+    Some(match cfg!(target_os = "macos") {
+        true => home.join("Library/Logs/mula"),
+        false => home.join(".local/state/mula"),
+    })
+}
+
+/// Starts logging, and only when `RUST_LOG` asks for it: a file manager is
+/// run from every directory there is, and one that logs by default leaves a
+/// trail of them behind.
+///
+/// `None` when nothing was asked for, and also when the directory could not be
+/// opened. Not being able to write a log is not a reason to refuse to run.
+fn init_logging() -> Option<WorkerGuard> {
+    let filter = EnvFilter::try_from_default_env().ok()?;
+    let appender = RollingFileAppender::builder()
+        .rotation(Rotation::NEVER)
+        .filename_prefix("mula.log")
+        .build(log_dir()?)
+        .ok()?;
+    let (non_blocking, guard) = tracing_appender::non_blocking(appender);
 
     tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
+        .with(filter)
         .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
         .init();
 
-    _guard
+    Some(guard)
 }
 
 fn main() -> Result<(), AppError> {

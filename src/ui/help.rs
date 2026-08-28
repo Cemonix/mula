@@ -10,6 +10,7 @@ use ratatui::{
 use crate::{
     action::VerticalDir,
     keys::{Binding, GlobalMsg, KeyBinding},
+    ui,
 };
 
 /// What a key does while the help overlay is open. Only closing leaves the
@@ -164,7 +165,7 @@ impl<'b, T> Widget for Help<'b, T> {
         let shown = &rows[first..(first + inner.height as usize).min(total)];
 
         let block = block.title_top(Line::from("Help").centered());
-        let block = match position(first, shown.len(), total) {
+        let block = match ui::scroll_position(first, shown.len(), total) {
             Some(position) => block.title_bottom(Line::from(position).centered()),
             None => block,
         };
@@ -198,12 +199,6 @@ impl<'b, T> Widget for Help<'b, T> {
         )
         .render(columns[1], buf);
     }
-}
-
-/// `1-20 of 29` while part of the table is off screen, and nothing at all
-/// while every row of it fits.
-fn position(first: usize, shown: usize, total: usize) -> Option<String> {
-    (shown < total).then(|| format!(" {}-{} of {total} ", first + 1, first + shown))
 }
 
 #[cfg(test)]
