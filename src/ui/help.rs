@@ -294,7 +294,13 @@ mod help_tests {
 
         let rows = frame(BROWSE_KEYS, &mut state).join("\n");
 
-        assert!(rows.contains("1-20 of 29"), "the frame was {rows:?}");
+        // Twenty rows is what the frame this builds has room for; the total
+        // comes from the tables, so adding a key does not fail this.
+        let total = BROWSE_KEYS.len() + GLOBAL_KEYS.len();
+        assert!(
+            rows.contains(&format!("1-20 of {total}")),
+            "the frame was {rows:?}"
+        );
     }
 
     /// Scrolling past the end leaves a full screen rather than one last row,

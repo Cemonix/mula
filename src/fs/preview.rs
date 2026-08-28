@@ -20,7 +20,7 @@ use std::{
 use image::{ImageFormat, ImageReader};
 
 use crate::fs::{
-    directory::Directory,
+    directory::{Detail, Directory},
     reader::{Live, Outbox, ReadJob},
 };
 
@@ -211,7 +211,7 @@ fn read(path: &Path, limits: &Limits, live: &Live<'_>) -> Option<Content> {
     }
 
     if file_type.is_dir() {
-        return Some(match Directory::read(Arc::from(path)) {
+        return Some(match Directory::read(Arc::from(path), Detail::NamesOnly) {
             Ok(directory) => Content::Directory(directory),
             Err(e) => Content::Unreadable(e.to_string()),
         });

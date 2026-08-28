@@ -40,4 +40,5 @@ pub enum Action {
     RenameTab,
     Find,
     ToggleQuickView,
+    CycleColumns,
 }

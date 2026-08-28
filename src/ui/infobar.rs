@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::keys::KeyBinding;
+use crate::{keys::KeyBinding, ui};
 
 /// What the caller has already worked out about the running job. The widget
 /// only lays it out; the ratio is computed where the counters live.
@@ -111,7 +111,7 @@ impl<'a> InfoBar<'a> {
 
             if !progress.current.is_empty() {
                 segments.push(vec![
-                    Span::raw(Self::clip(progress.current, Self::NAME_WIDTH)).fg(Color::Gray),
+                    Span::raw(ui::clip(progress.current, Self::NAME_WIDTH)).fg(Color::Gray),
                 ]);
             }
 
@@ -175,29 +175,6 @@ impl<'a> InfoBar<'a> {
 
         let drawn = whole + usize::from(!partial.is_empty());
         (done, symbols::shade::LIGHT.repeat(Self::BAR_WIDTH - drawn))
-    }
-
-    /// Clips text to `max` columns, counting display width rather than bytes,
-    /// and marks the cut with an ellipsis that is itself one column wide.
-    fn clip(text: &str, max: usize) -> String {
-        if Span::raw(text).width() <= max {
-            return text.to_string();
-        }
-
-        let mut clipped = String::new();
-        let mut width = 0;
-        let mut buffer = [0u8; 4];
-        for character in text.chars() {
-            let character_width = Span::raw(&*character.encode_utf8(&mut buffer)).width();
-            if width + character_width + 1 > max {
-                break;
-            }
-            clipped.push(character);
-            width += character_width;
-        }
-
-        clipped.push('…');
-        clipped
     }
 }
 
@@ -313,21 +290,6 @@ mod infobar_tests {
         let (done, rest) = InfoBar::bar(1.0);
         assert_eq!(done.chars().count(), InfoBar::BAR_WIDTH);
         assert_eq!(rest, "");
-    }
-
-    #[test]
-    fn a_long_name_is_clipped_to_its_display_width() {
-        let clipped = InfoBar::clip("a-very-long-file-name-indeed.txt", 12);
-        assert_eq!(Span::raw(&clipped).width(), 12);
-        assert!(clipped.ends_with('…'));
-    }
-
-    #[test]
-    fn clipping_counts_columns_rather_than_characters() {
-        // Every one of these is two columns wide, so only five fit in eleven
-        // columns once the ellipsis has taken one.
-        let clipped = InfoBar::clip("ああああああああ", 11);
-        assert_eq!(clipped, "あああああ…");
     }
 
     /// The widget draws whatever key it is handed, so which one the table

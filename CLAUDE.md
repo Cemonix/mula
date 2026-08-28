@@ -111,6 +111,9 @@ is open again, not broken.
 
 **Background I/O**
 - All `fs::` access goes behind one boundary.
+- A listing carries what to read. Metadata is a `stat` per entry, so a caller
+  that draws no column asks for none, and a pane reads again only when what it
+  holds is thinner than what it draws, never when it is thicker.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
   have no non-blocking API; SSH panes are sockets and do.
 - One worker for mutations, no pool. **Holds while** a batch stays on one

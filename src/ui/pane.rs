@@ -11,10 +11,10 @@ use thiserror::Error;
 
 use crate::{
     fs::{
-        directory::{DirEntry, Directory},
+        directory::{Detail, DirEntry, Directory},
         listing::{Kind, Listed},
     },
-    ui::{self, icon::Icon},
+    ui::{self, columns::Columns, icon::Icon},
 };
 
 #[derive(Error, Debug)]
@@ -90,6 +90,12 @@ impl Pane {
     const MARK_BAR: &'static str = "\u{258c} ";
     /// Holds the mark column open on an unmarked row.
     const MARK_BLANK: &'static str = "  ";
+    /// Drawn to the left of the row the cursor is on, and so a column every
+    /// row gives up whether it is the one or not.
+    const HIGHLIGHT: &'static str = ">";
+    /// Columns the mark takes. Both of the strings it draws are this wide, so
+    /// marking a row cannot shift the name beside it.
+    const MARK_WIDTH: usize = 2;
 
     /// Opens `directory` with its first entry selected, or with nothing
     /// selected while the listing is empty.
@@ -103,8 +109,16 @@ impl Pane {
 
     /// A pane with nothing in it, waiting for its first listing. `path` is what
     /// the border shows until that listing arrives.
+    ///
+    /// The empty listing it stands on is a [`Detail::NamesOnly`] one, which
+    /// costs nothing: the pane is already waiting, so the request that goes out
+    /// carries whatever detail the columns want by then.
     pub fn empty(path: Arc<Path>) -> Self {
-        let mut pane = Self::new(Directory::new(Arc::clone(&path), Vec::new()));
+        let mut pane = Self::new(Directory::new(
+            Arc::clone(&path),
+            Vec::new(),
+            Detail::NamesOnly,
+        ));
         pane.want(path, None, Intent::Refresh);
         pane
     }
@@ -179,6 +193,21 @@ impl Pane {
     pub fn reveal(&mut self, path: &Path) {
         let parent = path.parent().unwrap_or(path);
         self.want(Arc::from(parent), Some(Arc::from(path)), Intent::Refresh);
+    }
+
+    /// Waits for the current directory to be read again when the listing on
+    /// screen was read with less than `detail`. A column cannot be filled from
+    /// a listing that never read what goes in it, and one read with more than
+    /// is wanted needs nothing: turning the columns back off draws fewer of
+    /// them rather than reading the directory again.
+    ///
+    /// A pane already waiting is left alone. Its request goes out under the
+    /// detail wanted at the moment it is handed over, and if it went out
+    /// already, the answer lands here and the next pass asks again.
+    pub fn want_detail(&mut self, detail: Detail) {
+        if matches!(self.awaited, Awaited::Nothing) && self.directory.detail() < detail {
+            self.refresh();
+        }
     }
 
     /// Waits for the current directory to be read again. The cursor keeps its
@@ -279,15 +308,16 @@ impl Pane {
         }
     }
 
-    /// Draws the directory listing. `focused` colours the border and is passed
-    /// in every frame rather than stored, so it cannot drift from the focus the
-    /// caller holds.
+    /// Draws the directory listing. `focused` colours the border and `columns`
+    /// says what each row shows beside its name; both are passed in every frame
+    /// rather than stored, so neither can drift from what the caller holds.
     pub fn render(
         &mut self,
         frame: &mut Frame,
         area: Rect,
         selected_items: &HashSet<Arc<Path>>,
         focused: bool,
+        columns: Columns,
     ) {
         let title = Line::from(self.directory.path().to_string_lossy().to_string().bold());
         let block = Block::bordered()
@@ -301,24 +331,13 @@ impl Pane {
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
 
+        // What a row has to lay itself out in: the highlight symbol is drawn
+        // beside every row, whether the cursor is on it or not.
+        let row_width = usize::from(inner_area.width).saturating_sub(Self::HIGHLIGHT.len());
+
         let list = List::new(self.directory.entries().iter().map(|entry| {
-            // Every row, the parent included, is labelled by the last component
-            // of its path.
-            let label = ui::name_of(&entry.path);
-            let icon = Icon::icon_for(entry);
             let marked = selected_items.contains(&entry.path);
-            let item = ListItem::new(Line::from(vec![
-                Span::styled(
-                    if marked {
-                        Self::MARK_BAR
-                    } else {
-                        Self::MARK_BLANK
-                    },
-                    Style::new().fg(Self::MARK),
-                ),
-                Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
-                Span::raw(label),
-            ]));
+            let item = ListItem::new(Self::row(entry, marked, columns, row_width));
             if marked {
                 item.style(Style::new().bg(Self::MARKED_BG))
             } else {
@@ -327,8 +346,51 @@ impl Pane {
         }))
         .style(Color::White)
         .highlight_style(Style::new().bg(Self::CURSOR_BG))
-        .highlight_symbol(">");
+        .highlight_symbol(Self::HIGHLIGHT);
         frame.render_stateful_widget(list, inner_area, &mut self.list_state);
+    }
+
+    /// One row, `row_width` columns wide: the mark, the icon, the name padded
+    /// out to whatever is left, and the cells of `columns` behind it.
+    ///
+    /// The name is padded rather than the cells positioned, so a row is built
+    /// once, left to right, and the columns line up because everything else on
+    /// the row is measured.
+    ///
+    /// The icon is measured rather than counted on: a Nerd Font glyph from the
+    /// supplementary private use area is two columns to `Span::width`, one from
+    /// the basic plane is one, and a row that assumed either would put the
+    /// columns of the rows below it somewhere else.
+    fn row(entry: &DirEntry, marked: bool, columns: Columns, row_width: usize) -> Line<'static> {
+        // Every row, the parent included, is labelled by the last component of
+        // its path.
+        let label = ui::name_of(&entry.path);
+        let icon = Icon::icon_for(entry);
+        let icon = Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color));
+
+        // A pane too narrow to hold the columns leaves the name none at all
+        // rather than borrowing any back from them.
+        let name_width =
+            row_width.saturating_sub(Self::MARK_WIDTH + icon.width() + columns.width());
+        let label = ui::clip(&label, name_width);
+        let padding = name_width.saturating_sub(Span::raw(&label).width());
+
+        let mut spans = vec![
+            Span::styled(
+                if marked {
+                    Self::MARK_BAR
+                } else {
+                    Self::MARK_BLANK
+                },
+                Style::new().fg(Self::MARK),
+            ),
+            icon,
+            Span::raw(label),
+            Span::raw(" ".repeat(padding)),
+        ];
+        spans.extend(columns.cells(entry));
+
+        Line::from(spans)
     }
 }
 
@@ -345,7 +407,10 @@ fn clamped(selected: Option<usize>, len: usize) -> Option<usize> {
 #[cfg(test)]
 mod pane_tests {
     use super::*;
-    use crate::fs::directory::DirEntryKind;
+
+    use ratatui::{buffer::Buffer, widgets::Widget};
+
+    use crate::fs::directory::{DirEntryKind, EntryMeta};
 
     /// Builds a pane over `count` file entries at `/0`, `/1`, … in that order.
     fn pane(count: usize) -> Pane {
@@ -356,16 +421,22 @@ mod pane_tests {
         directory_at("/", count)
     }
 
-    /// Builds a listing of `count` file entries directly under `path`.
+    /// Builds a listing of `count` file entries directly under `path`, read
+    /// with names alone.
     fn directory_at(path: &str, count: usize) -> Directory {
+        detailed_directory_at(path, count, Detail::NamesOnly)
+    }
+
+    fn detailed_directory_at(path: &str, count: usize, detail: Detail) -> Directory {
         let root: Arc<Path> = Arc::from(Path::new(path));
         let entries = (0..count)
             .map(|i| DirEntry {
                 path: Arc::from(root.join(i.to_string()).as_path()),
                 kind: DirEntryKind::File,
+                meta: None,
             })
             .collect();
-        Directory::new(root, entries)
+        Directory::new(root, entries, detail)
     }
 
     #[test]
@@ -542,6 +613,41 @@ mod pane_tests {
     }
 
     #[test]
+    fn a_pane_asks_again_for_a_listing_that_is_thinner_than_the_columns_need() {
+        let mut pane = pane(3);
+
+        pane.want_detail(Detail::WithMetadata);
+
+        assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/")));
+    }
+
+    /// Turning the columns back off draws fewer of them. Reading the directory
+    /// again for that would charge the whole listing for showing less.
+    #[test]
+    fn a_pane_holding_more_than_the_columns_need_asks_for_nothing() {
+        let mut pane = Pane::new(detailed_directory_at("/", 3, Detail::WithMetadata));
+
+        pane.want_detail(Detail::NamesOnly);
+        assert!(pane.take_unsent().is_none());
+
+        pane.want_detail(Detail::WithMetadata);
+        assert!(pane.take_unsent().is_none());
+    }
+
+    /// The request that is already on its way goes out under whatever detail
+    /// is wanted when it is handed over, so replacing it here would only throw
+    /// away where the pane was going.
+    #[test]
+    fn a_pane_already_waiting_keeps_what_it_was_waiting_for() {
+        let mut pane = pane(3);
+        pane.reveal(Path::new("/b/2"));
+
+        pane.want_detail(Detail::WithMetadata);
+
+        assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/b")));
+    }
+
+    #[test]
     fn a_request_replaced_before_it_was_sent_asks_only_for_the_last_one() {
         let mut pane = pane(3);
         pane.reveal(Path::new("/b/2"));
@@ -549,5 +655,68 @@ mod pane_tests {
 
         assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/")));
         assert!(pane.take_unsent().is_none());
+    }
+
+    /// Draws one row the way the list would, into a buffer as wide as the
+    /// room a row is given, and reads the cells back. Alignment is the whole
+    /// point of the columns and cannot be seen anywhere else.
+    fn drawn_row(entry: &DirEntry, columns: Columns, width: u16) -> String {
+        let area = Rect::new(0, 0, width, 1);
+        let mut buf = Buffer::empty(area);
+
+        Pane::row(entry, false, columns, usize::from(width)).render(area, &mut buf);
+        (0..width).map(|x| buf[(x, 0)].symbol()).collect()
+    }
+
+    fn file(name: &str, size: u64) -> DirEntry {
+        DirEntry {
+            path: Arc::from(Path::new("/").join(name).as_path()),
+            kind: DirEntryKind::File,
+            meta: Some(EntryMeta {
+                size,
+                modified: 1_756_400_000,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_row_showing_the_name_alone_draws_no_size() {
+        let row = drawn_row(&file("one.txt", 2048), Columns::Name, 30);
+
+        assert!(row.contains("one.txt"), "the row was {row:?}");
+        assert!(!row.contains("2.0K"), "the row was {row:?}");
+    }
+
+    #[test]
+    fn the_size_ends_at_the_right_edge_of_the_row() {
+        let row = drawn_row(&file("one.txt", 2048), Columns::Size, 30);
+
+        assert!(row.contains("one.txt"), "the row was {row:?}");
+        assert!(row.ends_with(" 2.0K"), "the row was {row:?}");
+    }
+
+    /// The name gives way, not the columns: a column pushed off the edge is
+    /// the one thing the row cannot afford to lose.
+    #[test]
+    fn a_name_too_long_for_what_is_left_is_clipped_rather_than_pushing_the_size_out() {
+        let row = drawn_row(&file("a-very-long-file-name.txt", 4096), Columns::Size, 24);
+
+        assert!(row.contains('\u{2026}'), "the row was {row:?}");
+        assert!(row.ends_with(" 4.0K"), "the row was {row:?}");
+    }
+
+    /// Same extension on both, so the icons are the same width: a row is laid
+    /// out around whatever the icon measures, and two different icons are two
+    /// different questions.
+    #[test]
+    fn two_rows_of_different_name_lengths_line_their_columns_up() {
+        let short = drawn_row(&file("a.txt", 1024), Columns::SizeAndTime, 48);
+        let long = drawn_row(&file("a-longer-name.txt", 1024), Columns::SizeAndTime, 48);
+
+        assert_eq!(
+            short.find("1.0K"),
+            long.find("1.0K"),
+            "the rows were {short:?} and {long:?}"
+        );
     }
 }

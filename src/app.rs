@@ -30,6 +30,7 @@ use crate::{
     open::{self, Handover, Launch, Opener, Program},
     ui::{
         self,
+        columns::Columns,
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
         graphics::{
@@ -198,6 +199,11 @@ pub struct App {
     reader: Reader<Search>,
     /// What the panel opposite the cursor shows.
     opposite: Opposite,
+    /// What every row of a listing shows besides its name. Deliberately not a
+    /// `Mode`, for the reason `opposite` is not one, and read once a pass by
+    /// `sync_listings`, which is what turns it into the metadata a listing is
+    /// read with.
+    columns: Columns,
     /// Serves the Quick View panel. A reader of its own rather than another
     /// job on `reader`: one generation counter for both would cancel a running
     /// walk every time the cursor moved, and would hold together only because
@@ -265,6 +271,7 @@ impl App {
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
+            columns: Columns::SizeAndTime,
             previewer: Reader::<Preview>::start(preview_limits),
             previewing: None,
             preview: None,
@@ -394,12 +401,13 @@ impl App {
         match self.opposite {
             Opposite::Listing => {
                 let focused = self.focused_side;
+                let columns = self.columns;
                 self.left
                     .tabs_mut()
-                    .render(frame, layout[0], focused == Side::Left);
+                    .render(frame, layout[0], focused == Side::Left, columns);
                 self.right
                     .tabs_mut()
-                    .render(frame, layout[1], focused == Side::Right);
+                    .render(frame, layout[1], focused == Side::Right, columns);
             }
             // The preview sits opposite the cursor, so it follows a change of
             // side without anything having to be told about it. The other
@@ -416,14 +424,17 @@ impl App {
                 // here: fitting a bitmap to an area is the same arithmetic
                 // whichever of the two backends ends up drawing it.
                 let mut area = None;
+                let columns = self.columns;
                 match self.focused_side {
                     Side::Left => {
-                        self.left.tabs_mut().render(frame, layout[0], true);
+                        self.left.tabs_mut().render(frame, layout[0], true, columns);
                         frame.render_stateful_widget(&preview, layout[1], &mut area);
                     }
                     Side::Right => {
                         frame.render_stateful_widget(&preview, layout[0], &mut area);
-                        self.right.tabs_mut().render(frame, layout[1], true);
+                        self.right
+                            .tabs_mut()
+                            .render(frame, layout[1], true, columns);
                     }
                 }
 
@@ -679,6 +690,10 @@ impl App {
             Action::Find => self.open_finder(),
             Action::ToggleQuickView => {
                 self.opposite = self.opposite.toggle();
+                Ok(())
+            }
+            Action::CycleColumns => {
+                self.columns = self.columns.next();
                 Ok(())
             }
         }
@@ -1126,8 +1141,9 @@ impl App {
     /// tab and a refresh after a job all take the same road. A pane whose
     /// request has already gone out asks for nothing.
     fn sync_listings(&mut self) {
+        let detail = self.columns.detail();
         for side in [Side::Left, Side::Right] {
-            let sent = self.panel_mut(side).send_wanted();
+            let sent = self.panel_mut(side).send_wanted(detail);
             if let Err(e) = sent {
                 self.notify(ToastLevel::Error, e, None);
             }

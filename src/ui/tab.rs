@@ -19,7 +19,10 @@ use ratatui::{
 
 use crate::{
     fs::directory::DirEntryKind,
-    ui::pane::{Pane, PaneError},
+    ui::{
+        columns::Columns,
+        pane::{Pane, PaneError},
+    },
 };
 
 /// Which neighbour of the active tab becomes active, wrapping around the ends.
@@ -101,7 +104,7 @@ impl TabList {
 
     /// Draws the tab strip and the active tab below it. `focused` says whether
     /// the cursor is on this side and only reaches the pane border.
-    pub fn render(&mut self, frame: &mut Frame, layout: Rect, focused: bool) {
+    pub fn render(&mut self, frame: &mut Frame, layout: Rect, focused: bool, columns: Columns) {
         let tabs_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -116,7 +119,8 @@ impl TabList {
 
         frame.render_widget(tabs, tabs_area[0]);
 
-        self.active_tab_mut().render(frame, tabs_area[1], focused);
+        self.active_tab_mut()
+            .render(frame, tabs_area[1], focused, columns);
     }
 }
 
@@ -201,8 +205,9 @@ impl Tab {
             .extend(paths.into_iter().map(Arc::<Path>::from));
     }
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
-        self.pane.render(frame, area, &self.selected_items, focused);
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, columns: Columns) {
+        self.pane
+            .render(frame, area, &self.selected_items, focused, columns);
     }
 }
 

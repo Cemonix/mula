@@ -227,6 +227,7 @@ mod icon_tests {
         DirEntry {
             path: Arc::from(Path::new(path)),
             kind,
+            meta: None,
         }
     }
 
