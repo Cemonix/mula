@@ -15,6 +15,7 @@ mod action;
 mod app;
 mod fs;
 mod keys;
+mod open;
 mod ui;
 
 fn init_logging() -> WorkerGuard {

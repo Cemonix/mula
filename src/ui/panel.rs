@@ -15,13 +15,12 @@ use std::io;
 
 use crate::{
     fs::{
-        directory::Directory,
-        listing::Listing,
+        listing::{Listed, Listing},
         reader::{Drained, Reader},
         worker::Health,
     },
     ui::{
-        pane::{Pane, PaneError},
+        pane::{Entered, Pane, PaneError},
         tab::{Tab, TabId, TabList},
     },
 };
@@ -33,6 +32,8 @@ pub struct Collected {
     /// The listing that could not be read, for the caller to report. A
     /// directory the pane merely stepped over is not one of these.
     pub error: Option<PaneError>,
+    /// What the tab that asked wants done about the entry it entered.
+    pub entered: Entered,
 }
 
 #[derive(Debug)]
@@ -104,20 +105,27 @@ impl Panel {
     /// left, and the reader has dropped them.
     pub fn collect_listing(&mut self) -> Collected {
         let Drained { msgs, health } = self.listings.drain();
-        let error = msgs
-            .into_iter()
-            .next_back()
-            .and_then(|listing| self.deliver(listing).err());
+        let (entered, error) = match msgs.into_iter().next_back() {
+            Some(listing) => match self.deliver(listing) {
+                Ok(entered) => (entered, None),
+                Err(e) => (Entered::Nothing, Some(e)),
+            },
+            None => (Entered::Nothing, None),
+        };
 
-        Collected { health, error }
+        Collected {
+            health,
+            error,
+            entered,
+        }
     }
 
     /// Gives a listing to the tab that asked for it. A tab closed while its
     /// answer was on its way has nowhere to put it, which is the whole of what
     /// closing a tab has to handle.
-    fn deliver(&mut self, listing: io::Result<Directory>) -> Result<(), PaneError> {
+    fn deliver(&mut self, listing: io::Result<Listed>) -> Result<Entered, PaneError> {
         let Some(tab) = self.listing_for.take().and_then(|id| self.tabs.tab_mut(id)) else {
-            return Ok(());
+            return Ok(Entered::Nothing);
         };
         tab.get_pane_mut().listed(listing)
     }
@@ -129,7 +137,7 @@ mod panel_tests {
 
     use std::{path::Path, sync::Arc};
 
-    use crate::ui::tab::ToggleDirection;
+    use crate::{fs::directory::Directory, ui::tab::ToggleDirection};
 
     /// A panel of two tabs, each holding a listing and waiting for nothing,
     /// which is where a panel settles once its reads have arrived. The active
@@ -145,7 +153,7 @@ mod panel_tests {
             panel.active_pane_mut().take_unsent();
             panel
                 .active_pane_mut()
-                .listed(Ok(Directory::new(path, Vec::new())))
+                .listed(Ok(Listed::Directory(Directory::new(path, Vec::new()))))
                 .unwrap();
             panel.tabs.toggle(ToggleDirection::Next);
         }
@@ -179,7 +187,9 @@ mod panel_tests {
         panel.tabs.toggle(ToggleDirection::Next);
         let arrived_at = panel.tabs.active_tab().id();
 
-        panel.deliver(Ok(listing("/somewhere"))).unwrap();
+        panel
+            .deliver(Ok(Listed::Directory(listing("/somewhere"))))
+            .unwrap();
 
         assert_eq!(
             current_dir_of(&mut panel, asked).as_ref(),

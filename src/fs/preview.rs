@@ -336,9 +336,18 @@ fn link_target(path: &Path) -> LinkTarget {
     }
 }
 
+/// Whether bytes are text. A NUL in them means binary; anything else is text,
+/// however little of it is valid UTF-8.
+///
+/// Shared with the listing, so that what the preview draws as text and what
+/// entering an entry opens in an editor cannot come apart.
+pub fn is_text(bytes: &[u8]) -> bool {
+    !bytes.contains(&0)
+}
+
 /// Reads at most `max_bytes` from the front of the file. A preview of a 4 GB
 /// log must not read 4 GB.
-fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Error> {
+pub fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Error> {
     let mut bytes = Vec::new();
     File::open(path)?
         .take(max_bytes as u64)
@@ -349,7 +358,7 @@ fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Error>
 /// Shapes bytes that are not an image. A NUL byte in the prefix means binary;
 /// anything else is drawn as text, however little of it is valid UTF-8.
 fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
-    if bytes.contains(&0) {
+    if !is_text(&bytes) {
         return Content::Binary { bytes, clipped };
     }
 

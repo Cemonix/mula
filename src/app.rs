@@ -2,6 +2,7 @@ use std::{
     collections::VecDeque,
     io,
     path::{Path, PathBuf},
+    process::Child,
     sync::Arc,
     time::Duration,
 };
@@ -19,12 +20,14 @@ use crate::{
         directory::DirEntryKind,
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
+        listing::Kind,
         ops::{MutationOp, ProcessedSummary, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
         worker::{Health, Worker},
     },
     keys::{self, KeyBinding},
+    open::{self, Handover, Launch, Opener, Program},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
@@ -35,7 +38,7 @@ use crate::{
         help::Help,
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
-        pane::{Pane, PaneError},
+        pane::{Entered, Pane, PaneError},
         panel::Panel,
         preview::PreviewPane,
         prompt::{InputMsg, Prompt},
@@ -134,6 +137,18 @@ pub enum InputTarget {
     RenameTab,
 }
 
+/// A file waiting to be handed the terminal, at the end of the pass of the
+/// loop it was asked for in. Handing over needs the terminal, and only `run`
+/// holds it.
+///
+/// The program rather than the opener, so a detached one cannot end up in a
+/// slot that only ever hands the terminal over.
+#[derive(Debug)]
+struct Opening {
+    program: Program,
+    path: Arc<Path>,
+}
+
 /// Where the marks a queued job took came from, so the items that fail can be
 /// put back even after the user has switched tabs or panels.
 #[derive(Debug)]
@@ -193,6 +208,13 @@ pub struct App {
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
     progress: Option<Progress>,
+    /// What the loop is to hand the terminal over for, or `None` when nothing
+    /// asked.
+    opening: Option<Opening>,
+    /// The programs started without the terminal. Nothing waits for them; the
+    /// list is only what `try_wait` is asked on, so one that has ended is let
+    /// go of rather than left in the process table.
+    detached: Vec<Child>,
     queued_marks: Vec<QueuedMarks>,
     /// Turns once per pass of the loop and drives the spinner. Nothing else
     /// reads it, so wrapping is harmless.
@@ -237,6 +259,8 @@ impl App {
             preview_placement: None,
             surface: Surface::new(capabilities),
             progress: None,
+            opening: None,
+            detached: Vec::new(),
             queued_marks: Vec::new(),
             tick: 0,
             exit: false,
@@ -270,6 +294,10 @@ impl App {
             // something else.
             self.sync_preview();
             self.collect_from_previewer();
+            self.reap_detached();
+            // Last of the pass, so a file asked for anywhere in it is opened
+            // before the next frame is drawn.
+            self.open_pending(terminal)?;
             self.toasts.retain(|toast| !toast.is_expired());
             self.tick = self.tick.wrapping_add(1);
         }
@@ -585,6 +613,7 @@ impl App {
                 .get_focused_pane_mut()
                 .change_directory()
                 .map_err(AppError::from),
+            Action::Open(opener) => self.open_selected(opener),
             Action::NewTab => {
                 if let Ok(new_tab) = Tab::new(String::from("New Tab")) {
                     self.get_focused_tabs_mut().add_tab(new_tab);
@@ -618,6 +647,106 @@ impl App {
             VerticalDir::Up => self.get_focused_pane_mut().select_prev(),
             VerticalDir::Down => self.get_focused_pane_mut().select_next(),
         }
+    }
+
+    /// Puts down the entry under the cursor for `opener`, to be handed over at
+    /// the end of the pass.
+    ///
+    /// A directory is turned away on its listed kind, which costs no read. A
+    /// symlink is let through: what it points at is known only once it is
+    /// followed, and the program doing the opening is what follows it.
+    fn open_selected(&mut self, opener: Opener) -> Result<(), AppError> {
+        let entry = self.get_focused_pane().selected_entry()?;
+        let (kind, path) = (entry.kind, Arc::clone(&entry.path));
+
+        if matches!(kind, DirEntryKind::Directory | DirEntryKind::Parent) {
+            self.notify(ToastLevel::Warning, "That is a directory", None);
+            return Ok(());
+        }
+
+        self.start(opener, path);
+        Ok(())
+    }
+
+    /// Sends what the user entered to the program that belongs to it.
+    ///
+    /// Two rules, which is all a table of associations comes to here: text goes
+    /// to the editor, anything else to whatever the system opens it with.
+    /// A fifo, a socket or a device goes nowhere — a program handed one waits
+    /// on it for as long as nobody is at the other end.
+    fn open_entered(&mut self, path: Arc<Path>, kind: Kind) {
+        let opener = match kind {
+            Kind::Text => Opener::Edit,
+            Kind::Opaque => Opener::System,
+            Kind::NotAFile => {
+                self.notify(ToastLevel::Warning, "That is not a file", None);
+                return;
+            }
+        };
+
+        self.start(opener, path);
+    }
+
+    /// Starts `opener` on `path`, either way it starts. A program that wants
+    /// the terminal is put down for the end of the pass; one that does not is
+    /// started here and never waited for.
+    fn start(&mut self, opener: Opener, path: Arc<Path>) {
+        let program = opener.program();
+
+        match opener.launch() {
+            Launch::Handover => self.opening = Some(Opening { program, path }),
+            Launch::Detached => match open::detach(&program, &path) {
+                Ok(child) => self.detached.push(child),
+                Err(e) => self.notify(ToastLevel::Error, format!("{program}: {e}"), None),
+            },
+        }
+    }
+
+    /// Lets go of the detached programs that have ended.
+    ///
+    /// Nothing waits for one, and a child nobody ever asks about stays in the
+    /// process table after it exits. Asking here costs a `waitpid` that returns
+    /// at once.
+    fn reap_detached(&mut self) {
+        self.detached.retain_mut(|child| match child.try_wait() {
+            Ok(None) => true,
+            // Ended, or no longer answerable. Either way there is nothing left
+            // to wait for.
+            Ok(Some(_)) | Err(_) => false,
+        });
+    }
+
+    /// Hands the terminal over when an action asked for it, and turns what came
+    /// of the program into a toast.
+    ///
+    /// The error that leaves here is the terminal's own and ends the loop:
+    /// there is nothing left to draw on. A program that would not start, or
+    /// that started and complained, is news for the user rather than the end of
+    /// the app.
+    fn open_pending(&mut self, terminal: &mut DefaultTerminal) -> Result<(), AppError> {
+        let Some(opening) = self.opening.take() else {
+            return Ok(());
+        };
+
+        let Opening { program, path } = opening;
+        match open::hand_over(terminal, &mut self.surface, &program, &path)? {
+            Handover::Exited(status) if status.success() => (),
+            // A program killed by a signal has no code of its own. Ctrl-C in a
+            // program that reads keys the plain way is the ordinary way here.
+            Handover::Exited(status) => match status.code() {
+                Some(code) => self.notify(
+                    ToastLevel::Warning,
+                    format!("{program} exited with {code}"),
+                    None,
+                ),
+                None => self.notify(ToastLevel::Warning, format!("{program} was killed"), None),
+            },
+            Handover::NotStarted(e) => {
+                self.notify(ToastLevel::Error, format!("{program}: {e}"), None)
+            }
+        }
+
+        Ok(())
     }
 
     fn handle_confirm_key(&mut self, key: KeyEvent) {
@@ -952,6 +1081,10 @@ impl App {
 
             if let Some(e) = collected.error {
                 self.notify(ToastLevel::Error, e, None);
+            }
+
+            if let Entered::Open { path, kind } = collected.entered {
+                self.open_entered(path, kind);
             }
         }
     }
