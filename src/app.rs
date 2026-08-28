@@ -15,7 +15,7 @@ use ratatui::{
 use thiserror::Error;
 
 use crate::{
-    action::{Action, VerticalDir},
+    action::{Action, ListEnd, VerticalDir},
     fs::{
         directory::DirEntryKind,
         find::{Found, Limits, Search},
@@ -26,7 +26,7 @@ use crate::{
         reader::Reader,
         worker::{Health, Worker},
     },
-    keys::{self, KeyBinding},
+    keys::{self, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
@@ -35,7 +35,7 @@ use crate::{
             capabilities::Capabilities,
             surface::{Placement, Surface, Wanted},
         },
-        help::Help,
+        help::{self, Help, HelpMsg, HelpState},
         infobar::{InfoBar, ProgressView},
         keybar::Keybar,
         pane::{Entered, Pane, PaneError},
@@ -87,7 +87,7 @@ pub enum Mode {
     Browse,
     Confirm {
         dialog: Dialog,
-        pending: Action,
+        pending: ConfirmTarget,
     },
     Input {
         prompt: Prompt,
@@ -137,6 +137,16 @@ pub enum InputTarget {
     RenameTab,
 }
 
+/// What a `Confirm` dialog carries out once it is answered with `Yes`.
+///
+/// Its own type rather than an `Action`, the way [`InputTarget`] is: these are
+/// the halves that do not ask, and nothing that resolves a key can name them.
+#[derive(Debug, Clone, Copy)]
+pub enum ConfirmTarget {
+    Delete,
+    Quit,
+}
+
 /// A file waiting to be handed the terminal, at the end of the pass of the
 /// loop it was asked for in. Handing over needs the terminal, and only `run`
 /// holds it.
@@ -173,7 +183,9 @@ pub struct App {
     focused_side: Side,
     toasts: VecDeque<Toast>,
     mode: Mode,
-    show_help: bool,
+    /// Open over whatever mode is running, showing that mode's keys. Not a
+    /// `Mode` itself: the mode underneath has to stay alive to be described.
+    help: Option<HelpState>,
     help_key: Option<KeyBinding>,
     /// Resolved from the key table once, so the hint the info bar draws while a
     /// job runs cannot drift from the key that actually cancels it.
@@ -244,8 +256,8 @@ impl App {
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
-            show_help: false,
-            help_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::ShowHelp))
+            help: None,
+            help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
                 .map(|binding| binding.key),
             cancel_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::CancelJob))
                 .map(|binding| binding.key),
@@ -424,7 +436,7 @@ impl App {
         // Every overlay covers the whole screen, and a placement sits over the
         // text rather than under it. Wanting no picture is what takes one off
         // the screen; the surface does the rest of it.
-        if !matches!(self.mode, Mode::Browse) || self.show_help {
+        if !matches!(self.mode, Mode::Browse) || self.help.is_some() {
             self.preview_placement = None;
         }
 
@@ -498,33 +510,48 @@ impl App {
             info_area,
         );
 
-        match self.mode {
-            Mode::Browse => frame.render_widget(
-                Keybar::new(keys::BROWSE_KEYS).help_key(self.help_key),
-                keys_area,
-            ),
-            Mode::Confirm { .. } => {
-                frame.render_widget(Keybar::new(Dialog::DIALOG_KEYS), keys_area)
-            }
-            Mode::Input { .. } => {
-                frame.render_widget(Keybar::new(Prompt::PROMPT_KEYS), keys_area);
-            }
-            Mode::Find { .. } => {
-                frame.render_widget(Keybar::new(Finder::FIND_KEYS), keys_area);
+        // The bar answers "what do the keys do right now", so while the help
+        // is open it is the help's own keys rather than the mode's.
+        if self.help.is_some() {
+            frame.render_widget(Keybar::new(help::HELP_KEYS), keys_area);
+        } else {
+            // The help hint goes into every mode's row, since the key behind it
+            // works in every mode.
+            match self.mode {
+                Mode::Browse => frame.render_widget(
+                    Keybar::new(keys::BROWSE_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
+                Mode::Confirm { .. } => frame.render_widget(
+                    Keybar::new(Dialog::DIALOG_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
+                Mode::Input { .. } => frame.render_widget(
+                    Keybar::new(Prompt::PROMPT_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
+                Mode::Find { .. } => frame.render_widget(
+                    Keybar::new(Finder::FIND_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
             }
         }
 
-        if self.show_help {
+        if let Some(state) = &mut self.help {
+            let area = frame.area();
+            let globals = keys::GLOBAL_KEYS;
             match self.mode {
-                Mode::Browse => frame.render_widget(Help::new(keys::BROWSE_KEYS), frame.area()),
+                Mode::Browse => {
+                    frame.render_widget(Help::new(keys::BROWSE_KEYS, globals, state), area)
+                }
                 Mode::Confirm { .. } => {
-                    frame.render_widget(Help::new(Dialog::DIALOG_KEYS), frame.area())
+                    frame.render_widget(Help::new(Dialog::DIALOG_KEYS, globals, state), area)
                 }
                 Mode::Input { .. } => {
-                    frame.render_widget(Help::new(Prompt::PROMPT_KEYS), frame.area());
+                    frame.render_widget(Help::new(Prompt::PROMPT_KEYS, globals, state), area);
                 }
                 Mode::Find { .. } => {
-                    frame.render_widget(Help::new(Finder::FIND_KEYS), frame.area());
+                    frame.render_widget(Help::new(Finder::FIND_KEYS, globals, state), area);
                 }
             }
         }
@@ -548,8 +575,21 @@ impl App {
         tracing::info!("{}", key.modifiers);
         tracing::info!("{}", key.code);
 
-        if self.show_help {
-            self.show_help = false;
+        // The overlay answers first, so the key that opened it closes it again
+        // rather than opening what is already open.
+        if let Some(state) = &mut self.help {
+            match keys::resolve(help::HELP_KEYS, &key) {
+                Some(HelpMsg::Scroll(dir)) => state.scroll(dir),
+                Some(HelpMsg::ScrollPage(dir)) => state.scroll_page(dir),
+                Some(HelpMsg::Close) | None => self.help = None,
+            }
+            return Ok(());
+        }
+
+        if let Some(msg) = keys::resolve(keys::GLOBAL_KEYS, &key) {
+            match msg {
+                GlobalMsg::ShowHelp => self.help = Some(HelpState::default()),
+            }
             return Ok(());
         }
 
@@ -571,10 +611,6 @@ impl App {
     fn dispatch(&mut self, action: Action) -> Result<(), AppError> {
         match action {
             Action::Quit => self.confirm_quit(),
-            Action::QuitAnyway => {
-                self.exit = true;
-                Ok(())
-            }
             Action::CancelJob => {
                 self.worker.cancel();
                 Ok(())
@@ -585,6 +621,13 @@ impl App {
             }
             Action::MoveCursor(nav_dir) => {
                 self.move_cursor(nav_dir);
+                Ok(())
+            }
+            Action::MoveCursorTo(end) => {
+                match end {
+                    ListEnd::First => self.get_focused_pane_mut().select_first(),
+                    ListEnd::Last => self.get_focused_pane_mut().select_last(),
+                }
                 Ok(())
             }
             Action::ToggleMark => self
@@ -626,7 +669,6 @@ impl App {
             }
             Action::Transfer { op } => self.queue_transfer(op),
             Action::Delete => self.confirm_delete(),
-            Action::DeleteMarked => self.queue_delete(),
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
@@ -635,8 +677,16 @@ impl App {
                 self.opposite = self.opposite.toggle();
                 Ok(())
             }
-            Action::ShowHelp => {
-                self.show_help = true;
+        }
+    }
+
+    /// Carries out what a dialog was opened to ask about. The counterpart of
+    /// [`App::dispatch`] for the half that no longer asks.
+    fn commit(&mut self, target: ConfirmTarget) -> Result<(), AppError> {
+        match target {
+            ConfirmTarget::Delete => self.queue_delete(),
+            ConfirmTarget::Quit => {
+                self.exit = true;
                 Ok(())
             }
         }
@@ -765,7 +815,7 @@ impl App {
                 let pending = *pending;
                 self.mode = Mode::Browse;
                 if choice == Choice::Yes
-                    && let Err(e) = self.dispatch(pending)
+                    && let Err(e) = self.commit(pending)
                 {
                     self.notify(ToastLevel::Error, e, None);
                 }
@@ -998,7 +1048,7 @@ impl App {
         let count = tab.get_selected_items().len();
         self.mode = Mode::Confirm {
             dialog: Dialog::new("Delete", format!("Delete {count} selected item(s)?")),
-            pending: Action::DeleteMarked,
+            pending: ConfirmTarget::Delete,
         };
         Ok(())
     }
@@ -1016,7 +1066,7 @@ impl App {
                 "Quit",
                 format!("{queued} operation(s) still running. Quit?"),
             ),
-            pending: Action::QuitAnyway,
+            pending: ConfirmTarget::Quit,
         };
         Ok(())
     }

@@ -11,13 +11,20 @@ pub enum VerticalDir {
     Down,
 }
 
+/// Which end of a pane listing the cursor lands on, wherever it was before.
+#[derive(Clone, Copy, Debug)]
+pub enum ListEnd {
+    First,
+    Last,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Action {
     Quit,
-    QuitAnyway,
     CancelJob,
     ToggleSide,
     MoveCursor(VerticalDir),
+    MoveCursorTo(ListEnd),
     OpenSelected,
     Open(Opener),
     ToggleMark,
@@ -33,6 +40,4 @@ pub enum Action {
     RenameTab,
     Find,
     ToggleQuickView,
-    DeleteMarked,
-    ShowHelp,
 }

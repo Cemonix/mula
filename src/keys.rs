@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use thiserror::Error;
 
 use crate::{
-    action::{Action, VerticalDir},
+    action::{Action, ListEnd, VerticalDir},
     fs::ops::TransferOp,
     open::Opener,
     ui::tab::{MarkOp, ToggleDirection},
@@ -110,8 +110,27 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
     Ok(())
 }
 
+/// What a key does whatever is on screen.
+#[derive(Clone, Copy, Debug)]
+pub enum GlobalMsg {
+    ShowHelp,
+}
+
+/// The keys that work in every mode, resolved before the mode's own table so
+/// nothing can shadow them. A global carries no `bar` label: the keybar draws
+/// it right-aligned into every mode's row instead.
+///
+/// F1 rather than `?`, because a global has to survive the modes that read
+/// text — a prompt and the find overlay would swallow a printable character.
+pub const GLOBAL_KEYS: &[Binding<GlobalMsg>] = &[Binding {
+    key: KeyBinding::plain(KeyCode::F(1)),
+    msg: GlobalMsg::ShowHelp,
+    bar: None,
+    help: "Lists every key available right now",
+}];
+
 // `resolve` takes the first match and the help overlay lists the entries in this
-// order. `ShowHelp` carries no `bar` label; the keybar draws the help key itself.
+// order.
 pub const BROWSE_KEYS: &[Binding<Action>] = &[
     Binding {
         key: KeyBinding::plain(KeyCode::Up),
@@ -124,6 +143,18 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         msg: Action::MoveCursor(VerticalDir::Down),
         bar: None,
         help: "Moves the cursor one item down",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Char('g')),
+        msg: Action::MoveCursorTo(ListEnd::First),
+        bar: None,
+        help: "Moves the cursor to the first item",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Char('G')).shift(),
+        msg: Action::MoveCursorTo(ListEnd::Last),
+        bar: None,
+        help: "Moves the cursor to the last item",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Tab),
@@ -280,12 +311,6 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Switches to the next tab, wrapping to the first one",
     },
     Binding {
-        key: KeyBinding::plain(KeyCode::Char('?')),
-        msg: Action::ShowHelp,
-        bar: None,
-        help: "Lists every key available right now",
-    },
-    Binding {
         key: KeyBinding::plain(KeyCode::Char('q')),
         msg: Action::Quit,
         bar: Some("Quit"),
@@ -296,6 +321,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
 #[cfg(test)]
 mod keys_tests {
     use super::*;
+    use crate::ui::{dialog::Dialog, finder::Finder, help, prompt::Prompt};
 
     #[test]
     fn browse_keys_bind_every_key_once() {
@@ -324,8 +350,35 @@ mod keys_tests {
     }
 
     #[test]
-    fn browse_keys_reach_the_help_overlay() {
-        assert!(find(BROWSE_KEYS, |a| matches!(a, Action::ShowHelp)).is_some());
+    fn the_globals_reach_the_help_overlay() {
+        assert!(find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp)).is_some());
+    }
+
+    /// The invariant a global needs and `validate` cannot give: `validate`
+    /// compares entries inside one table, and a global is shadowed from
+    /// another one. A mode binding the same key would never see it, since the
+    /// globals resolve first.
+    #[test]
+    fn no_mode_binds_a_global_key() {
+        fn bound<T>(bindings: &[Binding<T>]) -> Vec<KeyBinding> {
+            bindings.iter().map(|b| b.key).collect()
+        }
+
+        for (name, keys) in [
+            ("browse", bound(BROWSE_KEYS)),
+            ("dialog", bound(Dialog::DIALOG_KEYS)),
+            ("prompt", bound(Prompt::PROMPT_KEYS)),
+            ("finder", bound(Finder::FIND_KEYS)),
+            ("help", bound(help::HELP_KEYS)),
+        ] {
+            for global in GLOBAL_KEYS {
+                assert!(
+                    !keys.contains(&global.key),
+                    "the {name} table takes {}, which is global",
+                    global.key
+                );
+            }
+        }
     }
 
     #[test]
@@ -339,7 +392,7 @@ mod keys_tests {
             },
             Binding {
                 key: KeyBinding::plain(KeyCode::Char('x')),
-                msg: Action::ShowHelp,
+                msg: Action::ToggleSide,
                 bar: None,
                 help: "shadowed",
             },

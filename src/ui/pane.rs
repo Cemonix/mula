@@ -153,6 +153,22 @@ impl Pane {
         }
     }
 
+    /// Moves the cursor to the first item. Does nothing while nothing is
+    /// selected.
+    pub fn select_first(&mut self) {
+        if self.list_state.selected().is_some() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    /// Moves the cursor to the last item. Does nothing while nothing is
+    /// selected.
+    pub fn select_last(&mut self) {
+        if self.list_state.selected().is_some() {
+            self.list_state.select(Some(self.directory.len() - 1));
+        }
+    }
+
     /// Waits for the listing of the directory holding `path`, with the cursor
     /// landing on `path` itself once it arrives. A path with no parent is its
     /// own directory, which is what the filesystem root is.
@@ -369,6 +385,43 @@ mod pane_tests {
         let mut pane = pane(3);
         pane.select_prev();
         assert_eq!(pane.list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn the_cursor_reaches_either_end_from_anywhere() {
+        let mut pane = pane(5);
+        pane.select_next();
+        pane.select_next();
+
+        pane.select_last();
+        assert_eq!(pane.list_state.selected(), Some(4));
+
+        pane.select_first();
+        assert_eq!(pane.list_state.selected(), Some(0));
+    }
+
+    /// The index has to be worked out here rather than left to
+    /// `ListState::select_last`, which stores `usize::MAX` until a render cuts
+    /// it down; everything reading the selection before that render would find
+    /// no entry there.
+    #[test]
+    fn jumping_to_the_last_item_leaves_an_entry_under_the_cursor() {
+        let mut pane = pane(3);
+        pane.select_last();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/2")
+        );
+    }
+
+    #[test]
+    fn an_empty_listing_has_no_end_to_jump_to() {
+        let mut pane = pane(0);
+        pane.select_first();
+        pane.select_last();
+
+        assert_eq!(pane.list_state.selected(), None);
     }
 
     #[test]

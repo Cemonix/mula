@@ -3,14 +3,22 @@
 Why the key tables and the overlay states look the way they do. The rules
 themselves are in `CLAUDE.md`.
 
-## `show_help` is a `bool`, not a `Mode`
+## Help is not a `Mode`
 
-Help only displays keys. It reads nothing, it decides nothing, and it takes no
-input of its own, so it does not need a state — a flag is the whole of it.
+Help draws over whatever mode is running and lists *that mode's* keys, so the
+mode has to stay alive underneath it. Turning help into a `Mode` would replace
+the thing it is describing.
 
-This holds only while help fits on one screen. Paginating it would give it
-arrow keys and an Esc of its own, and at that point it becomes a `Mode` like
-any other overlay. That is a decision to make deliberately, not to drift into.
+It used to be a bare `bool` on the argument that it takes no input of its own.
+That stopped being true when it grew a scroll: it now has an offset, its own
+key table, and keys that mean something different from the ones it is drawing.
+None of that makes it a mode. It is one flag with state, read before `mode` is
+looked at, and every key that it does not bind closes it.
+
+The scroll came from the box being sized to the terminal instead of to a
+constant. A fixed height is a guess at how tall the reader's terminal is, and
+`feat-config-keybindings` will make the number of rows the user's to decide
+anyway — no constant can be right about either.
 
 ## The key bar is curated, not truncated
 
@@ -28,8 +36,43 @@ move.
 ## At most one overlay
 
 No stack. An overlay draws a `Clear` and takes the screen; when it closes,
-what is underneath is a pane, always. A stack would need a rule for what each
-key means at each depth, and nothing here has ever wanted one.
+what is underneath is a pane, always.
+
+The reason is not keys. "The topmost overlay takes every key" would be a
+complete rule and would cost nothing. The reason is that *cancelling can name
+its destination*: four places in `App` write `self.mode = Mode::Browse`, and
+they can only do that because there is nowhere else to land. A stack turns each
+of them into a pop and takes that knowledge away from them.
+
+Nothing has ever wanted the stack. The case that would want it is a dialog that
+has to open a dialog, and `feat-overwrite-on-transfer` is where to expect it.
+
+## Globals
+
+A global is a key that works in every mode. `GLOBAL_KEYS` is one table, tried
+before the mode's own, and F1 is the only entry.
+
+It is one table rather than a help entry in each of the four, because four
+copies of one key drift and because the modes that read text cannot carry it at
+all: `?` in a prompt is a character being typed. That is also why the key is a
+function key. Nothing printable can be global while any mode reads text.
+
+What a global needs and `validate` cannot give is a check **across** tables: no
+mode may bind a global key, since it would never see it. `validate` compares
+entries inside one table, so this is a second test, over every table there is.
+
+Two things follow from being global rather than modal. The keybar draws the
+hint into every mode's row, so the bar of a dialog is now measured beside it
+against the same 80 columns. And the help overlay lists the globals under the
+mode's own keys — it claims to list every key working right now, and the key
+that opened it is one of those.
+
+The overlay resolves its own keys before the globals, so F1 closes what F1
+opened rather than reopening it.
+
+`Esc` is the next global anyone will reach for, and it is the one that will
+hurt: `ClearMarks` in Browse, `Cancel` in all three overlays. Making it global
+means taking it away from marks first.
 
 ## `DialogMsg` never becomes an `Action`
 
@@ -37,3 +80,17 @@ A dialog's messages describe moving around inside the dialog. Only its
 *result* leaves. Letting `DialogMsg` widen into `Action` would put dialog
 navigation into the same table as file operations, and then every key handler
 would have to know which of the two it was looking at.
+
+## Asking and doing are two things
+
+`Action::Delete` opens the confirmation; `ConfirmTarget::Delete` performs it.
+The split looks like a workaround for having no overlay stack, and the rule
+used to say so, but it isn't one: whatever the overlays do, the answer to a
+confirmation has to dispatch something that does *not* ask again, or the
+dialog reopens forever.
+
+What matters is which of the two halves a key can reach. `Mode::Input` had it
+right first — `InputTarget` is its own type, so no key resolves to "rename this
+tab, skipping the prompt". `Mode::Confirm` carried an `Action`, and the only
+thing keeping `QuitAnyway` off a key was that nobody had written the binding.
+`feat-config-keybindings` would have handed that binding to the user.
