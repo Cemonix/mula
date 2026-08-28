@@ -71,8 +71,8 @@ mod keybar_tests {
     use super::*;
     use ratatui::crossterm::event::KeyCode;
 
-    use crate::keys::{BROWSE_KEYS, find};
-    use crate::{action::Action, ui::dialog::Dialog, ui::finder::Finder, ui::prompt::Prompt};
+    use crate::keys::{BROWSE_KEYS, GLOBAL_KEYS, GlobalMsg, find};
+    use crate::{ui::dialog::Dialog, ui::finder::Finder, ui::help, ui::prompt::Prompt};
 
     /// The narrowest terminal the bar is curated against.
     const COLUMNS: u16 = 80;
@@ -90,9 +90,9 @@ mod keybar_tests {
     }
 
     fn help_width() -> u16 {
-        let key = find(BROWSE_KEYS, |a| matches!(a, Action::ShowHelp))
-            .expect("browse keys reach the help overlay");
-        key.key.to_span().width() as u16 + Span::raw(Keybar::<Action>::HELP_LABEL).width() as u16
+        let key = find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
+            .expect("the globals reach the help overlay");
+        key.key.to_span().width() as u16 + Span::raw(Keybar::<()>::HELP_LABEL).width() as u16
     }
 
     /// The bar is curated rather than truncated: an entry that does not fit
@@ -105,12 +105,16 @@ mod keybar_tests {
         assert!(width <= COLUMNS, "the browse bar takes {width} columns");
     }
 
+    /// Every mode draws the help hint into its row, so every mode's bar is
+    /// measured beside it. The help overlay is the exception: its own key
+    /// closes it, so it draws no hint.
     #[test]
     fn every_overlay_bar_fits_eighty_columns() {
         for (name, width) in [
-            ("dialog", bar_width(Dialog::DIALOG_KEYS)),
-            ("prompt", bar_width(Prompt::PROMPT_KEYS)),
-            ("finder", bar_width(Finder::FIND_KEYS)),
+            ("dialog", bar_width(Dialog::DIALOG_KEYS) + help_width()),
+            ("prompt", bar_width(Prompt::PROMPT_KEYS) + help_width()),
+            ("finder", bar_width(Finder::FIND_KEYS) + help_width()),
+            ("help", bar_width(help::HELP_KEYS)),
         ] {
             assert!(width <= COLUMNS, "the {name} bar takes {width} columns");
         }

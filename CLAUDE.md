@@ -15,10 +15,10 @@ rationale worth keeping puts it there, not here.
 ## Architecture
 
 - One key table per focus, generating three things: key→message translation,
-  the bottom bar, and `?` help. Single source, so they can't drift.
+  the bottom bar, and the F1 help. Single source, so they can't drift.
 - `Mode` owns the overlay: a dialog is a state, not a field on `App`.
-- No vim-like modes for the user. Modality must be visible (bottom bar, `?`).
-  Total Commander style keys (F5/F6/F8), not mnemonics.
+- No vim-like modes for the user. Modality must be visible (bottom bar, F1).
+  Total Commander style keys (F1/F5/F6/F8), not mnemonics.
 
 ## Comments
 
@@ -63,17 +63,29 @@ is open again, not broken.
   `Result` or swallowing the case.
 
 **Keys/overlays**
-- At most one overlay, no stack. **Holds while** nothing needs to open an
-  overlay over another one; paginated help is the case that would end it.
+- At most one overlay, no stack. **Holds while** no dialog needs to open a
+  dialog — "overwrite this file?" inside a running transfer is the case that
+  would end it. Help is not that case: it draws over a mode and describes it,
+  so the mode stays alive underneath and nothing is stacked.
 - `DialogMsg` never becomes an `Action`; only the result leaves the dialog.
-- Key bar is curated, not truncated: a fixed set fitting 80 columns, rest under
-  `?`. Guard with a test over summed `Span::width()`, never against a constant
-  of our own.
+- Key bar is curated, not truncated: a fixed set fitting 80 columns beside the
+  help hint every mode draws, rest under F1. Guard with a test over summed
+  `Span::width()`, never against a constant of our own.
+- An overlay is sized to the terminal and scrolls, never to a constant of ours.
+  Guard against 80x24 — the smallest that counts — by walking the whole table
+  and asserting every entry can be reached.
+- A key working in every mode lives in `GLOBAL_KEYS`, not in each table.
+  Resolved before the mode's, so it needs the invariant `validate` cannot give:
+  no mode may bind a global key. Nothing printable can be global while a mode
+  reads text, which is why help is F1.
 
 **Marks/operations**
-- `pending` is never an action that opens a dialog: `Action::Delete` opens,
-  `Action::DeleteMarked` performs. This follows from there being no overlay
-  stack; it goes when that goes.
+- Asking and doing are two things, and only the asking half is an `Action`.
+  `Action::Delete` opens the dialog; `ConfirmTarget::Delete` carries it out and
+  no key table can name it. Same shape as `InputTarget`. This does not come
+  from there being no overlay stack — a confirmation needs a terminal step
+  whatever the overlays do — it comes from a key never being allowed to reach
+  past the question.
 - Nothing non-derivable goes in the InfoBar: it must be computable from `App`
   and true while the state lasts. A one-off event is a toast.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
@@ -129,8 +141,12 @@ is open again, not broken.
   `Display` on `KeyBinding` adds prefixes — never print `key.code` alone.
 - `KeyModifiers::KEYPAD` doesn't exist in this crossterm version; `SUPER`,
   `HYPER`, `META` do.
-- Capital letters carry `SHIFT` — bind `plain(Char('d')).shift()`, never
-  `Char('D')` directly.
+- Capital letters carry `SHIFT` *and* arrive uppercase — bind
+  `plain(Char('D')).shift()`, never `Char('D')` on its own and never
+  `Char('d')).shift()`. crossterm's `char_code_to_event` sets `SHIFT` from
+  `c.is_uppercase()` and leaves the letter as typed. **Holds while** we don't
+  push the Kitty keyboard flags: with alternate keys reported, crossterm moves
+  the shifted char into the code and clears `SHIFT` again.
 - Terminals add bits; `matches` masks through `RELEVANT`. Debug a dead key by
   logging the `KeyEvent` at `debug` (`logs/mula.log`).
 - A terminal with its own tabs claims tab-switching keys (WezTerm:
@@ -160,3 +176,6 @@ is open again, not broken.
 - `Paragraph::line_count` needs the `unstable-rendered-line-info` feature; we
   don't use it. A widget that sizes its own box wraps text itself instead of
   handing `Wrap` to `Paragraph` — same function feeds measurement and drawing.
+- `ListState::select_last` stores `usize::MAX` and waits for a render to cut it
+  down. Anything reading the selection earlier in the pass — the preview does —
+  finds no entry there. Work the index out from the listing instead.
