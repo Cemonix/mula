@@ -25,6 +25,7 @@ use crate::{
         worker::{Health, Worker},
     },
     keys::{self, KeyBinding},
+    open::{self, Handover, Opener},
     ui::{
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
@@ -134,6 +135,15 @@ pub enum InputTarget {
     RenameTab,
 }
 
+/// A file an action asked to have opened, waiting for the pass of the loop it
+/// was asked in to end. Handing the terminal over needs the terminal, and only
+/// `run` holds it.
+#[derive(Debug)]
+struct Opening {
+    opener: Opener,
+    path: Arc<Path>,
+}
+
 /// Where the marks a queued job took came from, so the items that fail can be
 /// put back even after the user has switched tabs or panels.
 #[derive(Debug)]
@@ -193,6 +203,9 @@ pub struct App {
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
     progress: Option<Progress>,
+    /// What the loop is to hand the terminal over for, or `None` when nothing
+    /// asked.
+    opening: Option<Opening>,
     queued_marks: Vec<QueuedMarks>,
     /// Turns once per pass of the loop and drives the spinner. Nothing else
     /// reads it, so wrapping is harmless.
@@ -237,6 +250,7 @@ impl App {
             preview_placement: None,
             surface: Surface::new(capabilities),
             progress: None,
+            opening: None,
             queued_marks: Vec::new(),
             tick: 0,
             exit: false,
@@ -270,6 +284,9 @@ impl App {
             // something else.
             self.sync_preview();
             self.collect_from_previewer();
+            // Last of the pass, so a file asked for anywhere in it is opened
+            // before the next frame is drawn.
+            self.open_pending(terminal)?;
             self.toasts.retain(|toast| !toast.is_expired());
             self.tick = self.tick.wrapping_add(1);
         }
@@ -585,6 +602,7 @@ impl App {
                 .get_focused_pane_mut()
                 .change_directory()
                 .map_err(AppError::from),
+            Action::Open(opener) => self.open_selected(opener),
             Action::NewTab => {
                 if let Ok(new_tab) = Tab::new(String::from("New Tab")) {
                     self.get_focused_tabs_mut().add_tab(new_tab);
@@ -618,6 +636,58 @@ impl App {
             VerticalDir::Up => self.get_focused_pane_mut().select_prev(),
             VerticalDir::Down => self.get_focused_pane_mut().select_next(),
         }
+    }
+
+    /// Puts down the entry under the cursor for `opener`, to be handed over at
+    /// the end of the pass.
+    ///
+    /// A directory is turned away on its listed kind, which costs no read. A
+    /// symlink is let through: what it points at is known only once it is
+    /// followed, and the program doing the opening is what follows it.
+    fn open_selected(&mut self, opener: Opener) -> Result<(), AppError> {
+        let entry = self.get_focused_pane().selected_entry()?;
+        let (kind, path) = (entry.kind, Arc::clone(&entry.path));
+
+        if matches!(kind, DirEntryKind::Directory | DirEntryKind::Parent) {
+            self.notify(ToastLevel::Warning, "That is a directory", None);
+            return Ok(());
+        }
+
+        self.opening = Some(Opening { opener, path });
+        Ok(())
+    }
+
+    /// Hands the terminal over when an action asked for it, and turns what came
+    /// of the program into a toast.
+    ///
+    /// The error that leaves here is the terminal's own and ends the loop:
+    /// there is nothing left to draw on. A program that would not start, or
+    /// that started and complained, is news for the user rather than the end of
+    /// the app.
+    fn open_pending(&mut self, terminal: &mut DefaultTerminal) -> Result<(), AppError> {
+        let Some(opening) = self.opening.take() else {
+            return Ok(());
+        };
+
+        let program = opening.opener.program();
+        match open::hand_over(terminal, &mut self.surface, &program, &opening.path)? {
+            Handover::Exited(status) if status.success() => (),
+            // A program killed by a signal has no code of its own. Ctrl-C in a
+            // program that reads keys the plain way is the ordinary way here.
+            Handover::Exited(status) => match status.code() {
+                Some(code) => self.notify(
+                    ToastLevel::Warning,
+                    format!("{program} exited with {code}"),
+                    None,
+                ),
+                None => self.notify(ToastLevel::Warning, format!("{program} was killed"), None),
+            },
+            Handover::NotStarted(e) => {
+                self.notify(ToastLevel::Error, format!("{program}: {e}"), None)
+            }
+        }
+
+        Ok(())
     }
 
     fn handle_confirm_key(&mut self, key: KeyEvent) {

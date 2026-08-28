@@ -7,7 +7,8 @@ never committed. This file and `docs/` are what stay, so nothing durable goes
 in a task file.
 
 `docs/` holds the reasoning behind the rules below, one file per subsystem:
-`background-io.md`, `preview.md`, `keys-overlays.md`, `marks-operations.md`.
+`background-io.md`, `preview.md`, `keys-overlays.md`, `marks-operations.md`,
+`opening.md`.
 Read the one covering what you are about to change. A rule that acquires a
 rationale worth keeping puts it there, not here.
 
@@ -79,6 +80,16 @@ is open again, not broken.
   errors, so a partial failure can say "Deleted 3 of 5".
 - Confirmation dialogs open on `Choice::No`.
 
+**Opening**
+- The action writes down what to open; the loop hands the terminal over, once
+  per pass. Only `run` holds the terminal.
+- Nothing reaches a shell. `$EDITOR` splits on whitespace and the path is one
+  element of `argv`.
+- Paths handed to another program are absolute. **Holds while** listings grow
+  from `env::current_dir()`; a relative one could reach a program as an option.
+- Mula ignores SIGINT/SIGQUIT while another program owns the terminal, and
+  `pre_exec` puts both back to their default in that program.
+
 **Background I/O**
 - All `fs::` access goes behind one boundary.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
@@ -136,6 +147,9 @@ is open again, not broken.
 - Only changed cells are written out. Driving the real binary in a pty and
   reading the tail shows nothing once the frame settles — capture across the
   change, not after it.
+- `Terminal::clear` asks the terminal where its cursor is — a query answered on
+  the same standard input the keys arrive on. `Terminal::resize` resets the
+  back buffer too and costs no round trip.
 - `Paragraph::line_count` needs the `unstable-rendered-line-info` feature; we
   don't use it. A widget that sizes its own box wraps text itself instead of
   handing `Wrap` to `Paragraph` — same function feeds measurement and drawing.

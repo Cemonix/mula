@@ -1,5 +1,6 @@
 use crate::{
     fs::ops::TransferOp,
+    open::Opener,
     ui::tab::{MarkOp, ToggleDirection},
 };
 
@@ -18,6 +19,7 @@ pub enum Action {
     ToggleSide,
     MoveCursor(VerticalDir),
     OpenSelected,
+    Open(Opener),
     ToggleMark,
     ToggleTab(ToggleDirection),
     MarkAndMove { op: MarkOp, nav_dir: VerticalDir },

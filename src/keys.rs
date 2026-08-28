@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::{
     action::{Action, VerticalDir},
     fs::ops::TransferOp,
+    open::Opener,
     ui::tab::{MarkOp, ToggleDirection},
 };
 
@@ -139,7 +140,7 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
     Binding {
         key: KeyBinding::plain(KeyCode::Char(' ')),
         msg: Action::ToggleMark,
-        bar: Some("Mark"),
+        bar: None,
         help: "Marks or unmarks the item under the cursor",
     },
     Binding {
@@ -192,15 +193,15 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(3)),
-        msg: Action::ToggleQuickView,
-        bar: None,
-        help: "Shows what is under the cursor in the other panel",
+        msg: Action::Open(Opener::View),
+        bar: Some("View"),
+        help: "Opens the file under the cursor in $PAGER",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(4)),
-        msg: Action::Find,
-        bar: None,
-        help: "Searches the tree below this panel for a name",
+        msg: Action::Open(Opener::Edit),
+        bar: Some("Edit"),
+        help: "Opens the file under the cursor in $EDITOR",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::F(5)),
@@ -235,6 +236,18 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         msg: Action::CancelJob,
         bar: None,
         help: "Stops the running operation",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Char('v')),
+        msg: Action::ToggleQuickView,
+        bar: None,
+        help: "Shows what is under the cursor in the other panel",
+    },
+    Binding {
+        key: KeyBinding::plain(KeyCode::Char('/')),
+        msg: Action::Find,
+        bar: None,
+        help: "Searches the tree below this panel for a name",
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Char('t')),
