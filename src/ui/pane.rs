@@ -14,7 +14,7 @@ use crate::{
         directory::{DirEntry, Directory},
         listing::{Kind, Listed},
     },
-    ui::icon::Icon,
+    ui::{self, icon::Icon},
 };
 
 #[derive(Error, Debug)]
@@ -303,11 +303,8 @@ impl Pane {
 
         let list = List::new(self.directory.entries().iter().map(|entry| {
             // Every row, the parent included, is labelled by the last component
-            // of its path. The filesystem root has none, so it labels itself.
-            let label = match entry.path.file_name() {
-                Some(name) => name.to_string_lossy().to_string(),
-                None => entry.path.to_string_lossy().to_string(),
-            };
+            // of its path.
+            let label = ui::name_of(&entry.path);
             let icon = Icon::icon_for(entry);
             let marked = selected_items.contains(&entry.path);
             let item = ListItem::new(Line::from(vec![

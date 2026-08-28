@@ -17,7 +17,7 @@ use thiserror::Error;
 use crate::{
     action::{Action, ListEnd, VerticalDir},
     fs::{
-        directory::DirEntryKind,
+        directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
         listing::Kind,
@@ -29,6 +29,7 @@ use crate::{
     keys::{self, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
     ui::{
+        self,
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
         graphics::{
@@ -440,8 +441,11 @@ impl App {
             self.preview_placement = None;
         }
 
-        if let Mode::Confirm { dialog, .. } = &self.mode {
-            frame.render_widget(dialog, frame.area());
+        if let Mode::Confirm { dialog, .. } = &mut self.mode {
+            // The cursor is read before the widget is handed over, since
+            // drawing it takes the overlay by mutable reference.
+            let area = frame.area();
+            frame.render_widget(dialog, area);
         }
 
         if let Mode::Input { prompt, .. } = &self.mode {
@@ -809,6 +813,7 @@ impl App {
 
         match msg {
             DialogMsg::Toggle => dialog.toggle(),
+            DialogMsg::Scroll(dir) => dialog.scroll(dir),
             DialogMsg::Cancel => self.mode = Mode::Browse,
             DialogMsg::Confirm => {
                 let choice = dialog.choice();
@@ -1039,15 +1044,30 @@ impl App {
         Ok(())
     }
 
+    /// Asks before deleting, naming every item rather than counting them: the
+    /// marks may have been made in a directory the cursor has since left, and
+    /// a count cannot be checked against what the reader remembers marking.
+    ///
+    /// The names are ordered the way the panel orders them, so the list reads
+    /// as the listing it was marked in.
     fn confirm_delete(&mut self) -> Result<(), AppError> {
-        let tab = self.get_focused_tabs().active_tab();
-        if tab.get_selected_items().is_empty() {
+        let marked = self.get_focused_tabs().active_tab().get_selected_items();
+        if marked.is_empty() {
             self.notify(ToastLevel::Warning, "Nothing is marked", None);
             return Ok(());
         }
-        let count = tab.get_selected_items().len();
+
+        let mut paths: Vec<&Arc<Path>> = marked.iter().collect();
+        paths.sort_by(|a, b| directory::compare_file_names(a, b));
+        let names: Vec<String> = paths.iter().map(|path| ui::name_of(path)).collect();
+
+        let message = match names.len() {
+            1 => String::from("Permanently delete this item?"),
+            count => format!("Permanently delete these {count} items?"),
+        };
+
         self.mode = Mode::Confirm {
-            dialog: Dialog::new("Delete", format!("Delete {count} selected item(s)?")),
+            dialog: Dialog::new("Delete", message).listing(names),
             pending: ConfirmTarget::Delete,
         };
         Ok(())

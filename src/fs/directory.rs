@@ -110,7 +110,7 @@ fn compare_entries(a: &DirEntry, b: &DirEntry) -> Ordering {
 /// out equal. A name that is not valid UTF-8 is compared as `to_string_lossy`
 /// renders it, every invalid byte standing in as U+FFFD. A path with no file
 /// name counts as empty.
-fn compare_file_names(a: &Path, b: &Path) -> Ordering {
+pub(crate) fn compare_file_names(a: &Path, b: &Path) -> Ordering {
     let a = a.file_name().unwrap_or_default().to_string_lossy();
     let b = b.file_name().unwrap_or_default().to_string_lossy();
 
