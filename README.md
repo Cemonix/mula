@@ -19,7 +19,9 @@ its own marks, and can be renamed so a long path is one word on the tab bar.
 **Marks, then an operation.** `Space` marks the item under the cursor;
 `Shift+Up`/`Shift+Down` mark and move in one keystroke, `Alt+Up`/`Alt+Down`
 unmark the same way, and `Esc` clears the panel. F5, F6 and F8 then act on
-everything marked.
+everything marked. Delete names every item it is about to remove rather than
+counting them — marks can be made in a directory you have since left, and a
+count is not something you can check against what you remember marking.
 
 **Size and date, by default.** A listing shows the name, the size and the
 modification time — the three things you open two panels side by side to
@@ -99,7 +101,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `F3` / `F4` | Open in `$PAGER` / `$EDITOR` |
 | `F5` / `F6` | Copy / move the marked items into the other panel |
 | `F7` | Create a file, or a folder if the name ends with `/` |
-| `F8` | Delete the marked items, asking first |
+| `F8` | Delete the marked items, naming each one first |
 | `F9` | Cancel the running operation |
 | `v` | Quick View in the opposite panel |
 | `c` | Drop a listing column, and bring them all back from the name alone |
@@ -123,7 +125,8 @@ Keys are not configurable yet.
 | `$VISUAL`, `$EDITOR` | What F4 and `Enter` on a text file open, in that order, falling back to `vi`. Split on whitespace, so `code -w` works; nothing reaches a shell. |
 | `$PAGER` | What F3 opens, falling back to `less`. |
 | `$TZ` | Which zone the date column is drawn in, as everywhere else on the system. |
-| `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Logs go to `logs/mula.log` under the directory Mula was started in; with `RUST_LOG` unset, nothing is written at all. |
+| `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it: a file manager is run from every directory there is, and one that logs by default leaves a trail of them behind. |
+| `XDG_STATE_HOME` | Where the log goes, under `mula/`. Unset, that is `~/Library/Logs/mula` on macOS and `~/.local/state/mula` elsewhere. |
 
 ## Not there yet
 

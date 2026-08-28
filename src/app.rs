@@ -30,6 +30,7 @@ use crate::{
     open::{self, Handover, Launch, Opener, Program},
     ui::{
         self,
+        columns::Columns,
         dialog::{Choice, Dialog, DialogMsg},
         finder::{FindMsg, Finder},
         graphics::{

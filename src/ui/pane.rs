@@ -336,10 +336,6 @@ impl Pane {
         let row_width = usize::from(inner_area.width).saturating_sub(Self::HIGHLIGHT.len());
 
         let list = List::new(self.directory.entries().iter().map(|entry| {
-            // Every row, the parent included, is labelled by the last component
-            // of its path.
-            let label = ui::name_of(&entry.path);
-            let icon = Icon::icon_for(entry);
             let marked = selected_items.contains(&entry.path);
             let item = ListItem::new(Self::row(entry, marked, columns, row_width));
             if marked {
@@ -367,11 +363,8 @@ impl Pane {
     /// columns of the rows below it somewhere else.
     fn row(entry: &DirEntry, marked: bool, columns: Columns, row_width: usize) -> Line<'static> {
         // Every row, the parent included, is labelled by the last component of
-        // its path. The filesystem root has none, so it labels itself.
-        let label = match entry.path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => entry.path.to_string_lossy().to_string(),
-        };
+        // its path.
+        let label = ui::name_of(&entry.path);
         let icon = Icon::icon_for(entry);
         let icon = Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color));
 
