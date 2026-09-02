@@ -1,0 +1,59 @@
+# Mula's browse keys, written out at their defaults.
+#
+# Copy this to ~/.config/mula/config.toml and keep only the lines you want to
+# change — anything the file leaves out keeps the key it has, so a config of
+# three lines is a perfectly good config.
+#
+# Each action takes one key, a list of keys, or an empty list to leave it
+# unreachable:
+#
+#     transfer.copy = ["F5", "y"]   # copy on y as well as F5
+#     entry.delete  = "d"           # delete on d, and no longer on F8
+#     tab.close     = []            # nothing closes a tab
+#
+# Key names are the ones F1 prints. Ctrl+, Alt+ and Shift+ go in front, in that
+# order; a capital letter carries Shift whether the name says so or not.
+#
+# Two actions cannot share a key, and none may take F1 — it is resolved ahead
+# of these and would never arrive. Mula says so at startup and keeps the
+# defaults rather than starting on keys you did not mean.
+
+[keys.browse]
+
+cursor.up = "Up"
+cursor.down = "Down"
+cursor.first = "g"
+cursor.last = "Shift+G"
+
+panel.toggle = "Tab"
+panel.parent = "Backspace"
+panel.find = "/"
+
+entry.open = "Enter"
+entry.rename = "F2"
+entry.view = "F3"
+entry.edit = "F4"
+entry.create = "F7"
+entry.delete = "F8"
+
+mark.toggle = "Space"
+mark.up = "Shift+Up"
+mark.down = "Shift+Down"
+mark.clear = "Esc"
+unmark.up = "Alt+Up"
+unmark.down = "Alt+Down"
+
+transfer.copy = "F5"
+transfer.move = "F6"
+
+tab.new = "t"
+tab.close = "w"
+tab.rename = "r"
+tab.previous = "["
+tab.next = "]"
+
+view.quick = "v"
+view.columns = "c"
+
+job.cancel = "F9"
+app.quit = "q"

@@ -202,6 +202,41 @@ mod config_tests {
         )
     }
 
+    const EXAMPLE: &str = include_str!("../config.example.toml");
+
+    /// The example is what a user starts from, so it has to name everything
+    /// they could want to move. Equality alone would not catch an action left
+    /// out of it: an unmentioned action keeps its default key, which is what
+    /// the example claims to be showing.
+    #[test]
+    fn the_example_config_names_every_action() {
+        for entry in BROWSE_ACTIONS {
+            assert!(
+                EXAMPLE.contains(&format!("\n{} = ", entry.name)),
+                "{} is not in config.example.toml",
+                entry.name
+            );
+        }
+    }
+
+    /// What the example says the defaults are is what they are. This is also
+    /// the one test that runs the parser over the file a user is handed, rather
+    /// than over a string written to suit it.
+    #[test]
+    fn the_example_config_is_the_defaults_written_out() {
+        let listed = |table: &[Binding<Action>]| {
+            table
+                .iter()
+                .map(|b| (b.key.to_string(), b.bar, b.help))
+                .collect::<Vec<_>>()
+        };
+
+        let example = built(EXAMPLE).unwrap();
+        let defaults = keys::table(BROWSE_ACTIONS, |_| None);
+
+        assert_eq!(listed(&example), listed(&defaults));
+    }
+
     #[test]
     fn an_empty_config_is_the_default_table() {
         let table = built("").unwrap();

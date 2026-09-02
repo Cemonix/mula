@@ -56,6 +56,15 @@ hands the file to the system opener, detached, so a picture viewer neither
 freezes Mula nor writes over the frame. F3 and F4 are the named exceptions —
 you asked for `$PAGER` or `$EDITOR`, so nothing is sniffed.
 
+**A collision is one question for the whole batch.** A transfer moves
+everything that lands on a free name, then asks once about the rest —
+overwrite, skip, or keep both under a new name. It asks afterwards rather than
+during, because nothing is forbidden while a job runs and a question arriving
+mid-copy would land on a dialog you opened yourself. Directories merge instead
+of replacing each other, so copying a folder onto one of the same name never
+takes the files that were only in the destination, and a batch can never
+overwrite what it has just written itself.
+
 **Nothing blocks.** Directory reads, tree walks, previews and the file
 operations all run off the drawing thread. A copy of 4 GB does not stop you
 navigating, and it reports progress and a summary — "3 of 5 copied, 1 skipped"
@@ -119,8 +128,16 @@ reads text has a key table of its own, so they are free here.
 ## Configuration
 
 `~/.config/mula/config.toml` (or `$XDG_CONFIG_HOME/mula/config.toml`) rebinds
-the browse keys. A config names an *action* and gives it the keys that should
-reach it — one key, a list of them, or an empty list to leave it unreachable:
+the browse keys. Mula never writes it for you; nothing is created and nothing
+changes until you put one there.
+
+[`config.example.toml`](config.example.toml) in this repository is every action
+written out at the key it already has — copy it over and keep the lines you
+want to change. A test holds it to the defaults, so it cannot quietly stop
+being true.
+
+A config names an *action* and gives it the keys that should reach it — one
+key, a list of them, or an empty list to leave it unreachable:
 
 ```toml
 [keys.browse]
@@ -182,10 +199,6 @@ and the arrows, which are not keys anyone needs to move.
 - **Settings in the config file.** It rebinds keys and nothing else yet; the
   column choice and the file icons are still decided in the running app and
   forgotten on exit.
-- **Overwrite prompts during a transfer.** A target that already exists is
-  refused rather than asked about, so copying into a directory that holds the
-  file already reports a failure instead of updating it. Nothing can be lost
-  this way, which is why it has been allowed to wait.
 
 ## Contributing
 
