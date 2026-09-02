@@ -193,6 +193,21 @@ impl Tab {
         Ok(())
     }
 
+    /// Marks every entry the pane is showing, leaving the parent alone the way
+    /// [`Tab::apply_mark`] does.
+    ///
+    /// What is on screen, not what the directory holds: a filter narrows the
+    /// view, and marking through it would take names the user cannot see.
+    pub fn mark_visible(&mut self) {
+        let visible: Vec<Arc<Path>> = self
+            .pane
+            .visible_entries()
+            .filter(|entry| entry.kind != DirEntryKind::Parent)
+            .map(|entry| Arc::clone(&entry.path))
+            .collect();
+        self.selected_items.extend(visible);
+    }
+
     pub fn deselect_items(&mut self) {
         self.selected_items.clear();
     }
@@ -268,5 +283,106 @@ mod tab_list_tests {
         // Work queued from a tab outlives the tab, and this is how it finds
         // out: marks that fail have nowhere to go home to.
         assert!(tabs.tab_mut(closed).is_none());
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::*;
+
+    use crate::fs::{
+        directory::{Detail, DirEntry, Directory},
+        listing::Listed,
+    };
+
+    /// A tab standing on a listing of `names` under `/a`, prefixed with a
+    /// parent entry. Built through `listed` because that is the only way a
+    /// pane takes a directory.
+    fn tab_over(names: &[&str]) -> Tab {
+        let root: Arc<Path> = Arc::from(Path::new("/a"));
+        let mut entries = vec![DirEntry {
+            path: Arc::from(Path::new("/")),
+            kind: DirEntryKind::Parent,
+            meta: None,
+        }];
+        entries.extend(names.iter().map(|name| DirEntry {
+            path: Arc::from(root.join(name).as_path()),
+            kind: DirEntryKind::File,
+            meta: None,
+        }));
+
+        let mut tab = Tab::new(String::from("t")).unwrap();
+        tab.get_pane_mut()
+            .listed(Ok(Listed::Directory(Directory::new(
+                root,
+                entries,
+                Detail::NamesOnly,
+            ))))
+            .unwrap();
+        tab
+    }
+
+    fn marked_names(tab: &Tab) -> Vec<String> {
+        let mut names: Vec<String> = tab
+            .get_selected_items()
+            .iter()
+            .map(|path| crate::ui::name_of(path))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn marking_everything_takes_every_row_on_screen() {
+        let mut tab = tab_over(&["a", "b", "c"]);
+
+        tab.mark_visible();
+
+        assert_eq!(marked_names(&tab), ["a", "b", "c"]);
+    }
+
+    /// The parent is a way out of the directory, not an item in it. Marking it
+    /// would put the directory above into a batch that meant to take what is
+    /// inside this one.
+    #[test]
+    fn marking_everything_leaves_the_parent_alone() {
+        let mut tab = tab_over(&["a"]);
+
+        tab.mark_visible();
+
+        assert_eq!(marked_names(&tab), ["a"]);
+    }
+
+    /// The whole reason this exists: it is what the filter narrows down to
+    /// that gets marked, never what the listing behind it still holds.
+    #[test]
+    fn marking_everything_skips_what_the_view_is_hiding() {
+        let mut tab = tab_over(&["a", ".env", "b"]);
+
+        tab.mark_visible();
+
+        assert_eq!(marked_names(&tab), ["a", "b"]);
+    }
+
+    #[test]
+    fn marking_everything_twice_marks_each_item_once() {
+        let mut tab = tab_over(&["a", "b"]);
+
+        tab.mark_visible();
+        tab.mark_visible();
+
+        assert_eq!(marked_names(&tab), ["a", "b"]);
+    }
+
+    /// Marks made elsewhere are absolute paths and none of the view's
+    /// business, so marking what is on screen adds to them.
+    #[test]
+    fn marking_everything_keeps_the_marks_made_in_another_directory() {
+        let mut tab = tab_over(&["a"]);
+        tab.mark_paths([PathBuf::from("/elsewhere/x")]);
+
+        tab.mark_visible();
+
+        assert_eq!(marked_names(&tab), ["a", "x"]);
     }
 }

@@ -186,6 +186,13 @@ impl Pane {
         }
     }
 
+    /// The entries the view holds, in the order they are drawn. The parent is
+    /// among them; what may be marked is the caller's question, not the view's.
+    pub fn visible_entries(&self) -> impl Iterator<Item = &DirEntry> {
+        let entries = self.directory.entries();
+        self.view.iter().map(|&index| &entries[index])
+    }
+
     /// A pane with nothing in it, waiting for its first listing. `path` is what
     /// the border shows until that listing arrives.
     ///

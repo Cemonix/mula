@@ -719,6 +719,10 @@ impl App {
                 self.move_cursor(nav_dir);
                 Ok(())
             }
+            Action::MarkAll => {
+                self.get_focused_tabs_mut().active_tab_mut().mark_visible();
+                Ok(())
+            }
             Action::ClearMarks => {
                 self.get_focused_tabs_mut()
                     .active_tab_mut()
