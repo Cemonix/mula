@@ -48,9 +48,100 @@ The two denominators do not always agree, and that is deliberate: the summary
 counts items, while a transfer's progress bar fills by bytes. They reach their
 end at different moments because they are measuring different things.
 
+## A transfer flattens
+
+Marks are absolute and outlive a directory change, so one batch can hold items
+from several directories at once. `transfer_item` joins the destination with
+the item's own file name and nothing else, so every item lands directly in the
+target directory whatever it was nested in.
+
+Keeping the structure would need a root to keep it relative to, and there is
+none. Two marks in `A` and `A/sub` share `A`, but a mark put back from a failed
+batch can sit anywhere the user has been, and the common ancestor of those
+is `/`.
+
+What follows from it is that a batch can collide with itself: `A/x.txt` and
+`A/sub/x.txt` both want to land on `dest/x.txt`.
+
+## A collision is answered once, and the answer rides on the job
+
+Nothing is forbidden while a job runs — no modal busy state — so the user may
+have a dialog of their own open when a collision is met. A worker that could
+ask in flight would be the one thing in the app wanting two overlays at once.
+
+Asked before the batch or after it, the user is in Browse and it is an ordinary
+dialog. Before is still wrong: jobs run serially, and the jobs ahead change the
+destination between queueing and starting. An answer given at queue time is
+about a world that no longer holds by the time the job runs.
+
+So the job runs, transfers what does not collide, and brings the collisions
+back in its `Outcome`. The main loop asks, and a follow-up job carries the
+answer. That job takes its own snapshot when *it* starts, so a destination that
+changed again is met with a fresh question rather than a stale answer.
+
+## What may be overwritten is what was there when the job started
+
+The pre-walk that weighs the tree also records which destinations already
+exist, and only those may be overwritten. Anything appearing afterwards —
+including what the job itself has just written — is never overwritten, whatever
+the answer was.
+
+Without it a batch that flattens quietly eats its own output: `A/x.txt` and
+`A/sub/x.txt` both land on `dest/x.txt`, and "overwrite" would leave one file
+with no telling which.
+
+## Directories merge, they never replace
+
+Names are unique within a directory, so at each name there is exactly one pair
+— what the source has, and what the destination has or has not. Four cases and
+no more:
+
+| source | destination | |
+| --- | --- | --- |
+| anything | nothing | copy it, nothing to ask |
+| directory | directory | descend, and pair up a level down |
+| file | file | collision, the policy answers |
+| directory | file, or the reverse | collision that cannot be overwritten |
+
+Directory on directory is a descent. Written once for files, "overwrite" is
+`remove_recursive` and then a copy, and `remove_recursive` on a directory is
+`remove_dir_all`: it takes the files that were only in the destination, which
+the user was never shown. Merging cannot be assembled out of two steps the user
+could take on their own; replacing can — delete, then copy.
+
+A symlink in the destination is a collision rather than a descent, which is
+what `symlink_metadata` is for: descending into a symlinked directory writes
+outside the tree it was pointed at.
+
+A type mismatch is never overwritten even under "overwrite". The user answered
+about files standing where files stand, not about a directory taking the place
+of a file.
+
+## Nothing is asked when nothing is at stake
+
+Two directories of the same name whose contents do not clash merge in silence.
+Nothing is overwritten and nothing is lost, so there is no question to put.
+Asking anyway only teaches the user to press Enter without reading.
+
+## Keep both, rather than a name typed by hand
+
+Four answers — overwrite, skip, keep both, cancel — and each of them is a
+setting on the job that one button carries. A typed rename would be the only
+one needing a prompt, and one per colliding item at that; keep both answers the
+same need for a whole batch at once.
+
+It is also the only answer that touches nothing already there, so the existing
+cleanup of a partial copy is all the safety it needs.
+
+The number goes where `file_stem` and `extension` split the name, which is at
+the last dot: `notes.tar.gz` becomes `notes.tar(1).gz`. Every file manager
+without a table of double extensions does the same. A free number is found by
+*creating* — `File::create_new`, `fs::create_dir` — never by asking whether a
+name is free and then taking it.
+
 ## `pending` never opens a dialog
 
-`Action::Delete` opens the confirmation; `Action::DeleteMarked` performs it.
+`Action::Delete` opens the confirmation; `ConfirmTarget::Delete` performs it.
 If `pending` could itself be an action that opens a dialog, confirming one
 dialog could open another, and there is no stack to hold them.
 

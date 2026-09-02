@@ -91,6 +91,21 @@ is open again, not broken.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
   errors, so a partial failure can say "Deleted 3 of 5".
 - Confirmation dialogs open on `Choice::No`.
+- A transfer flattens: every item lands under its own name, whatever it was
+  nested in. **Holds while** marks are absolute and may come from any
+  directory, which leaves no root to keep a structure relative to.
+- A collision is answered once per batch and the answer rides on the job as a
+  setting. Never asked in flight — nothing is forbidden while a job runs, so
+  that is the one question that could land on a dialog the user opened. Never
+  asked at queue time either: the jobs ahead move the destination first.
+- What a job may overwrite is what existed when it started, taken in its own
+  pre-walk. What the job itself wrote is never overwritten, whatever was
+  answered — a flattened batch can collide with itself.
+- Directory on directory is a descent, never an overwrite; a type mismatch and
+  a symlink in the destination are collisions. `remove_recursive` never stands
+  behind "overwrite".
+- Nothing is asked when nothing is at stake: a merge with no clashing leaf runs
+  in silence.
 
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once
@@ -122,6 +137,9 @@ is open again, not broken.
   "listing" role.
 - A pane keeps its listing while the next one is read, and asks for it once per
   pass of the loop rather than from the action that moved it.
+- A refresh keeps the cursor on the path it stands on, falling back to the
+  index when that entry is gone. Only a refresh can: a pane sent somewhere else
+  has no path to keep.
 - A job owns a snapshot of its paths, taken when it is queued, and never reads
   `App` again. Nothing is forbidden while a job runs: no modal busy state, no
   read-only mode.
