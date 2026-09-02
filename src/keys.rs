@@ -169,6 +169,12 @@ pub const BROWSE_KEYS: &[Binding<Action>] = &[
         help: "Enters a directory, or opens a file with what belongs to it",
     },
     Binding {
+        key: KeyBinding::plain(KeyCode::Backspace),
+        msg: Action::GoToParent,
+        bar: None,
+        help: "Leaves for the directory above, wherever the cursor is",
+    },
+    Binding {
         key: KeyBinding::plain(KeyCode::Char(' ')),
         msg: Action::ToggleMark,
         bar: None,

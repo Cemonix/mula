@@ -26,6 +26,7 @@ pub enum Action {
     MoveCursor(VerticalDir),
     MoveCursorTo(ListEnd),
     OpenSelected,
+    GoToParent,
     Open(Opener),
     ToggleMark,
     ToggleTab(ToggleDirection),
