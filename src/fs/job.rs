@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use crate::fs::ops::{MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp};
+use crate::fs::ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp};
 
 /// Rides along with a job and comes back on its outcome untouched. The worker
 /// never looks inside; it is only how the main loop recognises which of its
@@ -16,7 +16,7 @@ pub type JobTag = u64;
 #[derive(Clone, Copy, Debug)]
 pub enum JobKind {
     Transfer(TransferOp),
-    Delete,
+    Delete(DeleteMode),
     Mutate,
 }
 
@@ -36,6 +36,9 @@ pub enum Work {
     },
     Delete {
         items: Vec<PathBuf>,
+        /// Which deletion this is. Chosen by the key that asked and carried on
+        /// the job, never decided while it runs.
+        mode: DeleteMode,
     },
     Mutate(MutationOp),
 }
@@ -44,7 +47,7 @@ impl Work {
     pub fn kind(&self) -> JobKind {
         match self {
             Work::Transfer { op, .. } => JobKind::Transfer(*op),
-            Work::Delete { .. } => JobKind::Delete,
+            Work::Delete { mode, .. } => JobKind::Delete(*mode),
             Work::Mutate(_) => JobKind::Mutate,
         }
     }

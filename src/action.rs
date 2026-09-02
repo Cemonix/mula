@@ -1,5 +1,5 @@
 use crate::{
-    fs::ops::TransferOp,
+    fs::ops::{DeleteMode, TransferOp},
     open::Opener,
     ui::tab::{MarkOp, ToggleDirection},
 };
@@ -30,10 +30,17 @@ pub enum Action {
     Open(Opener),
     ToggleMark,
     ToggleTab(ToggleDirection),
-    MarkAndMove { op: MarkOp, nav_dir: VerticalDir },
+    MarkAndMove {
+        op: MarkOp,
+        nav_dir: VerticalDir,
+    },
     ClearMarks,
-    Transfer { op: TransferOp },
-    Delete,
+    Transfer {
+        op: TransferOp,
+    },
+    /// Opens the confirmation for one of the two deletions. Which one is
+    /// settled by the key, since only the asking half is an `Action`.
+    Delete(DeleteMode),
     Rename,
     CreateEntry,
     NewTab,

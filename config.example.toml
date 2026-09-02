@@ -35,6 +35,7 @@ entry.view = "F3"
 entry.edit = "F4"
 entry.create = "F7"
 entry.delete = "F8"
+entry.delete-permanent = "Shift+F8"
 
 mark.toggle = "Space"
 mark.up = "Shift+Up"

@@ -22,7 +22,7 @@ use crate::{
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
         listing::Kind,
-        ops::{MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
+        ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
         worker::{Health, Worker},
@@ -146,7 +146,7 @@ pub enum InputTarget {
 /// the halves that do not ask, and nothing that resolves a key can name them.
 #[derive(Debug, Clone)]
 pub enum ConfirmTarget {
-    Delete,
+    Delete(DeleteMode),
     Quit,
     /// Carry out the pairs a batch could not answer for, under the button the
     /// user pressed.
@@ -745,7 +745,7 @@ impl App {
                 Ok(())
             }
             Action::Transfer { op } => self.queue_transfer(op),
-            Action::Delete => self.confirm_delete(),
+            Action::Delete(mode) => self.confirm_delete(mode),
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
@@ -765,7 +765,7 @@ impl App {
     /// [`App::dispatch`] for the half that no longer asks.
     fn commit(&mut self, target: ConfirmTarget, choice: Choice) -> Result<(), AppError> {
         match target {
-            ConfirmTarget::Delete if choice == Choice::Yes => self.queue_delete(),
+            ConfirmTarget::Delete(mode) if choice == Choice::Yes => self.queue_delete(mode),
             ConfirmTarget::Quit if choice == Choice::Yes => {
                 self.exit = true;
                 Ok(())
@@ -784,7 +784,7 @@ impl App {
                 ),
                 None => Ok(()),
             },
-            ConfirmTarget::Delete | ConfirmTarget::Quit => Ok(()),
+            ConfirmTarget::Delete(_) | ConfirmTarget::Quit => Ok(()),
         }
     }
 
@@ -1134,7 +1134,7 @@ impl App {
         Ok(())
     }
 
-    fn queue_delete(&mut self) -> Result<(), AppError> {
+    fn queue_delete(&mut self, mode: DeleteMode) -> Result<(), AppError> {
         let side = self.focused_side;
         let (items, tab) = {
             let tab = self.get_focused_tabs_mut().active_tab_mut();
@@ -1153,7 +1153,7 @@ impl App {
             return Ok(());
         }
 
-        let tag = self.worker.queue(Work::Delete { items })?;
+        let tag = self.worker.queue(Work::Delete { items, mode })?;
         self.queued_marks.push(QueuedMarks { tag, side, tab });
         Ok(())
     }
@@ -1164,7 +1164,10 @@ impl App {
     ///
     /// The names are ordered the way the panel orders them, so the list reads
     /// as the listing it was marked in.
-    fn confirm_delete(&mut self) -> Result<(), AppError> {
+    /// The two deletions ask different questions, since only one of them can be
+    /// taken back. Both name every item rather than counting them: a mark can
+    /// have been made in a directory the user has since left.
+    fn confirm_delete(&mut self, mode: DeleteMode) -> Result<(), AppError> {
         let marked = self.get_focused_tabs().active_tab().get_selected_items();
         if marked.is_empty() {
             self.notify(ToastLevel::Warning, "Nothing is marked", None);
@@ -1175,14 +1178,24 @@ impl App {
         paths.sort_by(|a, b| directory::compare_file_names(a, b));
         let names: Vec<String> = paths.iter().map(|path| ui::name_of(path)).collect();
 
-        let message = match names.len() {
-            1 => String::from("Permanently delete this item?"),
-            count => format!("Permanently delete these {count} items?"),
+        let (title, message) = match (mode, names.len()) {
+            (DeleteMode::Trash, 1) => ("Delete", String::from("Move this item to the trash?")),
+            (DeleteMode::Trash, count) => {
+                ("Delete", format!("Move these {count} items to the trash?"))
+            }
+            (DeleteMode::Permanent, 1) => (
+                "Delete for good",
+                String::from("Permanently delete this item, without the trash?"),
+            ),
+            (DeleteMode::Permanent, count) => (
+                "Delete for good",
+                format!("Permanently delete these {count} items, without the trash?"),
+            ),
         };
 
         self.mode = Mode::Confirm {
-            dialog: Dialog::new("Delete", message).listing(names),
-            pending: ConfirmTarget::Delete,
+            dialog: Dialog::new(title, message).listing(names),
+            pending: ConfirmTarget::Delete(mode),
         };
         Ok(())
     }
@@ -1442,7 +1455,12 @@ impl App {
             JobKind::Transfer(TransferOp::Move) => {
                 self.notify_summary("moved", &outcome.summary, reason)
             }
-            JobKind::Delete => self.notify_summary("deleted", &outcome.summary, reason),
+            JobKind::Delete(DeleteMode::Trash) => {
+                self.notify_summary("moved to the trash", &outcome.summary, reason)
+            }
+            JobKind::Delete(DeleteMode::Permanent) => {
+                self.notify_summary("deleted", &outcome.summary, reason)
+            }
             // A single mutation has nothing worth counting: it either happened,
             // or the error itself is the whole report.
             JobKind::Mutate => {
