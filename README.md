@@ -38,11 +38,15 @@ above it, so nothing is read again to change what is on screen. The parent entry
 it is how you leave a directory whose own name begins with a dot.
 
 **Filter what is in front of you.** `f` narrows the listing to the names
-holding what you type, live, as you type it — no directory is read again,
-because the filter sits above the listing rather than inside the read. `Enter`
-keeps it, so `a` then F5 acts on exactly what is left; `Esc` drops it. It is a
-different question from `/`, which walks the tree below the panel to find
-something you cannot see, and takes you there.
+matching what you type, live, as you type it — no directory is read again,
+because the filter sits above the listing rather than inside the read. `*`
+stands for any run of characters and `?` for one, and a pattern with neither is
+read as if it had a star at each end: `log` finds `mula.log`, while `*.log`
+means the extension and leaves `logbook.txt` out. `Enter` keeps the filter, so
+`a` then F5 acts on exactly what is left; `Esc` drops it.
+
+It is a different question from `/`, which walks the tree below the panel to
+find something you cannot see, and takes you there.
 
 **Size and date, by default.** A listing shows the name, the size and the
 modification time — the three things you open two panels side by side to
