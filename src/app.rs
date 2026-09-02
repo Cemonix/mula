@@ -758,6 +758,10 @@ impl App {
                 self.columns = self.columns.next();
                 Ok(())
             }
+            Action::ToggleDotFiles => {
+                self.get_focused_pane_mut().toggle_dot_files();
+                Ok(())
+            }
         }
     }
 

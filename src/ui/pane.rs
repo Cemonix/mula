@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::{
     fs::{
-        directory::{Detail, DirEntry, Directory},
+        directory::{Detail, DirEntry, DirEntryKind, Directory},
         listing::{Kind, Listed},
     },
     ui::{self, columns::Columns, icon::Icon},
@@ -68,9 +68,46 @@ enum Awaited {
     Sent(Request),
 }
 
+/// Whether the listing shows the entries whose names begin with a dot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DotFiles {
+    #[default]
+    Hidden,
+    Shown,
+}
+
+impl DotFiles {
+    pub fn toggle(self) -> Self {
+        match self {
+            DotFiles::Hidden => DotFiles::Shown,
+            DotFiles::Shown => DotFiles::Hidden,
+        }
+    }
+}
+
+/// Whether the view holds `entry`.
+///
+/// The parent is always in it. Its path is the directory above, whose own name
+/// may well begin with a dot: standing in `~/.config/mula` would otherwise
+/// filter away the only way out.
+fn shown(entry: &DirEntry, dot_files: DotFiles) -> bool {
+    entry.kind == DirEntryKind::Parent
+        || dot_files == DotFiles::Shown
+        || !ui::name_of(&entry.path).starts_with('.')
+}
+
 #[derive(Debug)]
 pub struct Pane {
     directory: Directory,
+    /// Indices into the listing, in the order they are drawn: what the filter
+    /// leaves. The cursor is an index into this and never into the listing, so
+    /// everything that counts entries counts what is on screen.
+    ///
+    /// A layer rather than a filter applied while reading, because what is
+    /// filtered is about to be typed at: a criterion that changes per keystroke
+    /// cannot cost a read of the disk each time.
+    view: Vec<usize>,
+    dot_files: DotFiles,
     list_state: ListState,
     awaited: Awaited,
 }
@@ -100,10 +137,52 @@ impl Pane {
     /// Opens `directory` with its first entry selected, or with nothing
     /// selected while the listing is empty.
     pub fn new(directory: Directory) -> Self {
-        Self {
-            list_state: ListState::default().with_selected(clamped(None, directory.len())),
+        let mut pane = Self {
             directory,
+            view: Vec::new(),
+            dot_files: DotFiles::default(),
+            list_state: ListState::default(),
             awaited: Awaited::Nothing,
+        };
+        pane.rebuild_view();
+        pane
+    }
+
+    /// Builds the view from the listing and the filter, and fits the cursor to
+    /// it.
+    ///
+    /// Every change to either goes through here. That is what keeps the
+    /// selection an index the view actually holds — `select_prev` and
+    /// `select_next` wrap with `%`, and a cursor left on an emptied view would
+    /// divide by zero.
+    fn rebuild_view(&mut self) {
+        let dot_files = self.dot_files;
+        self.view = self
+            .directory
+            .entries()
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| shown(entry, dot_files))
+            .map(|(index, _)| index)
+            .collect();
+
+        let selected = clamped(self.list_state.selected(), self.view.len());
+        self.list_state.select(selected);
+    }
+
+    /// Shows or hides the entries whose names begin with a dot, keeping the
+    /// cursor on the entry it stands on when the new view still holds it.
+    pub fn toggle_dot_files(&mut self) {
+        let standing = self
+            .selected_entry()
+            .ok()
+            .map(|entry| Arc::clone(&entry.path));
+
+        self.dot_files = self.dot_files.toggle();
+        self.rebuild_view();
+
+        if let Some(path) = standing {
+            self.select_path(&path);
         }
     }
 
@@ -130,7 +209,8 @@ impl Pane {
     pub fn selected_entry(&self) -> Result<&DirEntry, PaneError> {
         self.list_state
             .selected()
-            .and_then(|idx| self.directory.get(idx))
+            .and_then(|idx| self.view.get(idx))
+            .and_then(|&index| self.directory.get(index))
             .ok_or(PaneError::NoItemSelected)
     }
 
@@ -161,7 +241,7 @@ impl Pane {
     /// Does nothing while nothing is selected.
     pub fn select_prev(&mut self) {
         if let Some(idx) = self.list_state.selected() {
-            let len = self.directory.len();
+            let len = self.view.len();
             self.list_state.select(Some((idx + len - 1) % len));
         }
     }
@@ -170,7 +250,7 @@ impl Pane {
     /// Does nothing while nothing is selected.
     pub fn select_next(&mut self) {
         if let Some(idx) = self.list_state.selected() {
-            let len = self.directory.len();
+            let len = self.view.len();
             self.list_state.select(Some((idx + 1) % len));
         }
     }
@@ -187,7 +267,7 @@ impl Pane {
     /// selected.
     pub fn select_last(&mut self) {
         if self.list_state.selected().is_some() {
-            self.list_state.select(Some(self.directory.len() - 1));
+            self.list_state.select(Some(self.view.len() - 1));
         }
     }
 
@@ -304,20 +384,18 @@ impl Pane {
 
     /// Replaces the listing and brings the selection back into range.
     fn set_directory(&mut self, directory: Directory) {
-        let selected = clamped(self.list_state.selected(), directory.len());
         self.directory = directory;
-        self.list_state.select(selected);
+        self.rebuild_view();
     }
 
     /// Puts the cursor on `path` when the listing holds it, and leaves it
     /// where `set_directory` put it when it does not.
     fn select_path(&mut self, path: &Path) {
-        if let Some(index) = self
-            .directory
-            .entries()
-            .iter()
-            .position(|entry| entry.path.as_ref() == path)
-        {
+        if let Some(index) = self.view.iter().position(|&index| {
+            self.directory
+                .get(index)
+                .is_some_and(|e| e.path.as_ref() == path)
+        }) {
             self.list_state.select(Some(index));
         }
     }
@@ -349,7 +427,13 @@ impl Pane {
         // beside every row, whether the cursor is on it or not.
         let row_width = usize::from(inner_area.width).saturating_sub(Self::HIGHLIGHT.len());
 
-        let list = List::new(self.directory.entries().iter().map(|entry| {
+        // Indexed rather than looked up: the view is rebuilt from these very
+        // entries every time either changes, and `set_directory` is the one
+        // place the listing is replaced. A row silently missing would be worse
+        // than the panic that says the two came apart.
+        let entries = self.directory.entries();
+        let list = List::new(self.view.iter().map(|&index| {
+            let entry = &entries[index];
             let marked = selected_items.contains(&entry.path);
             let item = ListItem::new(Self::row(entry, marked, columns, row_width));
             if marked {
@@ -466,6 +550,163 @@ mod pane_tests {
             })
             .collect();
         Directory::new(root, entries, Detail::NamesOnly)
+    }
+
+    /// Builds a listing under `path` whose entries are `names`, prefixed with
+    /// a parent entry pointing at `parent`.
+    fn directory_under(path: &str, parent: &str, names: &[&str]) -> Directory {
+        let root: Arc<Path> = Arc::from(Path::new(path));
+        let mut entries = vec![DirEntry {
+            path: Arc::from(Path::new(parent)),
+            kind: DirEntryKind::Parent,
+            meta: None,
+        }];
+        entries.extend(names.iter().map(|name| DirEntry {
+            path: Arc::from(root.join(name).as_path()),
+            kind: DirEntryKind::File,
+            meta: None,
+        }));
+        Directory::new(root, entries, Detail::NamesOnly)
+    }
+
+    fn visible(pane: &Pane) -> Vec<String> {
+        pane.view
+            .iter()
+            .map(|&index| ui::name_of(&pane.directory.entries()[index].path))
+            .collect()
+    }
+
+    #[test]
+    fn a_listing_hides_the_names_that_begin_with_a_dot() {
+        let pane = Pane::new(directory_of("/a", &["a", ".env", "b", ".git"]));
+
+        assert_eq!(visible(&pane), ["a", "b"]);
+    }
+
+    /// The view keeps the listing's own order, which `Directory::new` has
+    /// already sorted; showing an entry again puts it back where it sorts.
+    #[test]
+    fn showing_them_puts_them_back_where_they_sort() {
+        let mut pane = Pane::new(directory_of("/a", &["a", ".env", "b", ".git"]));
+        pane.toggle_dot_files();
+
+        assert_eq!(visible(&pane), [".env", ".git", "a", "b"]);
+    }
+
+    /// The parent's path is the directory above, whose own name may begin with
+    /// a dot. Filtering it away would leave no way out of `~/.config/mula`.
+    #[test]
+    fn the_parent_stays_even_when_the_directory_above_is_itself_hidden() {
+        let pane = Pane::new(directory_under(
+            "/home/u/.config/mula",
+            "/home/u/.config",
+            &[],
+        ));
+
+        assert_eq!(visible(&pane), [".config"]);
+    }
+
+    /// `select_prev` and `select_next` wrap with `%`, so a cursor left behind
+    /// on an emptied view would divide by zero.
+    #[test]
+    fn hiding_everything_leaves_no_cursor_and_moving_it_does_nothing() {
+        let mut pane = Pane::new(directory_of("/a", &[".env", ".git"]));
+
+        assert_eq!(visible(&pane), Vec::<String>::new());
+        assert_eq!(pane.list_state.selected(), None);
+
+        pane.select_next();
+        pane.select_prev();
+        pane.select_first();
+        pane.select_last();
+
+        assert_eq!(pane.list_state.selected(), None);
+    }
+
+    #[test]
+    fn the_cursor_walks_only_what_is_on_screen() {
+        let mut pane = Pane::new(directory_of("/a", &["a", ".env", "b"]));
+        pane.select_next();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/b")
+        );
+    }
+
+    #[test]
+    fn showing_them_keeps_the_cursor_on_the_entry_it_stood_on() {
+        let mut pane = Pane::new(directory_of("/a", &["a", ".env", "b"]));
+        pane.select_next();
+
+        pane.toggle_dot_files();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/b")
+        );
+    }
+
+    /// The entry the cursor stood on is the one being hidden, so there is no
+    /// path to come back to and the index is all that is left.
+    /// The entry the cursor stood on is the one being hidden, so there is no
+    /// path to come back to and the index is all that is left.
+    #[test]
+    fn hiding_the_entry_under_the_cursor_falls_back_to_the_index() {
+        let mut pane = Pane::new(directory_of("/a", &["a", ".env", "b"]));
+        pane.toggle_dot_files();
+        pane.select_prev();
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/.env")
+        );
+
+        pane.toggle_dot_files();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/a")
+        );
+    }
+
+    /// A new listing is filtered by whatever the pane was already set to.
+    #[test]
+    fn a_listing_that_arrives_later_is_filtered_the_same_way() {
+        let mut pane = Pane::new(directory_of("/a", &["a"]));
+        pane.refresh();
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(directory_of(
+            "/a",
+            &["a", ".env", "b"],
+        ))))
+        .unwrap();
+
+        assert_eq!(visible(&pane), ["a", "b"]);
+    }
+
+    /// What `visible` reads off the view is what reaches the screen: the list
+    /// is built from the view rather than from the listing behind it.
+    #[test]
+    fn only_what_the_view_holds_is_drawn() {
+        let mut pane = Pane::new(directory_of("/a", &["visible.txt", ".hidden"]));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 4)).unwrap();
+
+        terminal
+            .draw(|frame| pane.render(frame, frame.area(), &HashSet::new(), true, Columns::Name))
+            .unwrap();
+
+        let rows: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(rows.contains("visible.txt"), "the rows were {rows:?}");
+        assert!(!rows.contains(".hidden"), "the rows were {rows:?}");
     }
 
     #[test]

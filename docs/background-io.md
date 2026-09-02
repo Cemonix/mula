@@ -153,3 +153,46 @@ anyway.
 Synchronously this was almost invisible. The answer now comes from the reading
 thread, so there is a real gap between the question and the redraw, and the
 jump is on screen long enough to see.
+
+## The filter sits above the read, not inside it
+
+A pane holds the listing it was given and a *view*: the indices of the entries
+that are on screen, in the order they are drawn. The cursor is an index into
+the view and never into the listing, so everything that counts entries counts
+what the user can see.
+
+Filtering while reading would have been simpler, and for hidden files alone it
+would have been right — the toggle is pressed rarely, and one read of the disk
+per press is a fair price for not touching index arithmetic at all. It is the
+search that cannot pay it. Search is typed, letter by letter, and a read of the
+disk per keystroke is not a thing to build. Since both criteria narrow the same
+listing, writing the filter at read time would have meant writing it twice and
+deleting one.
+
+The two differ in how long they live, not in how they work. Hidden files are a
+setting the pane keeps; a search is thrown away. Both come out as the same list
+of indices, so no combination of them has anywhere to disagree.
+
+`rebuild_view` is the only place either the listing or the criteria change, and
+it refits the cursor every time. That is what the funnel is for: `select_prev`
+and `select_next` wrap with `%`, and a cursor left behind on a view that just
+emptied divides by zero. Nothing today can empty a view that has a parent
+entry in it, which is a reason to be careful rather than a reason to relax —
+the parent is only there when there is a directory above.
+
+The parent is exempt from filtering for its own reason. Its path is the
+directory above, whose name may itself begin with a dot, and hiding it would
+take away the only way out of `~/.config/mula`.
+
+Showing dot files gets no InfoBar segment. It would have passed the rule as it
+stood — derivable from `App`, true while the state lasts — but the bar carries
+what the screen does not already say, and dot files being shown is a thing you
+are looking at. The columns have no segment for the same reason. A search will
+want one: a filtered listing looks exactly like a short directory, and what is
+being filtered on appears nowhere.
+
+Marks need nothing from any of this. They are absolute paths in a set on the
+`Tab`, so an entry filtered off the screen stays marked, the same way a mark
+survives leaving its directory. What that does mean is that F5 acts on marks
+the filter is hiding — consistent with how marks already behave, but closer
+together in time, and the delete dialog naming every item is what catches it.

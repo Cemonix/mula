@@ -55,6 +55,7 @@ tab.next = "]"
 
 view.quick = "v"
 view.columns = "c"
+view.dotfiles = "."
 
 job.cancel = "F9"
 app.quit = "q"
