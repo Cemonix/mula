@@ -13,6 +13,12 @@ Built with [ratatui](https://ratatui.rs) and
 move always go from the panel you are in to the one you are not, so "where does
 this land" is never a question the dialog has to ask.
 
+**Deleting means the trash.** F8 moves the marked items to the system trash;
+Shift+F8 deletes them for good. The trash is never a fallback — if it cannot be
+reached, that is a failure to delete and is reported as one, because "if the
+trash fails, delete for real" takes the safety net away at exactly the moment
+someone was relying on it.
+
 **Tabs in each panel.** Every tab keeps its own directory, its own cursor and
 its own marks, and can be renamed so a long path is one word on the tab bar.
 
@@ -110,7 +116,8 @@ where you are standing. These are the ones worth knowing before you start.
 | `F3` / `F4` | Open in `$PAGER` / `$EDITOR` |
 | `F5` / `F6` | Copy / move the marked items into the other panel |
 | `F7` | Create a file, or a folder if the name ends with `/` |
-| `F8` | Delete the marked items, naming each one first |
+| `F8` | Move the marked items to the trash, naming each one first |
+| `Shift+F8` | Delete them for good, without the trash |
 | `F9` | Cancel the running operation |
 | `v` | Quick View in the opposite panel |
 | `c` | Drop a listing column, and bring them all back from the name alone |
@@ -164,7 +171,7 @@ The actions:
 | `cursor.up` `cursor.down` `cursor.first` `cursor.last` | Move the cursor |
 | `panel.toggle` `panel.parent` `panel.find` | Focus the other panel, leave for the one above, find by name |
 | `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
-| `entry.rename` `entry.create` `entry.delete` | Rename, create, delete |
+| `entry.rename` `entry.create` `entry.delete` `entry.delete-permanent` | Rename, create, delete to the trash, delete for good |
 | `mark.toggle` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark and move, clear the panel |
 | `unmark.up` `unmark.down` | Unmark and move |
 | `transfer.copy` `transfer.move` | Copy or move the marked items across |

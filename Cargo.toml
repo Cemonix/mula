@@ -15,3 +15,6 @@ toml = { version = "1.1.4", default-features = false, features = ["parse", "serd
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+trash = "5.2.6"

@@ -189,10 +189,16 @@ filename reaching another language as source text is the shape that rule exists
 to prevent, and Mula has nothing else like it. The crate does escape, and
 percent-encodes a path that is not UTF-8.
 
-So the choice is a permission dialog over the terminal and a filename inside an
-AppleScript, or a trash the system cannot put back. It is a real fork and it
-belongs to whoever writes the feature. Linux is uninteresting by comparison:
-`freedesktop.rs` writes `.trashinfo` and restoring is the desktop's business.
+`NsFileManager` is what `move_to_trash` sets. A permission the user has to
+grant before F8 works — and which fails the key outright if they decline —
+costs more than "Put Back" is worth, and macOS only records Put Back for the
+first item a process trashes anyway, so what is given up is closer to nothing
+than the table suggests. The file lands in the trash either way; dragging it
+out is unaffected. It is one line in `move_to_trash` if that judgement turns
+out wrong.
+
+Linux is uninteresting by comparison: `freedesktop.rs` writes `.trashinfo` and
+restoring is the desktop's business.
 
 ## The question waits for a free screen
 

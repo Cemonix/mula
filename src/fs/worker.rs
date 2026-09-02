@@ -13,7 +13,8 @@ use std::{
 use crate::fs::{
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
     ops::{
-        MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp, Unfinished, tree_size,
+        MutationError, MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp,
+        Unfinished, tree_size,
     },
 };
 
@@ -232,7 +233,11 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             summary
         }
 
-        Work::Delete { items } => {
+        // One item at a time for both modes. `trash::delete_all` would leave a
+        // single entry in the trash on macOS and Windows instead of one per
+        // item, but it takes the whole batch in one call — and with it the
+        // cancellation check between items and the counts a summary is made of.
+        Work::Delete { items, mode } => {
             reporter.begin(items.len(), Measure::Items);
 
             let mut summary = ProcessedSummary::new(items.len());
@@ -242,12 +247,19 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                 }
                 reporter.start_item(&item, 0);
 
-                match (MutationOp::Delete { path: item.clone() }).execute() {
+                match (MutationOp::Delete {
+                    path: item.clone(),
+                    mode,
+                })
+                .execute()
+                {
                     Ok(()) => summary.process(),
                     // A mark can outlive the file it points at: marks survive a
                     // directory change, and a retried batch walks over what the
                     // first pass removed.
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => summary.skip(),
+                    Err(MutationError::IO(e)) if e.kind() == io::ErrorKind::NotFound => {
+                        summary.skip()
+                    }
                     Err(e) => {
                         tracing::error!(path = ?item, error = %e, "delete failed");
                         reason = Some(e.to_string());
@@ -420,7 +432,7 @@ impl Observer for Reporter<'_> {
 #[cfg(test)]
 mod worker_tests {
     use super::*;
-    use crate::fs::ops::OnCollision;
+    use crate::fs::ops::{DeleteMode, OnCollision};
     use std::{fs, path::PathBuf};
 
     use crate::fs::{job::JobKind, temp_tree::TempTree};
@@ -446,7 +458,12 @@ mod worker_tests {
         let items = vec![t.make_file("a.txt", "a"), t.make_file("b.txt", "b")];
 
         let mut worker = Worker::start();
-        worker.queue(Work::Delete { items }).unwrap();
+        worker
+            .queue(Work::Delete {
+                items,
+                mode: DeleteMode::Permanent,
+            })
+            .unwrap();
         let finished = settle(&mut worker);
 
         assert_eq!(finished.len(), 1);
@@ -463,11 +480,13 @@ mod worker_tests {
         let first = worker
             .queue(Work::Delete {
                 items: vec![t.make_file("a.txt", "a")],
+                mode: DeleteMode::Permanent,
             })
             .unwrap();
         let second = worker
             .queue(Work::Delete {
                 items: vec![t.make_file("b.txt", "b")],
+                mode: DeleteMode::Permanent,
             })
             .unwrap();
 
@@ -680,6 +699,7 @@ mod worker_tests {
         worker
             .queue(Work::Delete {
                 items: vec![t.make_file("a.txt", "a")],
+                mode: DeleteMode::Permanent,
             })
             .unwrap();
         settle(&mut worker);
@@ -690,6 +710,7 @@ mod worker_tests {
         worker
             .queue(Work::Delete {
                 items: vec![t.make_file("b.txt", "b")],
+                mode: DeleteMode::Permanent,
             })
             .unwrap();
         let finished = settle(&mut worker);

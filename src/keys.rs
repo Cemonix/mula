@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, ListEnd, VerticalDir},
-    fs::ops::TransferOp,
+    fs::ops::{DeleteMode, TransferOp},
     open::Opener,
     ui::tab::{MarkOp, ToggleDirection},
 };
@@ -424,10 +424,17 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     },
     Entry {
         name: "entry.delete",
-        action: Action::Delete,
+        action: Action::Delete(DeleteMode::Trash),
         keys: &[KeyBinding::plain(KeyCode::F(8))],
         bar: Some("Delete"),
-        help: "Deletes marked items, asking first",
+        help: "Moves marked items to the trash, asking first",
+    },
+    Entry {
+        name: "entry.delete-permanent",
+        action: Action::Delete(DeleteMode::Permanent),
+        keys: &[KeyBinding::plain(KeyCode::F(8)).shift()],
+        bar: None,
+        help: "Deletes marked items for good, without the trash, asking first",
     },
     Entry {
         name: "job.cancel",
@@ -595,7 +602,7 @@ mod keys_tests {
         let table = [
             Binding {
                 key: KeyBinding::plain(KeyCode::F(8)),
-                msg: Action::Delete,
+                msg: Action::Delete(DeleteMode::Trash),
                 bar: None,
                 help: "first",
             },

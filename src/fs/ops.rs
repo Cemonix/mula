@@ -5,6 +5,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use thiserror::Error;
+
 /// How a batch of filesystem operations ended. `total` is the size of the
 /// batch, fixed when it starts, so a run that stops early is still reported
 /// against what it set out to do. A batch never fails as a whole: an item that
@@ -443,18 +445,75 @@ fn pairing(from: &Path, to: &Path) -> io::Result<Pairing> {
 
 #[derive(Debug)]
 pub enum MutationOp {
-    Delete { path: PathBuf },
+    Delete { path: PathBuf, mode: DeleteMode },
     Rename { path: PathBuf, new_name: String },
     CreateDir { parent: PathBuf, name: String },
     CreateFile { parent: PathBuf, name: String },
 }
 
+/// Which of the two deletions a batch is.
+///
+/// Never a fallback for the other: failing to reach the trash is a failure to
+/// delete, and is reported as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeleteMode {
+    Trash,
+    Permanent,
+}
+
+/// What a mutation can fail with. `trash::Error` is not an `io::Error`, so one
+/// type cannot carry both.
+#[derive(Error, Debug)]
+pub enum MutationError {
+    #[error(transparent)]
+    IO(#[from] io::Error),
+    #[error("could not move {} to the trash: {source}", path.display())]
+    Trash { path: PathBuf, source: trash::Error },
+}
+
+/// Moves one path to the system trash.
+///
+/// On macOS the crate defaults to driving Finder over `osascript`, which wants
+/// an automation permission the user has to grant and builds its script by
+/// putting the path into AppleScript source. `NsFileManager` is the same call
+/// without either. What it costs is Finder's "Put Back", which macOS only
+/// records for the first item a process trashes anyway; the file is in the
+/// trash under both, and dragging it out is unaffected.
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        context.delete(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path)
+    }
+}
+
 impl MutationOp {
-    pub fn execute(&self) -> io::Result<()> {
+    pub fn execute(&self) -> Result<(), MutationError> {
         match self {
-            MutationOp::Delete { path } => remove_recursive(path),
+            MutationOp::Delete { path, mode } => match mode {
+                DeleteMode::Permanent => Ok(remove_recursive(path)?),
+                DeleteMode::Trash => {
+                    // `trash::Error::CouldNotAccess` means "gone or forbidden"
+                    // without saying which, and a batch has to tell them apart:
+                    // a mark can outlive the file it points at. Asking the
+                    // filesystem first keeps that a `NotFound` the caller
+                    // already knows how to skip.
+                    path.symlink_metadata()?;
+                    move_to_trash(path).map_err(|source| MutationError::Trash {
+                        path: path.clone(),
+                        source,
+                    })
+                }
+            },
             MutationOp::Rename { path, new_name } => {
-                fs::rename(path, path.with_file_name(new_name))
+                Ok(fs::rename(path, path.with_file_name(new_name))?)
             }
             MutationOp::CreateDir { parent, name } => {
                 let path = parent.join(name);
@@ -462,16 +521,17 @@ impl MutationOp {
                     return Err(io::Error::new(
                         io::ErrorKind::AlreadyExists,
                         format!("{} already exists", path.display()),
-                    ));
+                    )
+                    .into());
                 }
-                fs::create_dir_all(path)
+                Ok(fs::create_dir_all(path)?)
             }
             MutationOp::CreateFile { parent, name } => {
                 let path = parent.join(name);
                 if let Some(dir) = path.parent() {
                     fs::create_dir_all(dir)?;
                 }
-                fs::File::create_new(path).map(|_| ())
+                Ok(fs::File::create_new(path).map(|_| ())?)
             }
         }
     }
@@ -1268,6 +1328,7 @@ mod ops_tests {
 
         MutationOp::Delete {
             path: t.at("src/file.txt"),
+            mode: DeleteMode::Permanent,
         }
         .execute()
         .unwrap();
@@ -1283,7 +1344,12 @@ mod ops_tests {
         let t = TempTree::new();
         t.make_dir(&t.at("src"));
 
-        MutationOp::Delete { path: t.at("src") }.execute().unwrap();
+        MutationOp::Delete {
+            path: t.at("src"),
+            mode: DeleteMode::Permanent,
+        }
+        .execute()
+        .unwrap();
 
         assert!(!t.at("src").exists(), "deleted directory must not exists");
     }
@@ -1296,7 +1362,12 @@ mod ops_tests {
         let link = t.at("src/link.txt");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        MutationOp::Delete { path: link.clone() }.execute().unwrap();
+        MutationOp::Delete {
+            path: link.clone(),
+            mode: DeleteMode::Permanent,
+        }
+        .execute()
+        .unwrap();
 
         assert!(
             link.symlink_metadata().is_err(),
@@ -1317,7 +1388,12 @@ mod ops_tests {
         let link = t.at("link");
         std::os::unix::fs::symlink(t.at("real"), &link).unwrap();
 
-        MutationOp::Delete { path: link.clone() }.execute().unwrap();
+        MutationOp::Delete {
+            path: link.clone(),
+            mode: DeleteMode::Permanent,
+        }
+        .execute()
+        .unwrap();
 
         assert!(
             link.symlink_metadata().is_err(),
@@ -1337,7 +1413,12 @@ mod ops_tests {
         let link = t.at("link");
         std::os::unix::fs::symlink(t.at("real"), &link).unwrap();
 
-        MutationOp::Delete { path: link.clone() }.execute().unwrap();
+        MutationOp::Delete {
+            path: link.clone(),
+            mode: DeleteMode::Permanent,
+        }
+        .execute()
+        .unwrap();
 
         assert!(
             link.symlink_metadata().is_err(),
@@ -1350,11 +1431,15 @@ mod ops_tests {
         let t = TempTree::new();
         let err = MutationOp::Delete {
             path: t.at("non_existing"),
+            mode: DeleteMode::Permanent,
         }
         .execute()
         .unwrap_err();
 
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(
+            matches!(&err, MutationError::IO(e) if e.kind() == io::ErrorKind::NotFound),
+            "the error was {err}"
+        );
     }
 
     #[test]
@@ -1398,7 +1483,10 @@ mod ops_tests {
         .execute()
         .unwrap_err();
 
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(
+            matches!(&err, MutationError::IO(e) if e.kind() == io::ErrorKind::AlreadyExists),
+            "the error was {err}"
+        );
     }
 
     #[test]
@@ -1442,7 +1530,10 @@ mod ops_tests {
         .execute()
         .unwrap_err();
 
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(
+            matches!(&err, MutationError::IO(e) if e.kind() == io::ErrorKind::AlreadyExists),
+            "the error was {err}"
+        );
         assert_eq!(
             fs::read_to_string(t.at("file.txt")).unwrap(),
             "original",
