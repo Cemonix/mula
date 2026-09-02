@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use thiserror::Error;
@@ -54,6 +54,19 @@ impl KeyBinding {
     }
 }
 
+/// The three codes crossterm spells differently on macOS (`Delete` for
+/// Backspace, `Fwd Del` for Delete, `Return` for Enter). One spelling has to
+/// serve both the help overlay and a config file, and a config file is carried
+/// between machines, so these are named here and the rest is left to crossterm.
+fn code_name(code: KeyCode, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match code {
+        KeyCode::Backspace => f.write_str("Backspace"),
+        KeyCode::Delete => f.write_str("Delete"),
+        KeyCode::Enter => f.write_str("Enter"),
+        code => write!(f, "{code}"),
+    }
+}
+
 impl fmt::Display for KeyBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.mods.contains(KeyModifiers::CONTROL) {
@@ -65,7 +78,93 @@ impl fmt::Display for KeyBinding {
         if self.mods.contains(KeyModifiers::SHIFT) {
             write!(f, "Shift+")?;
         }
-        write!(f, "{}", self.code)
+        code_name(self.code, f)
+    }
+}
+
+/// Strips one leading `Ctrl+`, `Alt+` or `Shift+`, or returns `None` when what
+/// comes before the first `+` is not a modifier.
+///
+/// Splitting the whole string on `+` would lose `+` itself as a key: `Ctrl++`
+/// is Ctrl and the plus sign, and stops here with `+` left over.
+fn strip_modifier(s: &str) -> Option<(KeyModifiers, &str)> {
+    let (head, rest) = s.split_once('+')?;
+    let modifier = match head.trim().to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => KeyModifiers::CONTROL,
+        "alt" | "opt" | "option" => KeyModifiers::ALT,
+        "shift" => KeyModifiers::SHIFT,
+        _ => return None,
+    };
+    Some((modifier, rest))
+}
+
+/// Reads a key name the way [`code_name`] writes one: case and inner spaces are
+/// ignored, so `Page Up`, `PageUp` and `pageup` are one key.
+fn parse_code(name: &str) -> Option<KeyCode> {
+    let mut chars = name.chars();
+    if let (Some(c), None) = (chars.next(), chars.next()) {
+        return Some(KeyCode::Char(c));
+    }
+
+    let flat: String = name
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+
+    if let Some(number) = flat.strip_prefix('f')
+        && let Ok(n) = number.parse::<u8>()
+    {
+        return Some(KeyCode::F(n));
+    }
+
+    Some(match flat.as_str() {
+        "backspace" => KeyCode::Backspace,
+        "delete" | "del" | "fwddel" => KeyCode::Delete,
+        "enter" | "return" => KeyCode::Enter,
+        "space" => KeyCode::Char(' '),
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        "tab" => KeyCode::Tab,
+        "backtab" => KeyCode::BackTab,
+        "insert" => KeyCode::Insert,
+        "esc" | "escape" => KeyCode::Esc,
+        _ => return None,
+    })
+}
+
+impl FromStr for KeyBinding {
+    type Err = BindingError;
+
+    /// Reads `Ctrl+Alt+Shift+<key>`, the shape [`Display`] writes.
+    ///
+    /// A capital letter carries `SHIFT` whether or not the name says so:
+    /// crossterm sets the bit from `is_uppercase` and leaves the letter as
+    /// typed, so `G` alone would otherwise be a binding no key event matches.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut mods = KeyModifiers::NONE;
+        let mut rest = s.trim();
+        while let Some((modifier, tail)) = strip_modifier(rest) {
+            mods |= modifier;
+            rest = tail;
+        }
+
+        let code = parse_code(rest.trim()).ok_or_else(|| BindingError::UnknownKey {
+            name: s.trim().to_string(),
+        })?;
+        if let KeyCode::Char(c) = code
+            && c.is_uppercase()
+        {
+            mods |= KeyModifiers::SHIFT;
+        }
+
+        Ok(Self { code, mods })
     }
 }
 
@@ -73,6 +172,8 @@ impl fmt::Display for KeyBinding {
 pub enum BindingError {
     #[error("{key} is bound more than once")]
     Duplicate { key: KeyBinding },
+    #[error("{name} is not the name of a key")]
+    UnknownKey { name: String },
 }
 
 pub struct Binding<T> {
@@ -357,8 +458,73 @@ mod keys_tests {
             },
         ];
 
-        let BindingError::Duplicate { key } = validate(&table).unwrap_err();
-        assert_eq!(key, KeyBinding::plain(KeyCode::F(8)));
+        let error = validate(&table).unwrap_err();
+        assert!(
+            matches!(error, BindingError::Duplicate { key } if key == KeyBinding::plain(KeyCode::F(8))),
+            "the error was {error}"
+        );
+    }
+
+    /// The bar, the help and the config file all spell a key the same way, so
+    /// every key in the tables has to survive being written out and read back.
+    /// A key that does not is one a user cannot name in their config.
+    #[test]
+    fn every_bound_key_round_trips_through_its_name() {
+        fn round_trip<T>(bindings: &[Binding<T>]) {
+            for binding in bindings {
+                let name = binding.key.to_string();
+                let parsed: KeyBinding = name.parse().unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert_eq!(parsed, binding.key, "{name} read back as {parsed}");
+            }
+        }
+
+        round_trip(BROWSE_KEYS);
+        round_trip(GLOBAL_KEYS);
+        round_trip(Dialog::DIALOG_KEYS);
+        round_trip(Prompt::PROMPT_KEYS);
+        round_trip(Finder::FIND_KEYS);
+        round_trip(help::HELP_KEYS);
+    }
+
+    #[test]
+    fn a_capital_letter_carries_shift_whether_the_name_says_so_or_not() {
+        let shifted = KeyBinding::plain(KeyCode::Char('G')).shift();
+
+        assert_eq!("G".parse::<KeyBinding>().unwrap(), shifted);
+        assert_eq!("Shift+G".parse::<KeyBinding>().unwrap(), shifted);
+    }
+
+    /// `+` is a key of its own, so the modifiers are stripped one prefix at a
+    /// time rather than by splitting the whole name.
+    #[test]
+    fn plus_is_a_key_and_not_only_a_separator() {
+        assert_eq!(
+            "Ctrl++".parse::<KeyBinding>().unwrap(),
+            KeyBinding::ctrl(KeyCode::Char('+'))
+        );
+        assert_eq!(
+            "+".parse::<KeyBinding>().unwrap(),
+            KeyBinding::plain(KeyCode::Char('+'))
+        );
+    }
+
+    #[test]
+    fn a_key_name_ignores_case_and_inner_spaces() {
+        let expected = KeyBinding::ctrl(KeyCode::PageUp);
+
+        for name in ["Ctrl+Page Up", "ctrl+pageup", "CTRL+PAGEUP"] {
+            assert_eq!(name.parse::<KeyBinding>().unwrap(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_names_itself_in_the_error() {
+        let error = "Ctrl+Wat".parse::<KeyBinding>().unwrap_err();
+
+        assert!(
+            matches!(&error, BindingError::UnknownKey { name } if name == "Ctrl+Wat"),
+            "the error was {error}"
+        );
     }
 
     #[test]
