@@ -33,6 +33,7 @@ use crate::{
         self,
         columns::Columns,
         dialog::{Choice, Dialog, DialogMsg},
+        filter::{Filter, FilterMsg},
         finder::{FindMsg, Finder},
         graphics::{
             capabilities::Capabilities,
@@ -99,6 +100,10 @@ pub enum Mode {
     Find {
         finder: Finder,
     },
+    /// Typing a filter. It draws no overlay — the whole point is watching the
+    /// listing narrow — so it is a mode only in the sense that the keys go
+    /// somewhere else.
+    Filter,
 }
 
 /// A filesystem mutation that still needs the name being typed.
@@ -567,6 +572,15 @@ impl App {
             .active_tab()
             .get_selected_items()
             .len();
+
+        // Drawn while the filter is being typed even before there is anything
+        // to show, since that is the only sign the keys have gone somewhere
+        // else; and afterwards for as long as the listing stays narrowed.
+        let filter = self.get_focused_pane().filter().text();
+        let filter = match (&self.mode, filter.is_empty()) {
+            (Mode::Filter, _) | (_, false) => Some(filter),
+            _ => None,
+        };
         let progress = self.progress.as_ref().map(|progress| ProgressView {
             ratio: progress.ratio(),
             current: &progress.current,
@@ -579,6 +593,7 @@ impl App {
                 .marked(marked)
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
+                .filter(filter)
                 .tick(self.tick),
             info_area,
         );
@@ -607,6 +622,10 @@ impl App {
                     Keybar::new(Finder::FIND_KEYS).help_key(self.help_key),
                     keys_area,
                 ),
+                Mode::Filter => frame.render_widget(
+                    Keybar::new(Filter::FILTER_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
             }
         }
 
@@ -625,6 +644,9 @@ impl App {
                 }
                 Mode::Find { .. } => {
                     frame.render_widget(Help::new(Finder::FIND_KEYS, globals, state), area);
+                }
+                Mode::Filter => {
+                    frame.render_widget(Help::new(Filter::FILTER_KEYS, globals, state), area);
                 }
             }
         }
@@ -670,6 +692,7 @@ impl App {
             Mode::Confirm { .. } => self.handle_confirm_key(key),
             Mode::Input { .. } => self.handle_input_key(key),
             Mode::Find { .. } => self.handle_find_key(key),
+            Mode::Filter => self.handle_filter_key(key),
             Mode::Browse => {
                 if let Some(action) = keys::resolve(&self.browse_keys, &key)
                     && let Err(e) = self.dispatch(action)
@@ -754,6 +777,13 @@ impl App {
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
             Action::Find => self.open_finder(),
+            Action::Filter => {
+                // A fresh filter every time, so Esc always lands back on the
+                // whole listing rather than on whatever was typed before.
+                self.get_focused_pane_mut().clear_filter();
+                self.mode = Mode::Filter;
+                Ok(())
+            }
             Action::ToggleQuickView => {
                 self.opposite = self.opposite.toggle();
                 Ok(())
@@ -923,6 +953,23 @@ impl App {
                     self.notify(ToastLevel::Error, e, None);
                 }
             }
+        }
+    }
+
+    /// Every printable key goes into the filter; the table holds only the two
+    /// that end it.
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        match keys::resolve(Filter::FILTER_KEYS, &key) {
+            Some(FilterMsg::Confirm) => self.mode = Mode::Browse,
+            Some(FilterMsg::Cancel) => {
+                self.get_focused_pane_mut().clear_filter();
+                self.mode = Mode::Browse;
+            }
+            None => match key.code {
+                KeyCode::Char(c) => self.get_focused_pane_mut().push_filter(c),
+                KeyCode::Backspace => self.get_focused_pane_mut().pop_filter(),
+                _ => (),
+            },
         }
     }
 

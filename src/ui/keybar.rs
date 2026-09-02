@@ -72,7 +72,9 @@ mod keybar_tests {
     use ratatui::crossterm::event::KeyCode;
 
     use crate::keys::{self, BROWSE_ACTIONS, GLOBAL_KEYS, GlobalMsg, find};
-    use crate::{ui::dialog::Dialog, ui::finder::Finder, ui::help, ui::prompt::Prompt};
+    use crate::{
+        ui::dialog::Dialog, ui::filter::Filter, ui::finder::Finder, ui::help, ui::prompt::Prompt,
+    };
 
     /// The narrowest terminal the bar is curated against.
     const COLUMNS: u16 = 80;
@@ -114,6 +116,7 @@ mod keybar_tests {
             ("dialog", bar_width(Dialog::DIALOG_KEYS) + help_width()),
             ("prompt", bar_width(Prompt::PROMPT_KEYS) + help_width()),
             ("finder", bar_width(Finder::FIND_KEYS) + help_width()),
+            ("filter", bar_width(Filter::FILTER_KEYS) + help_width()),
             ("help", bar_width(help::HELP_KEYS)),
         ] {
             assert!(width <= COLUMNS, "the {name} bar takes {width} columns");

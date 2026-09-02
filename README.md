@@ -35,6 +35,13 @@ begin with a dot, per panel. The listing is read whole and the filter sits
 above it, so nothing is read again to change what is on screen. The parent entry is never filtered away —
 it is how you leave a directory whose own name begins with a dot.
 
+**Filter what is in front of you.** `f` narrows the listing to the names
+holding what you type, live, as you type it — no directory is read again,
+because the filter sits above the listing rather than inside the read. `Enter`
+keeps it, so `a` then F5 acts on exactly what is left; `Esc` drops it. It is a
+different question from `/`, which walks the tree below the panel to find
+something you cannot see, and takes you there.
+
 **Size and date, by default.** A listing shows the name, the size and the
 modification time — the three things you open two panels side by side to
 compare. `c` drops a column when you would rather have the room, and brings
@@ -130,6 +137,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `c` | Drop a listing column, and bring them all back from the name alone |
 | `.` | Show or hide the entries whose names begin with a dot |
 | `/` | Find by name below this panel |
+| `f` | Narrow this listing to the names holding what you type |
 | `t` / `w` / `r` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
 | `q` | Quit |
@@ -177,7 +185,7 @@ The actions:
 | | |
 | --- | --- |
 | `cursor.up` `cursor.down` `cursor.first` `cursor.last` | Move the cursor |
-| `panel.toggle` `panel.parent` `panel.find` | Focus the other panel, leave for the one above, find by name |
+| `panel.toggle` `panel.parent` `panel.find` `panel.filter` | Focus the other panel, leave for the one above, find by name in the tree, narrow this listing |
 | `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
 | `entry.rename` `entry.create` `entry.delete` `entry.delete-permanent` | Rename, create, delete to the trash, delete for good |
 | `mark.toggle` `mark.all` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark everything shown, mark and move, clear the panel |

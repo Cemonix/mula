@@ -14,7 +14,7 @@ use crate::{
         directory::{Detail, DirEntry, DirEntryKind, Directory},
         listing::{Kind, Listed},
     },
-    ui::{self, columns::Columns, icon::Icon},
+    ui::{self, columns::Columns, filter::Filter, icon::Icon},
 };
 
 #[derive(Error, Debug)]
@@ -85,15 +85,18 @@ impl DotFiles {
     }
 }
 
-/// Whether the view holds `entry`.
+/// Whether the view holds `entry`, against both criteria at once.
 ///
-/// The parent is always in it. Its path is the directory above, whose own name
-/// may well begin with a dot: standing in `~/.config/mula` would otherwise
-/// filter away the only way out.
-fn shown(entry: &DirEntry, dot_files: DotFiles) -> bool {
-    entry.kind == DirEntryKind::Parent
-        || dot_files == DotFiles::Shown
-        || !ui::name_of(&entry.path).starts_with('.')
+/// The parent is exempt from either. Its path is the directory above, whose own
+/// name may well begin with a dot, and a filter narrow enough to exclude it
+/// would take the only way out of the directory with it.
+fn shown(entry: &DirEntry, dot_files: DotFiles, filter: &Filter) -> bool {
+    if entry.kind == DirEntryKind::Parent {
+        return true;
+    }
+
+    let name = ui::name_of(&entry.path);
+    (dot_files == DotFiles::Shown || !name.starts_with('.')) && filter.matches(&name)
 }
 
 #[derive(Debug)]
@@ -107,7 +110,11 @@ pub struct Pane {
     /// filtered is about to be typed at: a criterion that changes per keystroke
     /// cannot cost a read of the disk each time.
     view: Vec<usize>,
+    /// The two criteria the view is built from. They differ in how long they
+    /// live, not in how they work: `dot_files` is a setting the pane keeps,
+    /// and a filter is dropped the moment the pane goes somewhere else.
     dot_files: DotFiles,
+    filter: Filter,
     list_state: ListState,
     awaited: Awaited,
 }
@@ -141,6 +148,7 @@ impl Pane {
             directory,
             view: Vec::new(),
             dot_files: DotFiles::default(),
+            filter: Filter::default(),
             list_state: ListState::default(),
             awaited: Awaited::Nothing,
         };
@@ -157,12 +165,13 @@ impl Pane {
     /// divide by zero.
     fn rebuild_view(&mut self) {
         let dot_files = self.dot_files;
+        let filter = &self.filter;
         self.view = self
             .directory
             .entries()
             .iter()
             .enumerate()
-            .filter(|(_, entry)| shown(entry, dot_files))
+            .filter(|(_, entry)| shown(entry, dot_files, filter))
             .map(|(index, _)| index)
             .collect();
 
@@ -191,6 +200,28 @@ impl Pane {
     pub fn visible_entries(&self) -> impl Iterator<Item = &DirEntry> {
         let entries = self.directory.entries();
         self.view.iter().map(|&index| &entries[index])
+    }
+
+    /// Adds a character to the filter and narrows the view to what still
+    /// matches.
+    pub fn push_filter(&mut self, c: char) {
+        self.filter.push(c);
+        self.rebuild_view();
+    }
+
+    /// Takes the last character back off the filter, widening the view again.
+    pub fn pop_filter(&mut self) {
+        self.filter.pop();
+        self.rebuild_view();
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter = Filter::default();
+        self.rebuild_view();
+    }
+
+    pub fn filter(&self) -> &Filter {
+        &self.filter
     }
 
     /// A pane with nothing in it, waiting for its first listing. `path` is what
@@ -390,7 +421,17 @@ impl Pane {
     }
 
     /// Replaces the listing and brings the selection back into range.
+    /// Replaces the listing, dropping the filter when the pane has moved to a
+    /// different directory.
+    ///
+    /// A filter is about the names in front of you, so carrying it into the
+    /// next directory would open it already narrowed, on a word chosen for
+    /// somewhere else. A refresh reads the same path and keeps it: a background
+    /// job finishing is no reason to lose what was typed.
     fn set_directory(&mut self, directory: Directory) {
+        if directory.path() != self.directory.path() {
+            self.filter = Filter::default();
+        }
         self.directory = directory;
         self.rebuild_view();
     }
@@ -714,6 +755,131 @@ mod pane_tests {
 
         assert!(rows.contains("visible.txt"), "the rows were {rows:?}");
         assert!(!rows.contains(".hidden"), "the rows were {rows:?}");
+    }
+
+    fn typed(pane: &mut Pane, text: &str) {
+        for c in text.chars() {
+            pane.push_filter(c);
+        }
+    }
+
+    #[test]
+    fn a_filter_leaves_only_the_names_holding_it() {
+        let mut pane = Pane::new(directory_of("/a", &["mula.log", "notes.txt", "old.log"]));
+
+        typed(&mut pane, "log");
+
+        assert_eq!(visible(&pane), ["mula.log", "old.log"]);
+    }
+
+    /// Both criteria narrow the same view, so they compose without either
+    /// knowing about the other.
+    #[test]
+    fn a_filter_and_the_dot_files_narrow_the_same_view() {
+        let mut pane = Pane::new(directory_of(
+            "/a",
+            &[".hidden.log", "mula.log", "notes.txt"],
+        ));
+
+        typed(&mut pane, "log");
+        assert_eq!(visible(&pane), ["mula.log"]);
+
+        pane.toggle_dot_files();
+        assert_eq!(visible(&pane), [".hidden.log", "mula.log"]);
+    }
+
+    /// An empty result is an ordinary state for a filter rather than a corner
+    /// case, and the cursor has to survive it: `select_prev` and `select_next`
+    /// wrap with `%`.
+    #[test]
+    fn a_filter_matching_nothing_leaves_no_cursor_and_moving_it_does_nothing() {
+        let mut pane = Pane::new(directory_of("/a", &["one", "two"]));
+
+        typed(&mut pane, "zzz");
+
+        assert_eq!(visible(&pane), Vec::<String>::new());
+        assert_eq!(pane.list_state.selected(), None);
+
+        pane.select_next();
+        pane.select_prev();
+        pane.select_first();
+        pane.select_last();
+
+        assert_eq!(pane.list_state.selected(), None);
+    }
+
+    /// Typing past every match and then backspacing has to bring the listing
+    /// back, cursor and all.
+    #[test]
+    fn backspacing_out_of_an_empty_result_brings_the_listing_back() {
+        let mut pane = Pane::new(directory_of("/a", &["one", "two"]));
+        typed(&mut pane, "onezzz");
+        assert_eq!(pane.list_state.selected(), None);
+
+        for _ in 0..3 {
+            pane.pop_filter();
+        }
+
+        assert_eq!(visible(&pane), ["one"]);
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/one")
+        );
+    }
+
+    /// The parent is the way out, and a filter narrow enough to exclude it
+    /// would take that with it.
+    #[test]
+    fn a_filter_never_takes_away_the_parent() {
+        let mut pane = Pane::new(directory_under("/a/b", "/a", &["one"]));
+
+        typed(&mut pane, "zzz");
+
+        assert_eq!(visible(&pane), ["a"]);
+    }
+
+    /// A filter is about the names in front of you. Carrying it into the next
+    /// directory would open that one already narrowed on a word chosen
+    /// somewhere else.
+    #[test]
+    fn moving_to_another_directory_drops_the_filter() {
+        let mut pane = Pane::new(directory_of("/a", &["one", "two"]));
+        typed(&mut pane, "one");
+        pane.refresh();
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(directory_of("/b", &["x", "y"]))))
+            .unwrap();
+
+        assert_eq!(visible(&pane), ["x", "y"]);
+        assert!(pane.filter().is_empty());
+    }
+
+    /// A background job finishing is no reason to lose what was typed.
+    #[test]
+    fn a_refresh_of_the_same_directory_keeps_the_filter() {
+        let mut pane = Pane::new(directory_of("/a", &["one", "two"]));
+        typed(&mut pane, "one");
+        pane.refresh();
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(directory_of(
+            "/a",
+            &["one", "two", "three"],
+        ))))
+        .unwrap();
+
+        assert_eq!(visible(&pane), ["one"]);
+    }
+
+    #[test]
+    fn clearing_the_filter_shows_the_whole_listing_again() {
+        let mut pane = Pane::new(directory_of("/a", &["one", "two"]));
+        typed(&mut pane, "one");
+
+        pane.clear_filter();
+
+        assert_eq!(visible(&pane), ["one", "two"]);
     }
 
     #[test]

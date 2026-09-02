@@ -36,6 +36,12 @@ pub struct InfoBar<'a> {
     /// key bar for the whole session. Resolved by the caller from the key
     /// table, so the two cannot drift apart.
     cancel_key: Option<KeyBinding>,
+    /// What the focused pane is filtered to, or `None` when it is not.
+    ///
+    /// Unlike the dot files, this is not on the screen anywhere: a filtered
+    /// listing looks exactly like a short directory. `Some("")` is the moment
+    /// after the filter key, with nothing typed yet.
+    filter: Option<&'a str>,
     tick: u64,
 }
 
@@ -58,6 +64,12 @@ impl<'a> InfoBar<'a> {
 
     /// Follows the cancel key, which is drawn from the key table.
     const CANCEL_LABEL: &'static str = " cancel";
+
+    /// Precedes what the listing is filtered to.
+    const FILTER_LABEL: &'static str = "filter: ";
+
+    /// Longest a filter may be drawn before it is clipped.
+    const FILTER_WIDTH: usize = 20;
 
     /// One frame per tick of the main loop. It turns whether or not the bar
     /// moves, which is the whole point: a single huge file leaves the bar
@@ -85,6 +97,11 @@ impl<'a> InfoBar<'a> {
 
     pub fn cancel_key(mut self, key: Option<KeyBinding>) -> Self {
         self.cancel_key = key;
+        self
+    }
+
+    pub fn filter(mut self, filter: Option<&'a str>) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -117,6 +134,16 @@ impl<'a> InfoBar<'a> {
 
             segments.push(vec![
                 Span::raw(format!("{} / {}", progress.done, progress.total)).bold(),
+            ]);
+        }
+
+        // Ahead of the marks: a filter changes what the next operation will
+        // act on, and a reader who has forgotten it is filtering is exactly
+        // who the segment is for.
+        if let Some(filter) = self.filter {
+            segments.push(vec![
+                Span::raw(Self::FILTER_LABEL).fg(Color::Gray),
+                Span::raw(ui::clip(filter, Self::FILTER_WIDTH)).bold(),
             ]);
         }
 

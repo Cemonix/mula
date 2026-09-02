@@ -28,6 +28,7 @@ cursor.last = "Shift+G"
 panel.toggle = "Tab"
 panel.parent = "Backspace"
 panel.find = "/"
+panel.filter = "f"
 
 entry.open = "Enter"
 entry.rename = "F2"

@@ -48,6 +48,7 @@ pub enum Action {
     CloseTab,
     RenameTab,
     Find,
+    Filter,
     ToggleQuickView,
     CycleColumns,
     ToggleDotFiles,
