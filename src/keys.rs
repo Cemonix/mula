@@ -458,6 +458,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Drops a column from the listing, and brings them all back",
     },
     Entry {
+        name: "view.dotfiles",
+        action: Action::ToggleDotFiles,
+        keys: &[KeyBinding::plain(KeyCode::Char('.'))],
+        bar: None,
+        help: "Shows or hides the entries whose names begin with a dot",
+    },
+    Entry {
         name: "panel.find",
         action: Action::Find,
         keys: &[KeyBinding::plain(KeyCode::Char('/'))],

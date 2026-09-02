@@ -147,6 +147,13 @@ is open again, not broken.
   device. One `Reader` instance per answer that can be outstanding on its own,
   each with its own generation — the two panels are two of those, not one
   "listing" role.
+- What is on screen is a view — indices into the listing — and the cursor
+  indexes the view, never the listing. Filtering happens above the read, so a
+  criterion typed letter by letter costs no disk. One function rebuilds the
+  view and refits the cursor, and every change to listing or criteria goes
+  through it: `select_prev`/`select_next` wrap with `%` and would divide by
+  zero on a view that emptied under a cursor. The parent entry is never
+  filtered out — it is the way out of a directory whose own name is hidden.
 - A pane keeps its listing while the next one is read, and asks for it once per
   pass of the loop rather than from the action that moved it.
 - A refresh keeps the cursor on the path it stands on, falling back to the

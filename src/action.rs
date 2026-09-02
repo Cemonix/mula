@@ -49,4 +49,5 @@ pub enum Action {
     Find,
     ToggleQuickView,
     CycleColumns,
+    ToggleDotFiles,
 }

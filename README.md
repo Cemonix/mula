@@ -29,6 +29,12 @@ everything marked. Delete names every item it is about to remove rather than
 counting them — marks can be made in a directory you have since left, and a
 count is not something you can check against what you remember marking.
 
+**Hidden files, when you ask.** `.` shows or hides the entries whose names
+begin with a dot, per panel, and the info bar says so while they are showing.
+The listing is read whole and the filter sits above it, so nothing is read
+again to change what is on screen. The parent entry is never filtered away —
+it is how you leave a directory whose own name begins with a dot.
+
 **Size and date, by default.** A listing shows the name, the size and the
 modification time — the three things you open two panels side by side to
 compare. `c` drops a column when you would rather have the room, and brings
@@ -121,6 +127,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `F9` | Cancel the running operation |
 | `v` | Quick View in the opposite panel |
 | `c` | Drop a listing column, and bring them all back from the name alone |
+| `.` | Show or hide the entries whose names begin with a dot |
 | `/` | Find by name below this panel |
 | `t` / `w` / `r` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
@@ -176,7 +183,7 @@ The actions:
 | `unmark.up` `unmark.down` | Unmark and move |
 | `transfer.copy` `transfer.move` | Copy or move the marked items across |
 | `tab.new` `tab.close` `tab.rename` `tab.previous` `tab.next` | Tabs |
-| `view.quick` `view.columns` | Quick View, listing columns |
+| `view.quick` `view.columns` `view.dotfiles` | Quick View, listing columns, show or hide dot files |
 | `job.cancel` `app.quit` | Cancel the running operation, quit |
 
 A config Mula cannot use costs you your keys and nothing else: the defaults

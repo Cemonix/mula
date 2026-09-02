@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::{keys::KeyBinding, ui};
+use crate::{keys::KeyBinding, ui, ui::pane::DotFiles};
 
 /// What the caller has already worked out about the running job. The widget
 /// only lays it out; the ratio is computed where the counters live.
@@ -36,6 +36,10 @@ pub struct InfoBar<'a> {
     /// key bar for the whole session. Resolved by the caller from the key
     /// table, so the two cannot drift apart.
     cancel_key: Option<KeyBinding>,
+    /// Whether the focused pane is showing dot files. Only the showing half is
+    /// drawn: hiding them is where the listing starts, and a segment that is
+    /// always there says nothing.
+    dot_files: DotFiles,
     tick: u64,
 }
 
@@ -58,6 +62,9 @@ impl<'a> InfoBar<'a> {
 
     /// Follows the cancel key, which is drawn from the key table.
     const CANCEL_LABEL: &'static str = " cancel";
+
+    /// Says the focused pane is showing the entries it normally hides.
+    const DOTFILES_LABEL: &'static str = "dotfiles";
 
     /// One frame per tick of the main loop. It turns whether or not the bar
     /// moves, which is the whole point: a single huge file leaves the bar
@@ -85,6 +92,11 @@ impl<'a> InfoBar<'a> {
 
     pub fn cancel_key(mut self, key: Option<KeyBinding>) -> Self {
         self.cancel_key = key;
+        self
+    }
+
+    pub fn dot_files(mut self, dot_files: DotFiles) -> Self {
+        self.dot_files = dot_files;
         self
     }
 
@@ -118,6 +130,10 @@ impl<'a> InfoBar<'a> {
             segments.push(vec![
                 Span::raw(format!("{} / {}", progress.done, progress.total)).bold(),
             ]);
+        }
+
+        if self.dot_files == DotFiles::Shown {
+            segments.push(vec![Span::raw(Self::DOTFILES_LABEL).fg(Color::Gray)]);
         }
 
         if self.marked > 0 {

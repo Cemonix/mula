@@ -579,6 +579,7 @@ impl App {
                 .marked(marked)
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
+                .dot_files(self.get_focused_pane().dot_files())
                 .tick(self.tick),
             info_area,
         );
@@ -756,6 +757,10 @@ impl App {
             }
             Action::CycleColumns => {
                 self.columns = self.columns.next();
+                Ok(())
+            }
+            Action::ToggleDotFiles => {
+                self.get_focused_pane_mut().toggle_dot_files();
                 Ok(())
             }
         }
