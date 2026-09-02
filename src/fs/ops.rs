@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs, io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -13,6 +14,7 @@ pub struct ProcessedSummary {
     processed: usize,
     skipped: usize,
     failed: usize,
+    collided: usize,
     total: usize,
 }
 
@@ -22,6 +24,7 @@ impl ProcessedSummary {
             processed: 0,
             skipped: 0,
             failed: 0,
+            collided: 0,
             total,
         }
     }
@@ -38,6 +41,10 @@ impl ProcessedSummary {
         self.failed += 1;
     }
 
+    pub fn collide(&mut self) {
+        self.collided += 1;
+    }
+
     pub fn processed(&self) -> usize {
         self.processed
     }
@@ -48,6 +55,10 @@ impl ProcessedSummary {
 
     pub fn failed(&self) -> usize {
         self.failed
+    }
+
+    pub fn collided(&self) -> usize {
+        self.collided
     }
 
     pub fn total(&self) -> usize {
@@ -64,10 +75,11 @@ impl ProcessedSummary {
         self.failed > 0
     }
 
-    /// Whether the disk may have changed. A failed item counts: an op can give
-    /// up half way through and still leave something behind.
+    /// Whether the disk may have changed. A failed item counts, and so does a
+    /// collided one: either can give up part way through a tree and still
+    /// leave something behind.
     pub fn touched_disk(&self) -> bool {
-        self.processed > 0 || self.failed > 0
+        self.processed > 0 || self.failed > 0 || self.collided > 0
     }
 }
 
@@ -118,6 +130,104 @@ pub enum OnCollision {
     KeepBoth,
 }
 
+/// One item of a transfer: what moves, and the name it lands under.
+///
+/// Both sides are named outright rather than a destination directory being
+/// joined on later, because a batch flattens — two sources can want one name —
+/// and the answer to that has to come back to the pairs it was about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transfer {
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
+/// The answer a job carries into every collision it meets, and the
+/// destinations that answer may be applied to.
+///
+/// Only what was already standing when the job started may be overwritten.
+/// Anything that appeared since is the job's own output, and overwriting that
+/// would leave one file where two were asked for, with no telling which. Such
+/// a pair comes back as a collision instead, and the job answering it takes
+/// its own snapshot, in which the first file is one that was already there.
+#[derive(Debug)]
+pub struct Policy {
+    on_collision: OnCollision,
+    preexisting: HashSet<PathBuf>,
+}
+
+impl Policy {
+    /// Reads what is already in the way of `items`, before anything is
+    /// written.
+    pub fn new(on_collision: OnCollision, items: &[Transfer]) -> Self {
+        let mut preexisting = HashSet::new();
+        for item in items {
+            record_preexisting(&item.from, &item.to, &mut preexisting);
+        }
+
+        Self {
+            on_collision,
+            preexisting,
+        }
+    }
+
+    /// What to do about the destination `to`.
+    fn on(&self, to: &Path) -> OnCollision {
+        match self.on_collision {
+            OnCollision::Overwrite if !self.preexisting.contains(to) => OnCollision::Refuse,
+            answer => answer,
+        }
+    }
+}
+
+/// What one item's transfer left behind. Nothing skipped and nothing collided
+/// means the whole tree went through.
+#[derive(Debug, Default)]
+pub struct Unfinished {
+    /// Leaves stepped over, because the answer was to skip them.
+    pub skipped: usize,
+    /// Leaves whose destination was taken and which this job had no answer
+    /// for. They come back so the question can be put once, and carried out
+    /// by a job that names them outright.
+    pub collided: Vec<Transfer>,
+    /// Leaves that landed under a numbered name of their own. Nobody would
+    /// find them otherwise: the name they went in under is not the one that
+    /// was asked for.
+    pub kept: Vec<PathBuf>,
+}
+
+impl Unfinished {
+    /// Whether the item went through whole and under the names asked for.
+    pub fn nothing_left(&self) -> bool {
+        self.skipped == 0 && self.collided.is_empty() && self.kept.is_empty()
+    }
+}
+
+/// Notes every destination of `from` under `to` that is already there.
+///
+/// The walk stops at the first name the destination does not hold: nothing
+/// below a free name can be there either. What cannot be read is left out, and
+/// the write that follows reports it.
+fn record_preexisting(from: &Path, to: &Path, found: &mut HashSet<PathBuf>) {
+    let Ok(destination) = to.symlink_metadata() else {
+        return;
+    };
+    found.insert(to.to_path_buf());
+
+    let Ok(source) = from.symlink_metadata() else {
+        return;
+    };
+    if !(source.is_dir() && destination.is_dir()) {
+        return;
+    }
+
+    let Ok(entries) = fs::read_dir(from) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        record_preexisting(&entry.path(), &to.join(entry.file_name()), found);
+    }
+}
+
 /// What the destination holds, against the source standing at the same name.
 ///
 /// Both sides are read with `symlink_metadata`, so a symlink in the
@@ -139,15 +249,18 @@ pub enum TransferOp {
 }
 
 impl TransferOp {
+    /// Carries out one item of a batch, and reports what it could not finish.
     pub fn execute(
         &self,
-        from: &Path,
-        to: &Path,
-        policy: OnCollision,
+        item: &Transfer,
+        policy: &Policy,
         watcher: &mut dyn Observer,
-    ) -> io::Result<()> {
-        ensure_destination_outside_source(from, to)?;
-        self.transfer(from, to, policy, watcher)
+    ) -> io::Result<Unfinished> {
+        ensure_destination_outside_source(&item.from, &item.to)?;
+
+        let mut unfinished = Unfinished::default();
+        self.transfer(&item.from, &item.to, policy, watcher, &mut unfinished)?;
+        Ok(unfinished)
     }
 
     /// Walks the two trees as pairs of names. At every name there is exactly
@@ -157,19 +270,26 @@ impl TransferOp {
         &self,
         from: &Path,
         to: &Path,
-        policy: OnCollision,
+        policy: &Policy,
         watcher: &mut dyn Observer,
+        unfinished: &mut Unfinished,
     ) -> io::Result<()> {
         match pairing(from, to)? {
             Pairing::Free => self.place(from, to, watcher),
             Pairing::Merge => {
                 for entry in fs::read_dir(from)? {
                     let entry = entry?;
-                    self.transfer(&entry.path(), &to.join(entry.file_name()), policy, watcher)?;
+                    self.transfer(
+                        &entry.path(),
+                        &to.join(entry.file_name()),
+                        policy,
+                        watcher,
+                        unfinished,
+                    )?;
                 }
                 self.drop_emptied(from)
             }
-            Pairing::Collision => self.resolve(from, to, policy, watcher),
+            Pairing::Collision => self.resolve(from, to, policy, watcher, unfinished),
         }
     }
 
@@ -191,31 +311,42 @@ impl TransferOp {
         }
     }
 
-    /// Answers a collision the way `policy` says.
+    /// Answers a collision the way `policy` says. An answer this job does not
+    /// have is not a failure: the pair is written down and comes back for the
+    /// question to be put.
     fn resolve(
         &self,
         from: &Path,
         to: &Path,
-        policy: OnCollision,
+        policy: &Policy,
         watcher: &mut dyn Observer,
+        unfinished: &mut Unfinished,
     ) -> io::Result<()> {
-        match policy {
-            OnCollision::Refuse => Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} already exists", to.display()),
-            )),
-            OnCollision::Skip => Ok(()),
+        match policy.on(to) {
+            OnCollision::Refuse => {
+                unfinished.collided.push(Transfer {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                });
+                Ok(())
+            }
+            OnCollision::Skip => {
+                unfinished.skipped += 1;
+                Ok(())
+            }
             OnCollision::Overwrite => self.overwrite(from, to, watcher),
-            OnCollision::KeepBoth => self.keep_both(from, to, watcher),
+            OnCollision::KeepBoth => {
+                let kept = self.keep_both(from, to, watcher)?;
+                unfinished.kept.push(kept);
+                Ok(())
+            }
         }
     }
 
-    /// Replaces what stands at `to`.
-    ///
-    /// Written beside the destination and renamed over it, so a copy that dies
-    /// half way leaves the original where it was. `remove_partial` cannot
-    /// stand in here the way it does for a fresh destination: what it would
-    /// delete is the user's own file.
+    /// Replaces what stands at `to`, which a directory on either side never
+    /// does: `remove_recursive` behind an "overwrite" would take the files
+    /// that were only ever in the destination, and the answer was about a file
+    /// standing where a file stands.
     fn overwrite(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
         if from.symlink_metadata()?.is_dir() || to.symlink_metadata()?.is_dir() {
             return Err(io::Error::new(
@@ -228,6 +359,13 @@ impl TransferOp {
             ));
         }
 
+        self.replace(from, to, watcher)
+    }
+
+    /// Writes beside `to` and renames over it, so a copy that dies half way
+    /// leaves what was there. `remove_partial` cannot stand in here the way it
+    /// does for a fresh destination: what it would delete is not ours.
+    fn replace(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
         // A move within one filesystem is already an atomic replacement:
         // rename(2) leaves either the new file or the old one, never half of
         // either, so staging would only add a second moment to die in.
@@ -243,16 +381,32 @@ impl TransferOp {
         fs::rename(&staged, to).inspect_err(|_| remove_partial(&staged))
     }
 
-    /// Puts the source at the first free numbered name beside `to`.
+    /// Puts the source at the first free numbered name beside `to`, and gives
+    /// back the name it took.
     ///
-    /// Claiming creates the name, so the source then stands against something
-    /// of its own kind: a directory to merge into, or a placeholder to write
-    /// over. Both are pairs `transfer` already knows, which is why the answer
-    /// handed down is `Overwrite` — the only thing it can overwrite is the
-    /// empty name just claimed.
-    fn keep_both(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
-        let free = claim_free_name(to, Claim::for_source(from)?)?;
-        self.transfer(from, &free, OnCollision::Overwrite, watcher)
+    /// Claiming creates the name, so what is left to do is fill what was just
+    /// created: an empty directory takes the source's children, and an empty
+    /// placeholder is written over. Nothing inside can collide, which is why
+    /// no policy travels in here.
+    fn keep_both(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<PathBuf> {
+        let claim = Claim::for_source(from)?;
+        let free = claim_free_name(to, claim)?;
+
+        match claim {
+            Claim::Directory => self.fill(from, &free, watcher),
+            Claim::File => self.replace(from, &free, watcher),
+        }?;
+        Ok(free)
+    }
+
+    /// Puts every child of `from` into `to`, which has just been created
+    /// empty, so every name inside it is free.
+    fn fill(&self, from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            self.place(&entry.path(), &to.join(entry.file_name()), watcher)?;
+        }
+        self.drop_emptied(from)
     }
 
     /// Takes away a source directory a move has just emptied. A copy leaves it
@@ -601,14 +755,13 @@ mod ops_tests {
         t.make_file("src/sub/b.txt", "b");
         t.make_file("src/sub/deep/c.txt", "c");
 
-        TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap();
+        transfer(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+        )
+        .unwrap();
 
         assert_eq!(fs::read_to_string(t.at("dest/a.txt")).unwrap(), "a");
         assert_eq!(fs::read_to_string(t.at("dest/sub/b.txt")).unwrap(), "b");
@@ -619,22 +772,24 @@ mod ops_tests {
         assert!(t.at("src/a.txt").exists(), "source must be left alone");
     }
 
+    /// With no answer to give, a taken destination is reported rather than
+    /// written over or failed: nothing went wrong, there is only a question
+    /// nobody has put yet.
     #[test]
-    fn refuses_to_overwrite_an_existing_destination() {
+    fn a_taken_destination_comes_back_as_a_collision_rather_than_an_error() {
         let t = TempTree::new();
         t.make_file("src.txt", "new");
         t.make_file("dest.txt", "original");
 
-        let err = TransferOp::Copy
-            .execute(
-                &t.at("src.txt"),
-                &t.at("dest.txt"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap_err();
+        let left = transfer(
+            TransferOp::Copy,
+            &t.at("src.txt"),
+            &t.at("dest.txt"),
+            OnCollision::Refuse,
+        )
+        .unwrap();
 
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(collided_names(&left), ["dest.txt"]);
         assert_eq!(
             fs::read_to_string(t.at("dest.txt")).unwrap(),
             "original",
@@ -642,10 +797,42 @@ mod ops_tests {
         );
     }
 
-    /// Runs one transfer with a watcher nobody looks at, which is what every
-    /// test about collisions wants.
-    fn transfer(op: TransferOp, from: &Path, to: &Path, policy: OnCollision) -> io::Result<()> {
-        op.execute(from, to, policy, &mut Watcher::default())
+    /// Runs one transfer with a watcher nobody looks at, and gives back what
+    /// it could not finish. The snapshot is taken over the one item, the way a
+    /// batch of one would.
+    fn transfer(
+        op: TransferOp,
+        from: &Path,
+        to: &Path,
+        policy: OnCollision,
+    ) -> io::Result<Unfinished> {
+        run(op, from, to, policy, &mut Watcher::default())
+    }
+
+    /// The same, with a watcher the test goes on to read.
+    fn run(
+        op: TransferOp,
+        from: &Path,
+        to: &Path,
+        policy: OnCollision,
+        watcher: &mut Watcher,
+    ) -> io::Result<Unfinished> {
+        let item = Transfer {
+            from: from.to_path_buf(),
+            to: to.to_path_buf(),
+        };
+        let policy = Policy::new(policy, std::slice::from_ref(&item));
+        op.execute(&item, &policy, watcher)
+    }
+
+    /// The names a collision report points at, for asserting on without
+    /// spelling out a temporary directory.
+    fn collided_names(unfinished: &Unfinished) -> Vec<String> {
+        unfinished
+            .collided
+            .iter()
+            .map(|item| crate::ui::name_of(&item.to))
+            .collect()
     }
 
     #[test]
@@ -851,15 +1038,15 @@ mod ops_tests {
         t.make_dir(&t.at("dest"));
         std::os::unix::fs::symlink(t.at("elsewhere"), t.at("dest/sub")).unwrap();
 
-        let err = transfer(
+        let left = transfer(
             TransferOp::Copy,
             &t.at("src"),
             &t.at("dest"),
             OnCollision::Refuse,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(collided_names(&left), ["sub"]);
         assert!(
             !t.at("elsewhere/a.txt").exists(),
             "the copy must not have been written through the link"
@@ -970,14 +1157,13 @@ mod ops_tests {
         let t = TempTree::new();
         t.make_file("src/a.txt", "a");
 
-        let err = TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("src/nested"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap_err();
+        let err = transfer(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("src/nested"),
+            OnCollision::Refuse,
+        )
+        .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(!t.at("src/nested").exists());
@@ -988,14 +1174,13 @@ mod ops_tests {
         let t = TempTree::new();
         t.make_file("src/sub/a.txt", "a");
 
-        TransferOp::Move
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap();
+        transfer(
+            TransferOp::Move,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+        )
+        .unwrap();
 
         assert!(!t.at("src").exists(), "source must be gone after a move");
         assert_eq!(fs::read_to_string(t.at("dest/sub/a.txt")).unwrap(), "a");
@@ -1008,14 +1193,13 @@ mod ops_tests {
         t.make_file("src/real.txt", "real");
         std::os::unix::fs::symlink("real.txt", t.at("src/link.txt")).unwrap();
 
-        TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap();
+        transfer(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+        )
+        .unwrap();
 
         let copied = t.at("dest/link.txt");
         assert!(
@@ -1033,14 +1217,13 @@ mod ops_tests {
         // Points back above `src`, so following it would recurse forever.
         std::os::unix::fs::symlink("..", t.at("src/loop")).unwrap();
 
-        TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap();
+        transfer(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+        )
+        .unwrap();
 
         assert!(
             t.at("dest/loop")
@@ -1062,14 +1245,13 @@ mod ops_tests {
         let blocked = t.make_file("src/blocked.txt", "secret");
         fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let err = TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut Watcher::default(),
-            )
-            .unwrap_err();
+        let err = transfer(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+        )
+        .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(
@@ -1291,14 +1473,14 @@ mod ops_tests {
         t.make_file("src/sub/b.txt", "bb");
 
         let mut watcher = Watcher::default();
-        TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut watcher,
-            )
-            .unwrap();
+        run(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+            &mut watcher,
+        )
+        .unwrap();
 
         assert_eq!(watcher.entries.len(), 2, "{:?}", watcher.entries);
         // What the observer counted has to match what the pre-walk promised, or
@@ -1317,14 +1499,14 @@ mod ops_tests {
             cancel_after: Some(1),
             ..Watcher::default()
         };
-        let err = TransferOp::Copy
-            .execute(
-                &t.at("src"),
-                &t.at("dest"),
-                OnCollision::Refuse,
-                &mut watcher,
-            )
-            .unwrap_err();
+        let err = run(
+            TransferOp::Copy,
+            &t.at("src"),
+            &t.at("dest"),
+            OnCollision::Refuse,
+            &mut watcher,
+        )
+        .unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
         assert!(

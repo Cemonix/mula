@@ -21,7 +21,7 @@ use crate::{
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
         listing::Kind,
-        ops::{MutationOp, ProcessedSummary, TransferOp},
+        ops::{MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
         worker::{Health, Worker},
@@ -143,10 +143,38 @@ pub enum InputTarget {
 ///
 /// Its own type rather than an `Action`, the way [`InputTarget`] is: these are
 /// the halves that do not ask, and nothing that resolves a key can name them.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ConfirmTarget {
     Delete,
     Quit,
+    /// Carry out the pairs a batch could not answer for, under the button the
+    /// user pressed.
+    Resolve(Unanswered),
+}
+
+/// What a finished transfer could not answer for, and what a job carrying the
+/// answer needs to know.
+///
+/// The pairs travel with the question rather than being worked out again when
+/// it is answered: the batch that found them has ended, and flattening the
+/// marks a second time would not name the same leaves.
+#[derive(Debug, Clone)]
+pub struct Unanswered {
+    op: TransferOp,
+    items: Vec<Transfer>,
+    side: Side,
+    tab: TabId,
+}
+
+/// The collision answer a button stands for, or `None` for a button that ends
+/// the question without giving one.
+fn answered(choice: Choice) -> Option<OnCollision> {
+    match choice {
+        Choice::Overwrite => Some(OnCollision::Overwrite),
+        Choice::Skip => Some(OnCollision::Skip),
+        Choice::KeepBoth => Some(OnCollision::KeepBoth),
+        Choice::Yes | Choice::No | Choice::Cancel => None,
+    }
 }
 
 /// A file waiting to be handed the terminal, at the end of the pass of the
@@ -227,6 +255,13 @@ pub struct App {
     /// empty. Derived from the worker and true only while it works, so it
     /// belongs in the info bar rather than in a toast.
     progress: Option<Progress>,
+    /// A question a finished transfer left behind, waiting for a pass of the
+    /// loop with nothing else on screen to be asked in.
+    ///
+    /// A job ends whenever it ends, and the user may well have a dialog of
+    /// their own open at that moment. Waiting is what lets the question be put
+    /// without ever taking the screen from a dialog already on it.
+    asking: Option<Unanswered>,
     /// What the loop is to hand the terminal over for, or `None` when nothing
     /// asked.
     opening: Option<Opening>,
@@ -276,6 +311,7 @@ impl App {
             previewing: None,
             preview: None,
             preview_generation: 0,
+            asking: None,
             preview_placement: None,
             surface: Surface::new(capabilities),
             progress: None,
@@ -303,6 +339,9 @@ impl App {
             self.place_preview();
             self.handle_events()?;
             self.collect_from_worker();
+            // After the worker, so a question a job just left is put in the
+            // same pass when the screen happens to be free for it.
+            self.ask_pending();
             self.collect_from_reader();
             // After the worker, since finishing a job asks both panes to read
             // their directories again. Sending before draining is what keeps a
@@ -705,13 +744,28 @@ impl App {
 
     /// Carries out what a dialog was opened to ask about. The counterpart of
     /// [`App::dispatch`] for the half that no longer asks.
-    fn commit(&mut self, target: ConfirmTarget) -> Result<(), AppError> {
+    fn commit(&mut self, target: ConfirmTarget, choice: Choice) -> Result<(), AppError> {
         match target {
-            ConfirmTarget::Delete => self.queue_delete(),
-            ConfirmTarget::Quit => {
+            ConfirmTarget::Delete if choice == Choice::Yes => self.queue_delete(),
+            ConfirmTarget::Quit if choice == Choice::Yes => {
                 self.exit = true;
                 Ok(())
             }
+            ConfirmTarget::Resolve(unanswered) => match answered(choice) {
+                // The job takes its own snapshot when it starts, so what the
+                // batch before it wrote counts as something that was already
+                // there — which is how an answer of "overwrite" reaches the
+                // file that batch put in the way.
+                Some(policy) => self.queue_batch(
+                    unanswered.op,
+                    unanswered.items,
+                    policy,
+                    unanswered.side,
+                    unanswered.tab,
+                ),
+                None => Ok(()),
+            },
+            ConfirmTarget::Delete | ConfirmTarget::Quit => Ok(()),
         }
     }
 
@@ -831,16 +885,14 @@ impl App {
         };
 
         match msg {
-            DialogMsg::Toggle => dialog.toggle(),
+            DialogMsg::Move(dir) => dialog.move_to(dir),
             DialogMsg::Scroll(dir) => dialog.scroll(dir),
             DialogMsg::Cancel => self.mode = Mode::Browse,
             DialogMsg::Confirm => {
                 let choice = dialog.choice();
-                let pending = *pending;
+                let pending = pending.clone();
                 self.mode = Mode::Browse;
-                if choice == Choice::Yes
-                    && let Err(e) = self.commit(pending)
-                {
+                if let Err(e) = self.commit(pending, choice) {
                     self.notify(ToastLevel::Error, e, None);
                 }
             }
@@ -1002,7 +1054,7 @@ impl App {
     /// the moment the key is pressed.
     fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
         let side = self.focused_side;
-        let (items, to_dir, tab) = {
+        let (items, tab) = {
             let (from, to) = match side {
                 Side::Left => (
                     self.left.tabs_mut().active_tab_mut(),
@@ -1015,10 +1067,19 @@ impl App {
             };
 
             let to_dir = to.get_pane().get_current_dir().to_path_buf();
-            let items: Vec<PathBuf> = from
+            // The batch flattens here, once: every item lands under its own
+            // name, and both ends travel with it from now on. A marked entry
+            // always has a file name — the parent row is never marked — so
+            // nothing is dropped on the way.
+            let items: Vec<Transfer> = from
                 .get_selected_items()
                 .iter()
-                .map(|item| item.to_path_buf())
+                .filter_map(|item| {
+                    Some(Transfer {
+                        from: item.to_path_buf(),
+                        to: to_dir.join(item.file_name()?),
+                    })
+                })
                 .collect();
             let tab = from.id();
 
@@ -1026,7 +1087,7 @@ impl App {
             // the batch runs, so there would be no telling ours from theirs by
             // the time it finishes. What fails comes back in the outcome.
             from.deselect_items();
-            (items, to_dir, tab)
+            (items, tab)
         };
 
         if items.is_empty() {
@@ -1034,7 +1095,22 @@ impl App {
             return Ok(());
         }
 
-        let tag = self.worker.queue(Work::Transfer { op, items, to_dir })?;
+        // The first pass of a batch carries no answer: nothing has been asked
+        // yet, and a collision it meets is what raises the question.
+        self.queue_batch(op, items, OnCollision::Refuse, side, tab)
+    }
+
+    /// Hands one transfer batch to the worker under `policy`, and remembers
+    /// which tab its failures belong back on.
+    fn queue_batch(
+        &mut self,
+        op: TransferOp,
+        items: Vec<Transfer>,
+        policy: OnCollision,
+        side: Side,
+        tab: TabId,
+    ) -> Result<(), AppError> {
+        let tag = self.worker.queue(Work::Transfer { op, items, policy })?;
         self.queued_marks.push(QueuedMarks { tag, side, tab });
         Ok(())
     }
@@ -1269,21 +1345,74 @@ impl App {
         }
     }
 
+    /// Puts the question a finished transfer left behind, once there is a pass
+    /// of the loop with nothing else on screen to put it in.
+    fn ask_pending(&mut self) {
+        if !matches!(self.mode, Mode::Browse) {
+            return;
+        }
+        let Some(unanswered) = self.asking.take() else {
+            return;
+        };
+
+        let dialog = Dialog::new(
+            "Already there",
+            format!("{} item(s) are already in the way.", unanswered.items.len()),
+        )
+        .listing(
+            unanswered
+                .items
+                .iter()
+                .map(|item| ui::name_of(&item.to))
+                .collect(),
+        )
+        .choices(vec![
+            Choice::Overwrite,
+            Choice::Skip,
+            Choice::KeepBoth,
+            Choice::Cancel,
+        ]);
+
+        self.mode = Mode::Confirm {
+            dialog,
+            pending: ConfirmTarget::Resolve(unanswered),
+        };
+    }
+
     /// Reports a finished job and puts back the marks of whatever it could not
     /// handle, so a partial failure can be retried with one keypress.
     fn finish_job(&mut self, outcome: Outcome) {
-        if let Some(index) = self
+        let queued = self
             .queued_marks
             .iter()
             .position(|queued| queued.tag == outcome.tag)
+            .map(|index| self.queued_marks.remove(index));
+
+        if let Some(queued) = &queued
+            && !outcome.failed.is_empty()
         {
-            let queued = self.queued_marks.remove(index);
-            if !outcome.failed.is_empty() {
-                let tabs = self.panel_mut(queued.side).tabs_mut();
-                if let Some(tab) = tabs.tab_mut(queued.tab) {
-                    tab.mark_paths(outcome.failed);
-                }
+            let tabs = self.panel_mut(queued.side).tabs_mut();
+            if let Some(tab) = tabs.tab_mut(queued.tab) {
+                tab.mark_paths(outcome.failed);
             }
+        }
+
+        // Collisions are not failures and are never marked again: what they
+        // need is an answer. The pairs wait with the question until the screen
+        // is free for it.
+        if let (JobKind::Transfer(op), Some(queued)) = (outcome.kind, queued)
+            && !outcome.collided.is_empty()
+        {
+            self.asking = Some(Unanswered {
+                op,
+                items: outcome.collided,
+                side: queued.side,
+                tab: queued.tab,
+            });
+        }
+
+        if !outcome.kept.is_empty() {
+            self.notify_kept(&outcome.kept);
         }
 
         let reason = outcome.reason.as_deref();
@@ -1327,6 +1456,16 @@ impl App {
     /// `reason` is the last error the batch met. Counts alone say that
     /// something went wrong but never what, and the log is no help while the
     /// toast is still on screen.
+    /// Says where the items went that took a name of their own. One is named
+    /// outright; several would not fit a toast, so they are counted.
+    fn notify_kept(&mut self, kept: &[PathBuf]) {
+        let message = match kept {
+            [only] => format!("Kept both, as {}", ui::name_of(only)),
+            many => format!("Kept both, {} under new names", many.len()),
+        };
+        self.notify(ToastLevel::Info, message, None);
+    }
+
     fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary, reason: Option<&str>) {
         if summary.total() == 0 {
             self.notify(ToastLevel::Warning, "Nothing is marked", None);
@@ -1342,6 +1481,9 @@ impl App {
         };
         if summary.skipped() > 0 {
             message.push_str(&format!(", {} skipped", summary.skipped()));
+        }
+        if summary.collided() > 0 {
+            message.push_str(&format!(", {} already there", summary.collided()));
         }
         if summary.has_failures() {
             message.push_str(&format!(", {} failed", summary.failed()));

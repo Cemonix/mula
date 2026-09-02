@@ -10,28 +10,38 @@ use ratatui::{
 use crate::{
     action::VerticalDir,
     keys::{Binding, KeyBinding},
-    ui,
+    ui::{self, text_input::HorizontalDir},
 };
 
-/// Which button currently has focus.
+/// One button of a dialog. Which of them a dialog offers is up to what it
+/// asks; what every set has in common is that the last one does nothing, and
+/// is where the dialog opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Choice {
     Yes,
+    Overwrite,
+    Skip,
+    KeepBoth,
     No,
+    Cancel,
 }
 
 impl Choice {
     fn label(self) -> &'static str {
         match self {
             Choice::Yes => "Yes",
+            Choice::Overwrite => "Overwrite",
+            Choice::Skip => "Skip",
+            Choice::KeepBoth => "Keep both",
             Choice::No => "No",
+            Choice::Cancel => "Cancel",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum DialogMsg {
-    Toggle,
+    Move(HorizontalDir),
     Scroll(VerticalDir),
     Confirm,
     Cancel,
@@ -45,23 +55,23 @@ pub struct Dialog {
     /// question that is not about a set of things.
     items: Vec<String>,
     offset: usize,
-    choice: Choice,
+    choices: Vec<Choice>,
+    selected: usize,
 }
 
 impl Dialog {
-    // Both arrows carry `Toggle`, which moves to the other of the two buttons.
     pub const DIALOG_KEYS: &[Binding<DialogMsg>] = &[
         Binding {
             key: KeyBinding::plain(KeyCode::Left),
-            msg: DialogMsg::Toggle,
+            msg: DialogMsg::Move(HorizontalDir::Left),
             bar: None,
-            help: "Moves to the other button",
+            help: "Moves to the button on the left",
         },
         Binding {
             key: KeyBinding::plain(KeyCode::Right),
-            msg: DialogMsg::Toggle,
+            msg: DialogMsg::Move(HorizontalDir::Right),
             bar: None,
-            help: "Moves to the other button",
+            help: "Moves to the button on the right",
         },
         Binding {
             key: KeyBinding::plain(KeyCode::Up),
@@ -102,13 +112,15 @@ impl Dialog {
     /// Borders, and the columns `Padding::horizontal(1)` holds open.
     const CHROME: u16 = 4;
 
+    /// A question answered Yes or No, opening on `No`.
     pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             title: title.into(),
             message: message.into(),
             items: Vec::new(),
             offset: 0,
-            choice: Choice::No,
+            choices: vec![Choice::Yes, Choice::No],
+            selected: 1,
         }
     }
 
@@ -119,14 +131,24 @@ impl Dialog {
         self
     }
 
-    pub fn choice(&self) -> Choice {
-        self.choice
+    /// Offers `choices` in place of the Yes/No pair. The dialog opens on the
+    /// last of them, which is where the one that does nothing belongs.
+    pub fn choices(mut self, choices: Vec<Choice>) -> Self {
+        self.selected = choices.len().saturating_sub(1);
+        self.choices = choices;
+        self
     }
 
-    pub fn toggle(&mut self) {
-        self.choice = match self.choice {
-            Choice::Yes => Choice::No,
-            Choice::No => Choice::Yes,
+    pub fn choice(&self) -> Choice {
+        self.choices[self.selected]
+    }
+
+    /// Moves to the next button along, stopping at either end. Wrapping would
+    /// put the button that does nothing one step from the one that does.
+    pub fn move_to(&mut self, dir: HorizontalDir) {
+        self.selected = match dir {
+            HorizontalDir::Left => self.selected.saturating_sub(1),
+            HorizontalDir::Right => (self.selected + 1).min(self.choices.len() - 1),
         };
     }
 
@@ -142,6 +164,10 @@ impl Dialog {
     /// Columns the widest line wants, held between `MIN_WIDTH` and
     /// `MAX_WIDTH`. Measured in columns rather than bytes, since a name can
     /// hold anything the filesystem allowed.
+    ///
+    /// The button row is measured with the text: four buttons are wider than
+    /// most questions about them, and a box sized to the question alone would
+    /// cut them off.
     fn width(&self) -> u16 {
         let widest = self
             .message
@@ -151,7 +177,19 @@ impl Dialog {
             .max()
             .unwrap_or(0);
 
-        (widest + Self::CHROME).clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
+        (widest.max(self.buttons_width()) + Self::CHROME).clamp(Self::MIN_WIDTH, Self::MAX_WIDTH)
+    }
+
+    /// What the row of buttons wants: every label with its padding, and a
+    /// column between each pair.
+    fn buttons_width(&self) -> u16 {
+        let labels: u16 = self
+            .choices
+            .iter()
+            .map(|choice| Self::button_width(choice.label()))
+            .sum();
+
+        labels + self.choices.len().saturating_sub(1) as u16
     }
 
     /// Width in terminal columns, not bytes — `Span::width` is the same
@@ -160,13 +198,15 @@ impl Dialog {
         Span::from(label).width() as u16 + Self::BUTTON_PADDING
     }
 
-    fn button(&self, choice: Choice) -> Paragraph<'static> {
-        let style = if self.choice == choice {
+    fn button(&self, index: usize) -> Paragraph<'static> {
+        let style = if self.selected == index {
             Style::new().bg(Color::Blue).fg(Color::White).bold()
         } else {
             Style::new().bg(Color::DarkGray).fg(Color::Gray)
         };
-        Paragraph::new(choice.label()).centered().style(style)
+        Paragraph::new(self.choices[index].label())
+            .centered()
+            .style(style)
     }
 }
 
@@ -222,15 +262,19 @@ impl Widget for &mut Dialog {
             .style(Color::White)
             .render(list_area, buf);
 
-        let [yes_area, no_area] = Layout::horizontal(
-            [Choice::Yes, Choice::No].map(|c| Constraint::Length(Dialog::button_width(c.label()))),
-        )
-        .spacing(1)
-        .flex(Flex::End)
-        .areas(buttons_area);
+        let widths: Vec<Constraint> = self
+            .choices
+            .iter()
+            .map(|choice| Constraint::Length(Dialog::button_width(choice.label())))
+            .collect();
+        let areas = Layout::horizontal(widths)
+            .spacing(1)
+            .flex(Flex::End)
+            .split(buttons_area);
 
-        self.button(Choice::Yes).render(yes_area, buf);
-        self.button(Choice::No).render(no_area, buf);
+        for (index, area) in areas.iter().enumerate() {
+            self.button(index).render(*area, buf);
+        }
     }
 }
 
@@ -246,7 +290,11 @@ mod dialog_tests {
 
     #[test]
     fn dialog_keys_cover_every_message() {
-        for msg in [DialogMsg::Toggle, DialogMsg::Confirm, DialogMsg::Cancel] {
+        for msg in [
+            DialogMsg::Move(HorizontalDir::Left),
+            DialogMsg::Confirm,
+            DialogMsg::Cancel,
+        ] {
             assert!(
                 keys::find(Dialog::DIALOG_KEYS, |m| std::mem::discriminant(m)
                     == std::mem::discriminant(&msg))
@@ -271,6 +319,55 @@ mod dialog_tests {
     fn listing(count: usize) -> Dialog {
         let items = (0..count).map(|i| format!("file-{i}.txt")).collect();
         Dialog::new("Delete", "Permanently delete these items?").listing(items)
+    }
+
+    fn four_buttons() -> Dialog {
+        Dialog::new("Already there", "2 item(s) are already in the way.")
+            .listing(vec![String::from("a.txt"), String::from("b.txt")])
+            .choices(vec![
+                Choice::Overwrite,
+                Choice::Skip,
+                Choice::KeepBoth,
+                Choice::Cancel,
+            ])
+    }
+
+    /// Four buttons are wider than the question about them, so the box has to
+    /// be sized to the row rather than to the text.
+    #[test]
+    fn every_button_of_a_four_button_dialog_is_drawn_at_eighty_columns() {
+        let rows = frame(&mut four_buttons()).join("\n");
+
+        for label in ["Overwrite", "Skip", "Keep both", "Cancel"] {
+            assert!(rows.contains(label), "{label} is missing from {rows:?}");
+        }
+    }
+
+    /// The button that does nothing is the last one, and where a dialog opens.
+    #[test]
+    fn a_dialog_opens_on_its_last_button() {
+        assert_eq!(four_buttons().choice(), Choice::Cancel);
+        assert_eq!(
+            Dialog::new("Delete", "Delete 3 items?").choice(),
+            Choice::No
+        );
+    }
+
+    /// Wrapping would put the button that does nothing one step from the one
+    /// that overwrites.
+    #[test]
+    fn the_buttons_stop_at_either_end_rather_than_wrapping() {
+        let mut dialog = four_buttons();
+
+        for _ in 0..10 {
+            dialog.move_to(HorizontalDir::Left);
+        }
+        assert_eq!(dialog.choice(), Choice::Overwrite);
+
+        for _ in 0..10 {
+            dialog.move_to(HorizontalDir::Right);
+        }
+        assert_eq!(dialog.choice(), Choice::Cancel);
     }
 
     #[test]

@@ -149,3 +149,31 @@ dialog could open another, and there is no stack to hold them.
 
 The harmless answer takes the default focus, so Enter on reflex cannot delete
 anything.
+
+## The question waits for a free screen
+
+A job ends whenever it ends. The user may be halfway through a delete
+confirmation of their own at that moment, and the answer to "what about these
+collisions?" cannot take the screen from a dialog already on it — pressing
+Enter would then answer a question the user never read.
+
+So the pairs wait on `App` as `asking`, and `ask_pending` puts the question on
+the first pass of the loop that finds `Mode::Browse`. Nothing is stacked: there
+is still at most one overlay, and the second question simply has not been asked
+yet.
+
+This is the case `keys-overlays.md` named as the one that would end the no-stack
+rule — a collision met inside a running transfer. It does not end it, because
+the collision is not answered in flight. The worker finishes, reports, and the
+question is put afterwards like any other.
+
+## Overwrite is asked once and applied twice
+
+The first pass of a batch carries `OnCollision::Refuse`, which is not an answer
+but the absence of one: it writes the pair down and moves on. The follow-up job
+carries the answer and only the pairs it was about.
+
+The follow-up takes its own snapshot when it starts. That is what makes
+"overwrite" reach a file the first batch put in the way: by then it is a file
+that was already there, and the rule about not eating a batch's own output does
+not reach across jobs.
