@@ -218,11 +218,17 @@ impl Pane {
         }
     }
 
-    /// Waits for the current directory to be read again. The cursor keeps its
-    /// index, capped at the last entry of the new listing.
+    /// Waits for the current directory to be read again, with the cursor
+    /// landing on the entry it stands on now. An entry the new listing no
+    /// longer holds leaves the cursor on its old index, capped at the last
+    /// entry; an empty listing has no entry to keep.
     pub fn refresh(&mut self) {
         let path = Arc::clone(self.directory.path());
-        self.want(path, None, Intent::Refresh);
+        let focus = self
+            .selected_entry()
+            .ok()
+            .map(|entry| Arc::clone(&entry.path));
+        self.want(path, focus, Intent::Refresh);
     }
 
     /// Puts down what the pane is waiting for, replacing whatever it waited
@@ -447,6 +453,21 @@ mod pane_tests {
         Directory::new(root, entries, detail)
     }
 
+    /// Builds a listing of one file entry per name directly under `path`, so
+    /// a test can leave a name out of the listing that follows.
+    fn directory_of(path: &str, names: &[&str]) -> Directory {
+        let root: Arc<Path> = Arc::from(Path::new(path));
+        let entries = names
+            .iter()
+            .map(|name| DirEntry {
+                path: Arc::from(root.join(name).as_path()),
+                kind: DirEntryKind::File,
+                meta: None,
+            })
+            .collect();
+        Directory::new(root, entries, Detail::NamesOnly)
+    }
+
     #[test]
     fn the_cursor_wraps_from_the_last_item_to_the_first() {
         let mut pane = pane(3);
@@ -617,6 +638,43 @@ mod pane_tests {
         assert_eq!(
             pane.selected_entry().unwrap().path.as_ref(),
             Path::new("/b/2")
+        );
+    }
+
+    /// An entry deleted above the cursor shifts every index behind it, so the
+    /// index alone would land the cursor on `d`.
+    #[test]
+    fn a_refresh_keeps_the_cursor_on_its_entry_when_the_one_above_it_goes_away() {
+        let mut pane = Pane::new(directory_of("/a", &["a", "b", "c", "d"]));
+        pane.select_next();
+        pane.select_next();
+        pane.refresh();
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(directory_of("/a", &["a", "c", "d"]))))
+            .unwrap();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/c")
+        );
+    }
+
+    /// The entry the cursor stood on is the one that went away, so there is no
+    /// path to come back to and the index is all that is left.
+    #[test]
+    fn a_refresh_onto_a_listing_without_the_entry_falls_back_to_the_index() {
+        let mut pane = Pane::new(directory_of("/a", &["a", "b", "c", "d"]));
+        pane.select_last();
+        pane.refresh();
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(directory_of("/a", &["a", "b"]))))
+            .unwrap();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/b")
         );
     }
 

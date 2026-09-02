@@ -134,3 +134,22 @@ drop the first panel's answer, leaving that panel waiting for a generation
 that never comes. Not a slow panel: a stuck one. It is worth saying that this
 was never about remote panels; it was already true of two local directories
 being refreshed after a copy.
+
+## A refresh keeps the entry, a move keeps nothing
+
+`set_directory` fits the old selection to the new listing by index. For a pane
+being sent somewhere else that is all there is to go on: nothing in the new
+directory is the entry the cursor stood on. Reading the *same* directory again
+is a different question, and the index is the wrong answer to it — a job that
+deletes a file above the cursor shifts every index behind it, and the cursor
+walks down one row per deletion.
+
+So `refresh` names the path under the cursor as the request's `focus`, and the
+answer puts the cursor back on it. The index stays as the fallback, and the
+entry that falls back to it is the one that went away — usually the file the
+user just deleted, where landing on whatever took its place is what was wanted
+anyway.
+
+Synchronously this was almost invisible. The answer now comes from the reading
+thread, so there is a real gap between the question and the redraw, and the
+jump is on screen long enough to see.
