@@ -483,7 +483,7 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         action: Action::Filter,
         keys: &[KeyBinding::plain(KeyCode::Char('f'))],
         bar: None,
-        help: "Narrows this listing to the names holding what you type",
+        help: "Narrows the listing to what you type, with * and ?",
     },
     Entry {
         name: "tab.new",

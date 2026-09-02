@@ -184,6 +184,15 @@ The parent is exempt from filtering for its own reason. Its path is the
 directory above, whose name may itself begin with a dot, and hiding it would
 take away the only way out of `~/.config/mula`.
 
+The pattern is a glob rather than a regular expression, and the reason is that
+it is matched on every keystroke. A regex is invalid for most of its own
+prefixes — `*` alone will not compile — so a live filter built on one spends
+half its time in an error state, while half a glob is still a glob. `.` being
+"any character" in a language whose subject is file names is the second reason:
+`.log` would quietly find `catalog` too. Regular expressions would earn their
+keep in the tree search, which is confirmed with Enter and reads thousands of
+names; they earn nothing here.
+
 A filter drops when the pane moves to a different directory and survives a
 refresh of the same one. The two are told apart by the path, not by the reason
 for the read: a filter is about the names in front of you, and carrying it
