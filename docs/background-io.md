@@ -184,6 +184,13 @@ The parent is exempt from filtering for its own reason. Its path is the
 directory above, whose name may itself begin with a dot, and hiding it would
 take away the only way out of `~/.config/mula`.
 
+Showing dot files gets no InfoBar segment. It would have passed the rule as it
+stood — derivable from `App`, true while the state lasts — but the bar carries
+what the screen does not already say, and dot files being shown is a thing you
+are looking at. The columns have no segment for the same reason. A search will
+want one: a filtered listing looks exactly like a short directory, and what is
+being filtered on appears nowhere.
+
 Marks need nothing from any of this. They are absolute paths in a set on the
 `Tab`, so an entry filtered off the screen stays marked, the same way a mark
 survives leaving its directory. What that does mean is that F5 acts on marks

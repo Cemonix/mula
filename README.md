@@ -30,9 +30,8 @@ counting them — marks can be made in a directory you have since left, and a
 count is not something you can check against what you remember marking.
 
 **Hidden files, when you ask.** `.` shows or hides the entries whose names
-begin with a dot, per panel, and the info bar says so while they are showing.
-The listing is read whole and the filter sits above it, so nothing is read
-again to change what is on screen. The parent entry is never filtered away —
+begin with a dot, per panel. The listing is read whole and the filter sits
+above it, so nothing is read again to change what is on screen. The parent entry is never filtered away —
 it is how you leave a directory whose own name begins with a dot.
 
 **Size and date, by default.** A listing shows the name, the size and the

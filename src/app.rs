@@ -579,7 +579,6 @@ impl App {
                 .marked(marked)
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
-                .dot_files(self.get_focused_pane().dot_files())
                 .tick(self.tick),
             info_area,
         );

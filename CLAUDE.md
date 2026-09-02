@@ -96,7 +96,10 @@ is open again, not broken.
   whatever the overlays do — it comes from a key never being allowed to reach
   past the question.
 - Nothing non-derivable goes in the InfoBar: it must be computable from `App`
-  and true while the state lasts. A one-off event is a toast.
+  and true while the state lasts. A one-off event is a toast. Derivable is not
+  enough — the bar carries what the screen does not already show. Marks can be
+  in a directory that was left, a queue and a progress bar are invisible by
+  nature; a filter you can see the result of is not.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
   errors, so a partial failure can say "Deleted 3 of 5".
 - Confirmation dialogs open on `Choice::No`.

@@ -186,10 +186,6 @@ impl Pane {
         }
     }
 
-    pub fn dot_files(&self) -> DotFiles {
-        self.dot_files
-    }
-
     /// A pane with nothing in it, waiting for its first listing. `path` is what
     /// the border shows until that listing arrives.
     ///
