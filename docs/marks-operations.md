@@ -150,6 +150,50 @@ dialog could open another, and there is no stack to hold them.
 The harmless answer takes the default focus, so Enter on reflex cannot delete
 anything.
 
+## The trash is never a fallback
+
+Deleting means the trash (F8); permanent deletion is Shift+F8, a deliberate
+choice. "If the trash fails, delete for real" would take the safety net away
+at exactly the moment someone was relying on it — a failure to reach the trash
+is a failure to delete, and it is reported as one.
+
+This rule was written before any of it was built, lost in a pass that condensed
+`CLAUDE.md` (`848ec26`), and put back here once `feat-trash-delete` turned out
+to be resting on it. Today F8 still deletes for good.
+
+Two things about the `trash` crate that the task was wrong about, both checked
+against 5.2.6 rather than remembered:
+
+**The thread-safety objection is dead.** `CLAUDE.md` once justified "one
+worker, not a pool" with `trash` calling `getmntent`. The crate holds its own
+`Mutex` around the mount-table calls; what it warns about is *other* threads in
+the process calling `getmntent` directly, which nothing here does — Mula's only
+libc is `signal`, `termios` and a `mkfifo` in a test. On macOS the question
+does not arise at all: `src/macos/mod.rs` never reads the mount table, and the
+`getmntinfo` path is gated to the BSDs. The one-worker rule now rests on write
+ordering alone, which is where `background-io.md` already has it.
+
+**macOS has no good answer, and the default is the opposite of what was
+assumed.** `DeleteMethod::Finder` is the default, not `NsFileManager`:
+
+| | Finder | NsFileManager |
+| --- | --- | --- |
+| "Put Back" | yes | first item per process only |
+| how | `osascript` subprocess | `trashItemAtURL` |
+| costs | automation permission prompt, sound, slower | none |
+
+`Finder` builds its AppleScript by interpolating the path into the source
+(`tell application "Finder" to delete { POSIX file "…" }`). That is not a shell
+— it is one `argv` element — so the opening rule survives it literally. But a
+filename reaching another language as source text is the shape that rule exists
+to prevent, and Mula has nothing else like it. The crate does escape, and
+percent-encodes a path that is not UTF-8.
+
+So the choice is a permission dialog over the terminal and a filename inside an
+AppleScript, or a trash the system cannot put back. It is a real fork and it
+belongs to whoever writes the feature. Linux is uninteresting by comparison:
+`freedesktop.rs` writes `.trashinfo` and restoring is the desktop's business.
+
 ## The question waits for a free screen
 
 A job ends whenever it ends. The user may be halfway through a delete
