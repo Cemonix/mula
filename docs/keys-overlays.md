@@ -113,8 +113,12 @@ The overlay resolves its own keys before the globals, so F1 closes what F1
 opened rather than reopening it.
 
 `Esc` is the next global anyone will reach for, and it is the one that will
-hurt: `ClearMarks` in Browse, `Cancel` in all three overlays. Making it global
-means taking it away from marks first.
+hurt: `Cancel` in every overlay, and in Browse a cascade — the filter, then the
+marks. The cascade came from a user pressing `Esc` to get rid of a filter
+without being told to, which is the strongest evidence a binding gets. Order
+matters and only in one direction: marks can stand for work done across several
+directories, so the cheaper thing to lose goes first, and the second press is
+still there for the rest. Making `Esc` global means taking it away from both.
 
 ## `DialogMsg` never becomes an `Action`
 

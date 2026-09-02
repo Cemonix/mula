@@ -377,11 +377,11 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Marks every item the panel is showing",
     },
     Entry {
-        name: "mark.clear",
-        action: Action::ClearMarks,
+        name: "panel.clear",
+        action: Action::Clear,
         keys: &[KeyBinding::plain(KeyCode::Esc)],
         bar: None,
-        help: "Unmarks every item in the focused panel",
+        help: "Drops the filter, or unmarks everything when there is no filter",
     },
     Entry {
         name: "entry.rename",

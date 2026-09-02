@@ -746,10 +746,18 @@ impl App {
                 self.get_focused_tabs_mut().active_tab_mut().mark_visible();
                 Ok(())
             }
-            Action::ClearMarks => {
-                self.get_focused_tabs_mut()
-                    .active_tab_mut()
-                    .deselect_items();
+            // The filter first, then the marks. Two presses reach a clean
+            // panel, and neither half can take the other by surprise: marks
+            // can stand for work done across several directories, so the
+            // cheaper thing to lose goes first.
+            Action::Clear => {
+                if self.get_focused_pane().filter().is_empty() {
+                    self.get_focused_tabs_mut()
+                        .active_tab_mut()
+                        .deselect_items();
+                } else {
+                    self.get_focused_pane_mut().clear_filter();
+                }
                 Ok(())
             }
             Action::OpenSelected => self

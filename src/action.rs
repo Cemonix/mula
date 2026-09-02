@@ -35,7 +35,7 @@ pub enum Action {
         nav_dir: VerticalDir,
     },
     MarkAll,
-    ClearMarks,
+    Clear,
     Transfer {
         op: TransferOp,
     },
