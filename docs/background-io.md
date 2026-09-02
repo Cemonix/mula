@@ -184,12 +184,22 @@ The parent is exempt from filtering for its own reason. Its path is the
 directory above, whose name may itself begin with a dot, and hiding it would
 take away the only way out of `~/.config/mula`.
 
+A filter drops when the pane moves to a different directory and survives a
+refresh of the same one. The two are told apart by the path, not by the reason
+for the read: a filter is about the names in front of you, and carrying it
+along would open the next directory already narrowed on a word chosen for the
+last one — while a background job finishing is no reason to lose what was
+typed.
+
 Showing dot files gets no InfoBar segment. It would have passed the rule as it
 stood — derivable from `App`, true while the state lasts — but the bar carries
 what the screen does not already say, and dot files being shown is a thing you
-are looking at. The columns have no segment for the same reason. A search will
-want one: a filtered listing looks exactly like a short directory, and what is
-being filtered on appears nowhere.
+are looking at. The columns have no segment for the same reason. The filter does get one, for the reason the dot files do not: a filtered
+listing looks exactly like a short directory, and what is being filtered on
+appears nowhere else. It is drawn from the moment the filter key is pressed,
+before anything is typed, since that is the only sign the keys have gone
+somewhere else — the filter draws no overlay, because watching the listing
+narrow is the entire point of it.
 
 Marks need nothing from any of this. They are absolute paths in a set on the
 `Tab`, so an entry filtered off the screen stays marked, the same way a mark

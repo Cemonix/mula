@@ -25,7 +25,9 @@ its own marks, and can be renamed so a long path is one word on the tab bar.
 **Marks, then an operation.** `Space` marks the item under the cursor;
 `Shift+Up`/`Shift+Down` mark and move in one keystroke, `Alt+Up`/`Alt+Down`
 unmark the same way, `a` marks everything the panel is showing, and `Esc`
-clears the panel. F5, F6 and F8 then act on
+drops the filter, or the marks when there is no filter — two presses reach a
+clean panel, and marks made across several directories are the thing it is
+slowest to give up. F5, F6 and F8 then act on
 everything marked. Delete names every item it is about to remove rather than
 counting them — marks can be made in a directory you have since left, and a
 count is not something you can check against what you remember marking.
@@ -34,6 +36,13 @@ count is not something you can check against what you remember marking.
 begin with a dot, per panel. The listing is read whole and the filter sits
 above it, so nothing is read again to change what is on screen. The parent entry is never filtered away —
 it is how you leave a directory whose own name begins with a dot.
+
+**Filter what is in front of you.** `f` narrows the listing to the names
+holding what you type, live, as you type it — no directory is read again,
+because the filter sits above the listing rather than inside the read. `Enter`
+keeps it, so `a` then F5 acts on exactly what is left; `Esc` drops it. It is a
+different question from `/`, which walks the tree below the panel to find
+something you cannot see, and takes you there.
 
 **Size and date, by default.** A listing shows the name, the size and the
 modification time — the three things you open two panels side by side to
@@ -130,6 +139,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `c` | Drop a listing column, and bring them all back from the name alone |
 | `.` | Show or hide the entries whose names begin with a dot |
 | `/` | Find by name below this panel |
+| `f` | Narrow this listing to the names holding what you type |
 | `t` / `w` / `r` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
 | `q` | Quit |
@@ -177,10 +187,10 @@ The actions:
 | | |
 | --- | --- |
 | `cursor.up` `cursor.down` `cursor.first` `cursor.last` | Move the cursor |
-| `panel.toggle` `panel.parent` `panel.find` | Focus the other panel, leave for the one above, find by name |
+| `panel.toggle` `panel.parent` `panel.find` `panel.filter` `panel.clear` | Focus the other panel, leave for the one above, find by name in the tree, narrow this listing, drop the filter then the marks |
 | `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
 | `entry.rename` `entry.create` `entry.delete` `entry.delete-permanent` | Rename, create, delete to the trash, delete for good |
-| `mark.toggle` `mark.all` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark everything shown, mark and move, clear the panel |
+| `mark.toggle` `mark.all` `mark.up` `mark.down` | Mark under the cursor, mark everything shown, mark and move |
 | `unmark.up` `unmark.down` | Unmark and move |
 | `transfer.copy` `transfer.move` | Copy or move the marked items across |
 | `tab.new` `tab.close` `tab.rename` `tab.previous` `tab.next` | Tabs |

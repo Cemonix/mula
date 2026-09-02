@@ -35,7 +35,7 @@ pub enum Action {
         nav_dir: VerticalDir,
     },
     MarkAll,
-    ClearMarks,
+    Clear,
     Transfer {
         op: TransferOp,
     },
@@ -48,6 +48,7 @@ pub enum Action {
     CloseTab,
     RenameTab,
     Find,
+    Filter,
     ToggleQuickView,
     CycleColumns,
     ToggleDotFiles,

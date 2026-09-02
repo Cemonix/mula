@@ -4,6 +4,7 @@ use ratatui::text::Span;
 
 pub(crate) mod columns;
 pub(crate) mod dialog;
+pub(crate) mod filter;
 pub(crate) mod finder;
 pub(crate) mod graphics;
 pub(crate) mod help;
