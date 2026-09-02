@@ -63,10 +63,12 @@ is open again, not broken.
   `Result` or swallowing the case.
 
 **Keys/overlays**
-- At most one overlay, no stack. **Holds while** no dialog needs to open a
-  dialog — "overwrite this file?" inside a running transfer is the case that
-  would end it. Help is not that case: it draws over a mode and describes it,
-  so the mode stays alive underneath and nothing is stacked.
+- At most one overlay, no stack. A question with nowhere to go waits on `App`
+  until a pass of the loop finds `Mode::Browse`, rather than taking the screen
+  from a dialog already on it. Help is not that case either: it draws over a
+  mode and describes it, so the mode stays alive underneath and nothing is
+  stacked. **Holds while** no dialog has to be answered before the one under
+  it — waiting is only enough because a collision is never asked in flight.
 - `DialogMsg` never becomes an `Action`; only the result leaves the dialog.
 - Key bar is curated, not truncated: a fixed set fitting 80 columns beside the
   help hint every mode draws, rest under F1. Guard with a test over summed

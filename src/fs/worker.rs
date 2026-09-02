@@ -12,7 +12,9 @@ use std::{
 
 use crate::fs::{
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
-    ops::{MutationOp, Observer, ProcessedSummary, TransferOp, tree_size},
+    ops::{
+        MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp, Unfinished, tree_size,
+    },
 };
 
 /// The envelope the queue carries: a piece of work and the tag its outcome has
@@ -162,24 +164,19 @@ fn run(jobs: &Receiver<Job>, msgs: &Sender<WorkerMsg>, cancel: &AtomicBool) {
     }
 }
 
-/// Whether an item was dealt with or stepped over. A skip is not a failure and
-/// leaves no mark behind to retry.
-enum Handled {
-    Done,
-    Skipped,
-}
-
 fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
     let kind = job.work.kind();
     let mut failed = Vec::new();
+    let mut collided = Vec::new();
+    let mut kept = Vec::new();
     let mut reason = None;
 
     let summary = match job.work {
-        Work::Transfer { op, items, to_dir } => {
+        Work::Transfer { op, items, policy } => {
             // Weighing the tree first is what lets the bar move evenly across
             // items of wildly different sizes. It is a walk of `metadata`
             // calls, no data, and it warms the cache for the copy that follows.
-            let sizes: Vec<u64> = items.iter().map(|item| tree_size(item)).collect();
+            let sizes: Vec<u64> = items.iter().map(|item| tree_size(&item.from)).collect();
             reporter.begin(
                 items.len(),
                 Measure::Bytes {
@@ -188,24 +185,45 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                 },
             );
 
+            // Read in the same breath as the weighing and before a byte is
+            // written, so what the batch writes itself is never something it
+            // is then allowed to overwrite.
+            let policy = Policy::new(policy, &items);
+
             let mut summary = ProcessedSummary::new(items.len());
             for (item, size) in items.into_iter().zip(sizes) {
                 if reporter.cancelled() {
                     break;
                 }
-                reporter.start_item(&item, size);
+                reporter.start_item(&item.from, size);
 
-                match transfer_item(op, &item, &to_dir, reporter) {
-                    Ok(Handled::Done) => summary.process(),
-                    Ok(Handled::Skipped) => summary.skip(),
+                match transfer_item(op, &item, &policy, reporter) {
+                    // An item is counted by what it left behind rather than by
+                    // what went through: a tree that clashed at one leaf is not
+                    // a tree the batch is finished with.
+                    Ok(left) if left.nothing_left() => summary.process(),
+                    Ok(mut left) if !left.collided.is_empty() => {
+                        summary.collide();
+                        collided.append(&mut left.collided);
+                        kept.append(&mut left.kept);
+                    }
+                    Ok(mut left) => {
+                        // Something landed, only under a name of its own.
+                        if left.kept.is_empty() {
+                            summary.skip();
+                        } else {
+                            summary.process();
+                            kept.append(&mut left.kept);
+                        }
+                    }
                     // A cancelled transfer fails with whatever error unwound
                     // it; the flag, not the error, is what says it was us.
                     Err(_) if reporter.cancelled() => break,
                     Err(e) => {
-                        tracing::error!(path = ?item, error = %e, "transfer failed");
+                        tracing::error!(path = ?item.from, error = %e, "transfer failed");
                         reason = Some(e.to_string());
                         summary.fail();
-                        failed.push(item);
+                        failed.push(item.from);
                     }
                 }
 
@@ -265,31 +283,32 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
         kind,
         summary,
         failed,
+        collided,
+        kept,
         reason,
     }
 }
 
 fn transfer_item(
     op: TransferOp,
-    item: &Path,
-    to_dir: &Path,
+    item: &Transfer,
+    policy: &Policy,
     watcher: &mut dyn Observer,
-) -> io::Result<Handled> {
+) -> io::Result<Unfinished> {
     // The same directory on both sides is a skip, not a failure. A path without
     // a parent has nowhere to come from and skips too.
-    if item.parent().is_none_or(|source| source == to_dir) {
-        return Ok(Handled::Skipped);
+    if item
+        .from
+        .parent()
+        .is_none_or(|source| Some(source) == item.to.parent())
+    {
+        return Ok(Unfinished {
+            skipped: 1,
+            ..Unfinished::default()
+        });
     }
 
-    let Some(file_name) = item.file_name() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} has no file name to transfer under", item.display()),
-        ));
-    };
-
-    op.execute(item, &to_dir.join(file_name), watcher)?;
-    Ok(Handled::Done)
+    op.execute(item, policy, watcher)
 }
 
 /// Turns a running job into `Progress` messages. It carries the counters the
@@ -401,6 +420,7 @@ impl Observer for Reporter<'_> {
 #[cfg(test)]
 mod worker_tests {
     use super::*;
+    use crate::fs::ops::OnCollision;
     use std::{fs, path::PathBuf};
 
     use crate::fs::{job::JobKind, temp_tree::TempTree};
@@ -469,8 +489,8 @@ mod worker_tests {
         worker
             .queue(Work::Transfer {
                 op: TransferOp::Copy,
-                items,
-                to_dir,
+                items: into_dir(items, &to_dir),
+                policy: OnCollision::Refuse,
             })
             .unwrap();
         let finished = settle(&mut worker);
@@ -479,27 +499,97 @@ mod worker_tests {
         assert_eq!(fs::read_to_string(t.at("dest/a.txt")).unwrap(), "aaaa");
     }
 
+    /// The pairs a batch of `items` into `to_dir` flattens to, which is what
+    /// the main loop hands over.
+    fn into_dir(items: Vec<PathBuf>, to_dir: &Path) -> Vec<Transfer> {
+        items
+            .into_iter()
+            .map(|from| Transfer {
+                to: to_dir.join(from.file_name().unwrap()),
+                from,
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
     #[test]
     fn an_item_that_fails_comes_back_so_it_can_be_marked_again() {
+        use std::os::unix::fs::PermissionsExt;
+
         let t = TempTree::new();
         let present = t.make_file("src/a.txt", "a");
         let to_dir = t.make_dir("dest");
-        // A destination that is already taken is the failure that is easiest to
-        // arrange and is exactly what a retry is for.
-        t.make_file("dest/a.txt", "in the way");
+        fs::set_permissions(&present, fs::Permissions::from_mode(0o000)).unwrap();
 
         let mut worker = Worker::start();
         worker
             .queue(Work::Transfer {
                 op: TransferOp::Copy,
-                items: vec![present.clone()],
-                to_dir,
+                items: into_dir(vec![present.clone()], &to_dir),
+                policy: OnCollision::Refuse,
             })
             .unwrap();
         let finished = settle(&mut worker);
 
         assert_eq!(finished[0].failed, vec![present]);
         assert!(finished[0].reason.is_some());
+    }
+
+    /// A taken destination is a question, not a failure. Marking it again
+    /// would offer a retry that would land in exactly the same place.
+    #[test]
+    fn a_taken_destination_comes_back_to_be_asked_about_rather_than_marked() {
+        let t = TempTree::new();
+        let present = t.make_file("src/a.txt", "a");
+        let to_dir = t.make_dir("dest");
+        t.make_file("dest/a.txt", "in the way");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Transfer {
+                op: TransferOp::Copy,
+                items: into_dir(vec![present], &to_dir),
+                policy: OnCollision::Refuse,
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert_eq!(finished[0].summary.collided(), 1);
+        assert_eq!(finished[0].collided.len(), 1);
+        assert_eq!(finished[0].collided[0].to, t.at("dest/a.txt"));
+        assert!(finished[0].failed.is_empty());
+        assert_eq!(
+            fs::read_to_string(t.at("dest/a.txt")).unwrap(),
+            "in the way"
+        );
+    }
+
+    /// The rule a single `execute` cannot keep on its own: two sources
+    /// flattened onto one name are two jobs of the walk, and the second sees a
+    /// live disk in which the first has already landed.
+    #[test]
+    fn a_batch_that_collides_with_itself_does_not_overwrite_its_own_output() {
+        let t = TempTree::new();
+        let first = t.make_file("src/x.txt", "first");
+        let second = t.make_file("src/sub/x.txt", "second");
+        let to_dir = t.make_dir("dest");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Transfer {
+                op: TransferOp::Copy,
+                items: into_dir(vec![first, second], &to_dir),
+                policy: OnCollision::Overwrite,
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert_eq!(
+            fs::read_to_string(t.at("dest/x.txt")).unwrap(),
+            "first",
+            "the second item overwrote what the batch had just written"
+        );
+        assert_eq!(finished[0].collided.len(), 1);
     }
 
     #[test]
@@ -533,8 +623,8 @@ mod worker_tests {
         worker
             .queue(Work::Transfer {
                 op: TransferOp::Copy,
-                items,
-                to_dir,
+                items: into_dir(items, &to_dir),
+                policy: OnCollision::Refuse,
             })
             .unwrap();
         worker.cancel();
@@ -563,8 +653,8 @@ mod worker_tests {
         worker
             .queue(Work::Transfer {
                 op: TransferOp::Copy,
-                items,
-                to_dir,
+                items: into_dir(items, &to_dir),
+                policy: OnCollision::Refuse,
             })
             .unwrap();
 

@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use crate::fs::ops::{MutationOp, ProcessedSummary, TransferOp};
+use crate::fs::ops::{MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp};
 
 /// Rides along with a job and comes back on its outcome untouched. The worker
 /// never looks inside; it is only how the main loop recognises which of its
@@ -27,8 +27,12 @@ pub enum JobKind {
 pub enum Work {
     Transfer {
         op: TransferOp,
-        items: Vec<PathBuf>,
-        to_dir: PathBuf,
+        /// Both ends of every item, so a batch answering a collision names the
+        /// pairs it was asked about rather than flattening them a second time.
+        items: Vec<Transfer>,
+        /// The one answer the whole batch carries. Asked before the batch or
+        /// after it, never in flight.
+        policy: OnCollision,
     },
     Delete {
         items: Vec<PathBuf>,
@@ -99,6 +103,15 @@ pub struct Outcome {
     /// The items the job could not handle, so they can be marked again and
     /// retried. Cancelled items are not among them: they were never tried.
     pub failed: Vec<PathBuf>,
+    /// The pairs whose destination was already taken. Not failures — nothing
+    /// was tried and nothing went wrong — so they are never marked again for
+    /// a retry. What they need is an answer, and a job of their own carrying
+    /// it.
+    pub collided: Vec<Transfer>,
+    /// Where items landed that took a numbered name of their own. The name
+    /// they went in under is not the one that was asked for, so it has to be
+    /// said out loud.
+    pub kept: Vec<PathBuf>,
     /// The last error, for a job whose counts alone would not say what went
     /// wrong.
     pub reason: Option<String>,
