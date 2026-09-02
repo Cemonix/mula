@@ -12,7 +12,7 @@ use std::{
 
 use crate::fs::{
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
-    ops::{MutationOp, Observer, ProcessedSummary, TransferOp, tree_size},
+    ops::{MutationOp, Observer, OnCollision, ProcessedSummary, TransferOp, tree_size},
 };
 
 /// The envelope the queue carries: a piece of work and the tag its outcome has
@@ -288,7 +288,9 @@ fn transfer_item(
         ));
     };
 
-    op.execute(item, &to_dir.join(file_name), watcher)?;
+    // Every batch still refuses a taken destination. Carrying the user's answer
+    // down to here is what `Work::Transfer` gains next.
+    op.execute(item, &to_dir.join(file_name), OnCollision::Refuse, watcher)?;
     Ok(Handled::Done)
 }
 
