@@ -71,7 +71,7 @@ mod keybar_tests {
     use super::*;
     use ratatui::crossterm::event::KeyCode;
 
-    use crate::keys::{BROWSE_KEYS, GLOBAL_KEYS, GlobalMsg, find};
+    use crate::keys::{self, BROWSE_ACTIONS, GLOBAL_KEYS, GlobalMsg, find};
     use crate::{ui::dialog::Dialog, ui::finder::Finder, ui::help, ui::prompt::Prompt};
 
     /// The narrowest terminal the bar is curated against.
@@ -100,7 +100,7 @@ mod keybar_tests {
     /// row, so it counts against the same 80 columns.
     #[test]
     fn the_browse_bar_fits_eighty_columns_beside_the_help_hint() {
-        let width = bar_width(BROWSE_KEYS) + help_width();
+        let width = bar_width(&keys::table(BROWSE_ACTIONS, |_| None)) + help_width();
 
         assert!(width <= COLUMNS, "the browse bar takes {width} columns");
     }
