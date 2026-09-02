@@ -100,6 +100,9 @@ is open again, not broken.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
   errors, so a partial failure can say "Deleted 3 of 5".
 - Confirmation dialogs open on `Choice::No`.
+- Deleting means the trash (F8); permanent deletion is Shift+F8, and the trash
+  is never a fallback — failing to reach it is a failure to delete, reported as
+  one. Not built yet: F8 still deletes for good.
 - A transfer flattens: every item lands under its own name, whatever it was
   nested in. **Holds while** marks are absolute and may come from any
   directory, which leaves no root to keep a structure relative to.
