@@ -24,7 +24,8 @@ its own marks, and can be renamed so a long path is one word on the tab bar.
 
 **Marks, then an operation.** `Space` marks the item under the cursor;
 `Shift+Up`/`Shift+Down` mark and move in one keystroke, `Alt+Up`/`Alt+Down`
-unmark the same way, and `Esc` clears the panel. F5, F6 and F8 then act on
+unmark the same way, `a` marks everything the panel is showing, and `Esc`
+clears the panel. F5, F6 and F8 then act on
 everything marked. Delete names every item it is about to remove rather than
 counting them — marks can be made in a directory you have since left, and a
 count is not something you can check against what you remember marking.
@@ -116,6 +117,7 @@ where you are standing. These are the ones worth knowing before you start.
 | `Tab` | Focus the other panel |
 | `Enter` | Enter a directory, or open a file with what belongs to it |
 | `Space` | Mark or unmark the item under the cursor |
+| `a` | Mark everything the panel is showing |
 | `g` / `Shift+G` | Jump to the first / last item |
 | `F2` | Rename |
 | `F3` / `F4` | Open in `$PAGER` / `$EDITOR` |
@@ -178,7 +180,7 @@ The actions:
 | `panel.toggle` `panel.parent` `panel.find` | Focus the other panel, leave for the one above, find by name |
 | `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
 | `entry.rename` `entry.create` `entry.delete` `entry.delete-permanent` | Rename, create, delete to the trash, delete for good |
-| `mark.toggle` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark and move, clear the panel |
+| `mark.toggle` `mark.all` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark everything shown, mark and move, clear the panel |
 | `unmark.up` `unmark.down` | Unmark and move |
 | `transfer.copy` `transfer.move` | Copy or move the marked items across |
 | `tab.new` `tab.close` `tab.rename` `tab.previous` `tab.next` | Tabs |

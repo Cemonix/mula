@@ -370,6 +370,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Unmarks the item under the cursor and moves down",
     },
     Entry {
+        name: "mark.all",
+        action: Action::MarkAll,
+        keys: &[KeyBinding::plain(KeyCode::Char('a'))],
+        bar: None,
+        help: "Marks every item the panel is showing",
+    },
+    Entry {
         name: "mark.clear",
         action: Action::ClearMarks,
         keys: &[KeyBinding::plain(KeyCode::Esc)],
