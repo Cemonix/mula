@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, ListEnd, VerticalDir},
+    config,
     fs::{
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
@@ -26,7 +27,7 @@ use crate::{
         reader::Reader,
         worker::{Health, Worker},
     },
-    keys::{self, GlobalMsg, KeyBinding},
+    keys::{self, Binding, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
     ui::{
         self,
@@ -216,6 +217,9 @@ pub struct App {
     /// Open over whatever mode is running, showing that mode's keys. Not a
     /// `Mode` itself: the mode underneath has to stay alive to be described.
     help: Option<HelpState>,
+    /// Browse is the one table a config file can rebind, so it is the one that
+    /// is built at startup rather than being a `const`.
+    browse_keys: Vec<Binding<Action>>,
     help_key: Option<KeyBinding>,
     /// Resolved from the key table once, so the hint the info bar draws while a
     /// job runs cannot drift from the key that actually cancels it.
@@ -292,17 +296,27 @@ impl App {
             preview_limits.max_bitmap_side = Self::GRAPHICS_BITMAP_SIDE;
         }
 
-        Ok(Self {
+        // A broken config costs the user their keys, never their file manager.
+        // The defaults stand and the complaint becomes a toast, which needs the
+        // `App` that is still being built here.
+        let (browse_keys, complaint) = match config::browse_table() {
+            Ok(table) => (table, None),
+            Err(e) => (keys::table(keys::BROWSE_ACTIONS, |_| None), Some(e)),
+        };
+        let cancel_key =
+            keys::find(&browse_keys, |a| matches!(a, Action::CancelJob)).map(|binding| binding.key);
+
+        let mut app = Self {
             left: Panel::new()?,
             right: Panel::new()?,
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
             help: None,
+            browse_keys,
             help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
                 .map(|binding| binding.key),
-            cancel_key: keys::find(keys::BROWSE_KEYS, |a| matches!(a, Action::CancelJob))
-                .map(|binding| binding.key),
+            cancel_key,
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
@@ -320,7 +334,12 @@ impl App {
             queued_marks: Vec::new(),
             tick: 0,
             exit: false,
-        })
+        };
+
+        if let Some(e) = complaint {
+            app.notify(ToastLevel::Error, e, None);
+        }
+        Ok(app)
     }
 
     /// Draws, waits up to `TICK` for a key, then takes whatever the worker has
@@ -573,7 +592,7 @@ impl App {
             // works in every mode.
             match self.mode {
                 Mode::Browse => frame.render_widget(
-                    Keybar::new(keys::BROWSE_KEYS).help_key(self.help_key),
+                    Keybar::new(&self.browse_keys).help_key(self.help_key),
                     keys_area,
                 ),
                 Mode::Confirm { .. } => frame.render_widget(
@@ -596,7 +615,7 @@ impl App {
             let globals = keys::GLOBAL_KEYS;
             match self.mode {
                 Mode::Browse => {
-                    frame.render_widget(Help::new(keys::BROWSE_KEYS, globals, state), area)
+                    frame.render_widget(Help::new(&self.browse_keys, globals, state), area)
                 }
                 Mode::Confirm { .. } => {
                     frame.render_widget(Help::new(Dialog::DIALOG_KEYS, globals, state), area)
@@ -652,7 +671,7 @@ impl App {
             Mode::Input { .. } => self.handle_input_key(key),
             Mode::Find { .. } => self.handle_find_key(key),
             Mode::Browse => {
-                if let Some(action) = keys::resolve(keys::BROWSE_KEYS, &key)
+                if let Some(action) = keys::resolve(&self.browse_keys, &key)
                     && let Err(e) = self.dispatch(action)
                 {
                     self.notify(ToastLevel::Error, e, None);

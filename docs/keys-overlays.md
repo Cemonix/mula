@@ -17,8 +17,50 @@ looked at, and every key that it does not bind closes it.
 
 The scroll came from the box being sized to the terminal instead of to a
 constant. A fixed height is a guess at how tall the reader's terminal is, and
-`feat-config-keybindings` will make the number of rows the user's to decide
-anyway — no constant can be right about either.
+the number of rows is the user's to decide now that a config can add keys —
+no constant can be right about either.
+
+## A catalogue, not a table
+
+`BROWSE_ACTIONS` is the list; the table `resolve` walks is built from it at
+startup. An entry carries the name a config calls it by, its default keys, its
+bar label and its help line, and a config replaces the keys and nothing else.
+
+The direction matters. Mapping a key to an action would be the shape every
+editor's config has, but it answers the wrong question. What a user sits down
+to do is *move* an action — copy onto `y` — and key-to-action cannot say that
+in one line: the old key still resolves, so a second entry has to unbind it,
+which needs a sentinel value that means nothing. Action-to-keys says it in one
+line, and an empty list is the unbinding with nothing invented for it.
+
+The other half is that it gives `validate` something to check. Keys are unique
+in a TOML table by construction, so key-to-action could not produce a duplicate
+if it tried, and the function would have stayed dead. Two actions claiming one
+key is a mistake a user can really make, and now it is caught.
+
+Only Browse is configurable. The overlays run on `Esc`, `Enter` and the arrows,
+and a table nobody wants to move is not worth a format.
+
+Nothing about a rebound action changes but the key: it keeps its label, its
+help line and its place in both listings, because those never left the
+catalogue. Only the first key of an action carries the bar label — two keys
+would otherwise draw `F5 Copy  y Copy`.
+
+A config that cannot be used costs the user their keys and never their file
+manager: the defaults stand and the reason arrives as a toast. It is all or
+nothing rather than line by line, because half a config is a state the user
+cannot picture from the file in front of them.
+
+## One spelling for a key
+
+`Display` and `FromStr` on `KeyBinding` are the same names, so what F1 prints
+is what a config can say. That took the three codes crossterm renames on macOS
+— `Delete` for Backspace, `Fwd Del` for Delete, `Return` for Enter — away from
+it: a config written on a Mac has to load on Linux, and a help overlay naming a
+key the config would reject is worse than a native spelling is good.
+
+A test walks every table and round-trips every key through its own name. A key
+that fails it is one nobody could bind.
 
 ## The key bar is curated, not truncated
 
@@ -93,4 +135,5 @@ What matters is which of the two halves a key can reach. `Mode::Input` had it
 right first — `InputTarget` is its own type, so no key resolves to "rename this
 tab, skipping the prompt". `Mode::Confirm` carried an `Action`, and the only
 thing keeping `QuitAnyway` off a key was that nobody had written the binding.
-`feat-config-keybindings` would have handed that binding to the user.
+The config would have handed that binding to the user: a name in the catalogue
+is a name a stranger's config file can ask for.

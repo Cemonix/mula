@@ -204,12 +204,18 @@ impl<'b, T> Widget for Help<'b, T> {
 #[cfg(test)]
 mod help_tests {
     use super::*;
-    use crate::keys::{self, BROWSE_KEYS, GLOBAL_KEYS};
+    use crate::action::Action;
+    use crate::keys::{self, BROWSE_ACTIONS, GLOBAL_KEYS};
 
     /// The smallest terminal that counts, the same one the key bar is curated
     /// against.
     const COLUMNS: u16 = 80;
     const ROWS: u16 = 24;
+
+    /// The Browse table as it stands with no config to override it.
+    fn browse() -> Vec<Binding<Action>> {
+        keys::table(BROWSE_ACTIONS, |_| None)
+    }
 
     /// Draws the overlay over an 80x24 terminal and returns its rows as text.
     fn frame<T>(bindings: &[Binding<T>], state: &mut HelpState) -> Vec<String> {
@@ -259,17 +265,18 @@ mod help_tests {
     /// the overlay claims to list every key working right now.
     #[test]
     fn every_key_is_reachable_at_eighty_by_twenty_four() {
+        let browse = browse();
         let mut state = HelpState::default();
         let mut seen = String::new();
         let mut offset = usize::MAX;
 
         while state.offset != offset {
             offset = state.offset;
-            seen.push_str(&frame(BROWSE_KEYS, &mut state).join("\n"));
+            seen.push_str(&frame(&browse, &mut state).join("\n"));
             state.scroll_page(VerticalDir::Down);
         }
 
-        let listed = BROWSE_KEYS
+        let listed = browse
             .iter()
             .map(|b| (b.key, b.help))
             .chain(GLOBAL_KEYS.iter().map(|b| (b.key, b.help)));
@@ -283,7 +290,7 @@ mod help_tests {
     fn a_table_that_fits_is_not_given_a_position() {
         let mut state = HelpState::default();
 
-        let rows = frame(&BROWSE_KEYS[..3], &mut state).join("\n");
+        let rows = frame(&browse()[..3], &mut state).join("\n");
 
         assert!(!rows.contains(" of "), "the frame was {rows:?}");
     }
@@ -292,11 +299,12 @@ mod help_tests {
     fn a_table_that_does_not_fit_says_where_the_reader_is() {
         let mut state = HelpState::default();
 
-        let rows = frame(BROWSE_KEYS, &mut state).join("\n");
+        let browse = browse();
+        let rows = frame(&browse, &mut state).join("\n");
 
         // Twenty rows is what the frame this builds has room for; the total
         // comes from the tables, so adding a key does not fail this.
-        let total = BROWSE_KEYS.len() + GLOBAL_KEYS.len();
+        let total = browse.len() + GLOBAL_KEYS.len();
         assert!(
             rows.contains(&format!("1-20 of {total}")),
             "the frame was {rows:?}"
@@ -307,17 +315,15 @@ mod help_tests {
     /// so the offset stops climbing however long a key is held.
     #[test]
     fn scrolling_past_the_end_stops_at_the_last_screenful() {
+        let browse = browse();
         let mut state = HelpState::default();
-        frame(BROWSE_KEYS, &mut state);
+        frame(&browse, &mut state);
 
         for _ in 0..100 {
             state.scroll(VerticalDir::Down);
         }
-        frame(BROWSE_KEYS, &mut state);
+        frame(&browse, &mut state);
 
-        assert_eq!(
-            state.offset,
-            BROWSE_KEYS.len() + GLOBAL_KEYS.len() - state.rows
-        );
+        assert_eq!(state.offset, browse.len() + GLOBAL_KEYS.len() - state.rows);
     }
 }

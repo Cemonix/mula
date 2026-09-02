@@ -11,6 +11,7 @@ libc = "0.2.189"
 ratatui = "0.30.2"
 rustix = { version = "1.1.4", features = ["process", "termios"] }
 thiserror = "2.0.20"
+toml = { version = "1.1.4", default-features = false, features = ["parse", "serde", "std"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
