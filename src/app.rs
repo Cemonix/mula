@@ -671,6 +671,10 @@ impl App {
                 .get_focused_pane_mut()
                 .change_directory()
                 .map_err(AppError::from),
+            Action::GoToParent => {
+                self.get_focused_pane_mut().go_to_parent();
+                Ok(())
+            }
             Action::Open(opener) => self.open_selected(opener),
             Action::NewTab => {
                 if let Ok(new_tab) = Tab::new(String::from("New Tab")) {

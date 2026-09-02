@@ -149,6 +149,14 @@ impl Pane {
         Ok(())
     }
 
+    /// Waits for the listing of the directory holding this one, with the
+    /// cursor landing on the directory being left. Where the cursor sits now
+    /// says nothing about it, so no entry is read.
+    pub fn go_to_parent(&mut self) {
+        let current = Arc::clone(self.directory.path());
+        self.reveal(&current);
+    }
+
     /// Moves the cursor one item up, wrapping from the first item to the last.
     /// Does nothing while nothing is selected.
     pub fn select_prev(&mut self) {
@@ -610,6 +618,31 @@ mod pane_tests {
             pane.selected_entry().unwrap().path.as_ref(),
             Path::new("/b/2")
         );
+    }
+
+    #[test]
+    fn going_up_asks_for_the_parent_with_the_cursor_on_the_directory_being_left() {
+        let mut pane = Pane::new(directory_at("/a/1", 0));
+        pane.go_to_parent();
+
+        assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/a")));
+        pane.listed(Ok(Listed::Directory(directory_at("/a", 3))))
+            .unwrap();
+
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/1")
+        );
+    }
+
+    /// Nothing is above the filesystem root, so going up there reads it again
+    /// rather than taking the pane anywhere.
+    #[test]
+    fn going_up_from_the_root_stays_on_the_root() {
+        let mut pane = pane(3);
+        pane.go_to_parent();
+
+        assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/")));
     }
 
     #[test]
