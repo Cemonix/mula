@@ -16,6 +16,7 @@ use crate::{
 
 mod action;
 mod app;
+mod config;
 mod fs;
 mod keys;
 mod open;

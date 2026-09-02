@@ -116,7 +116,52 @@ because terminals with their own tabs claim those first — WezTerm takes
 them. Printable characters cannot be intercepted that way, and every mode that
 reads text has a key table of its own, so they are free here.
 
-Keys are not configurable yet.
+## Configuration
+
+`~/.config/mula/config.toml` (or `$XDG_CONFIG_HOME/mula/config.toml`) rebinds
+the browse keys. A config names an *action* and gives it the keys that should
+reach it — one key, a list of them, or an empty list to leave it unreachable:
+
+```toml
+[keys.browse]
+transfer.copy = ["y", "F5"]   # copy on y as well as F5
+entry.delete  = "d"           # delete on d, and no longer on F8
+tab.close     = []            # nothing closes a tab
+```
+
+Anything the file does not mention keeps the key it has, so a config is as
+short as the changes in it. What a rebound action is called in the bar, what it
+says under F1 and where it sits in both are not the config's to decide — an
+action carries them wherever it moves.
+
+Key names are the ones F1 prints: `F5`, `Tab`, `Enter`, `Backspace`, `Delete`,
+`Esc`, `Space`, `PageUp`, `PageDown`, `Home`, `End`, `Insert`, the four arrows,
+and any single character. `Ctrl+`, `Alt+` and `Shift+` go in front, in that
+order. A capital letter carries Shift whether the name says so or not, so `G`
+and `Shift+G` are one key.
+
+The actions:
+
+| | |
+| --- | --- |
+| `cursor.up` `cursor.down` `cursor.first` `cursor.last` | Move the cursor |
+| `panel.toggle` `panel.parent` `panel.find` | Focus the other panel, leave for the one above, find by name |
+| `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
+| `entry.rename` `entry.create` `entry.delete` | Rename, create, delete |
+| `mark.toggle` `mark.up` `mark.down` `mark.clear` | Mark under the cursor, mark and move, clear the panel |
+| `unmark.up` `unmark.down` | Unmark and move |
+| `transfer.copy` `transfer.move` | Copy or move the marked items across |
+| `tab.new` `tab.close` `tab.rename` `tab.previous` `tab.next` | Tabs |
+| `view.quick` `view.columns` | Quick View, listing columns |
+| `job.cancel` `app.quit` | Cancel the running operation, quit |
+
+A config Mula cannot use costs you your keys and nothing else: the defaults
+stand, and the reason appears as an error the moment it starts. Two actions
+cannot share a key, and no action can take `F1` — it is resolved ahead of the
+browse table and would never arrive.
+
+Only the browse keys are configurable. The overlays answer to `Esc`, `Enter`
+and the arrows, which are not keys anyone needs to move.
 
 ## Environment
 
@@ -127,14 +172,16 @@ Keys are not configurable yet.
 | `$TZ` | Which zone the date column is drawn in, as everywhere else on the system. |
 | `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it: a file manager is run from every directory there is, and one that logs by default leaves a trail of them behind. |
 | `XDG_STATE_HOME` | Where the log goes, under `mula/`. Unset, that is `~/Library/Logs/mula` on macOS and `~/.local/state/mula` elsewhere. |
+| `XDG_CONFIG_HOME` | Where `mula/config.toml` is looked for. Unset, that is `~/.config` — on macOS too, unlike the log: a config is a file you edit and carry between machines. |
 
 ## Not there yet
 
 - **Remote panels.** Managing files on a server over SSH is the reason the
   directory reads were moved off the drawing thread ahead of needing to be.
   When it arrives, Mula will not authenticate anything itself.
-- **A configuration file**, and with it keys you can rebind and settings —
-  the column choice among them — that survive a restart.
+- **Settings in the config file.** It rebinds keys and nothing else yet; the
+  column choice and the file icons are still decided in the running app and
+  forgotten on exit.
 - **Overwrite prompts during a transfer.** A target that already exists is
   refused rather than asked about, so copying into a directory that holds the
   file already reports a failure instead of updating it. Nothing can be lost

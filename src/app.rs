@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, ListEnd, VerticalDir},
+    config,
     fs::{
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
@@ -295,11 +296,17 @@ impl App {
             preview_limits.max_bitmap_side = Self::GRAPHICS_BITMAP_SIDE;
         }
 
-        let browse_keys = keys::table(keys::BROWSE_ACTIONS, |_| None);
+        // A broken config costs the user their keys, never their file manager.
+        // The defaults stand and the complaint becomes a toast, which needs the
+        // `App` that is still being built here.
+        let (browse_keys, complaint) = match config::browse_table() {
+            Ok(table) => (table, None),
+            Err(e) => (keys::table(keys::BROWSE_ACTIONS, |_| None), Some(e)),
+        };
         let cancel_key =
             keys::find(&browse_keys, |a| matches!(a, Action::CancelJob)).map(|binding| binding.key);
 
-        Ok(Self {
+        let mut app = Self {
             left: Panel::new()?,
             right: Panel::new()?,
             focused_side: Side::Left,
@@ -327,7 +334,12 @@ impl App {
             queued_marks: Vec::new(),
             tick: 0,
             exit: false,
-        })
+        };
+
+        if let Some(e) = complaint {
+            app.notify(ToastLevel::Error, e, None);
+        }
+        Ok(app)
     }
 
     /// Draws, waits up to `TICK` for a key, then takes whatever the worker has

@@ -76,6 +76,13 @@ is open again, not broken.
 - An overlay is sized to the terminal and scrolls, never to a constant of ours.
   Guard against 80x24 — the smallest that counts — by walking the whole table
   and asserting every entry can be reached.
+- Browse is a catalogue, not a table: an action carries its name, its default
+  keys, its bar label and its help, and a config replaces the keys alone. The
+  config names actions and gives them keys, never the reverse — moving an
+  action is one line that way, and it is what gives `validate` a duplicate to
+  find. A config that cannot be used falls back whole, never line by line.
+- `Display` and `FromStr` on `KeyBinding` are one spelling, so what F1 prints
+  is what a config can say. Guard it by round-tripping every table's keys.
 - A key working in every mode lives in `GLOBAL_KEYS`, not in each table.
   Resolved before the mode's, so it needs the invariant `validate` cannot give:
   no mode may bind a global key. Nothing printable can be global while a mode

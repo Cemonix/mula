@@ -528,6 +528,23 @@ mod keys_tests {
         assert_eq!(names, unique, "an action name is used twice");
     }
 
+    /// A name is only useful to someone who can find out it exists, and the
+    /// running app never prints one — F1 lists keys. The README is where they
+    /// are written down, so it is measured against the catalogue rather than
+    /// against a list kept by hand.
+    #[test]
+    fn the_readme_names_every_action() {
+        let readme = include_str!("../README.md");
+
+        for entry in BROWSE_ACTIONS {
+            assert!(
+                readme.contains(&format!("`{}`", entry.name)),
+                "{} is in no README table",
+                entry.name
+            );
+        }
+    }
+
     /// An action reachable two ways is still one entry in the bar, or the bar
     /// would draw `F5 Copy  y Copy`.
     #[test]
