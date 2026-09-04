@@ -105,7 +105,8 @@ keys themselves are resolved from, so neither can drift.
 - Linux or macOS. Mula uses POSIX process and signal handling directly, so
   Windows is out; the other Unixes are only out because the crate that reaches
   the system trash covers these two.
-- A Rust toolchain new enough for edition 2024 (1.85 or later).
+- Rust 1.88 or later. Edition 2024 asks for 1.85; ratatui asks for 1.88, and
+  it is the higher of the two that decides.
 - A [Nerd Font](https://www.nerdfonts.com/) in your terminal, for the file
   icons. Install the **Mono** variant specifically: the other variants draw the
   glyph wider than one cell and it overflows into the column beside it. Without

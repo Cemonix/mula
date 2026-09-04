@@ -2,7 +2,7 @@
 name = "mula"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "GPL-3.0-only"
 description = "A dual-pane terminal file manager in the Total Commander tradition"
 repository = "https://github.com/Cemonix/mula"
