@@ -2,7 +2,13 @@
 name = "mula"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-only"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+description = "A dual-pane terminal file manager in the Total Commander tradition"
+repository = "https://github.com/Cemonix/mula"
+readme = "README.md"
+keywords = ["file-manager", "tui", "terminal", "ratatui"]
+categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -16,5 +22,5 @@ tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
-[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 trash = "5.2.6"

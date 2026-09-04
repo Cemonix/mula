@@ -102,22 +102,36 @@ keys themselves are resolved from, so neither can drift.
 
 ## Requirements
 
-- A Unix-like system. Mula uses POSIX process and signal handling directly and
-  is not built for Windows.
-- A Rust toolchain new enough for edition 2024 (1.85 or later).
+- Linux or macOS. Mula uses POSIX process and signal handling directly, so
+  Windows is out; the other Unixes are only out because the crate that reaches
+  the system trash covers these two.
+- Rust 1.88 or later. Edition 2024 asks for 1.85; ratatui asks for 1.88, and
+  it is the higher of the two that decides.
 - A [Nerd Font](https://www.nerdfonts.com/) in your terminal, for the file
   icons. Install the **Mono** variant specifically: the other variants draw the
   glyph wider than one cell and it overflows into the column beside it. Without
   a Nerd Font at all the icons show up as empty boxes and nothing else breaks.
 
-## Building
+## Installing
 
 ```sh
-cargo build --release
-./target/release/mula
+cargo install --git https://github.com/Cemonix/mula
 ```
 
-Mula opens both panels in the directory it was started from.
+That puts `mula` in `~/.cargo/bin`. From a clone, `cargo install --path .` does
+the same thing, and `cargo build --release` leaves the binary in `target/`
+instead if you would rather not install it.
+
+## Running
+
+```sh
+mula            # both panels open where you are
+mula ~/Music    # both panels open there instead
+```
+
+Mula takes one directory, not two: the other panel follows you soon enough, and
+a second argument would be a second place to explain. `--version` and `--help`
+answer and exit; everything else is a key press once it is running.
 
 ## Keys
 
@@ -240,4 +254,9 @@ what you are about to change.
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+Mula is free software: you can redistribute it and modify it under the terms
+of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.

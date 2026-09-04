@@ -33,6 +33,10 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - Widgets are dumb: `App` computes content, the widget draws it. Never `&App`.
 - Test a widget by rendering into a `Buffer` and asserting on symbols.
 - `cargo fmt` and `cargo test` before reporting anything done.
+- Run the suite as an ordinary user. The tests that revoke a permission and
+  expect `PermissionDenied` pass as anyone else and fail as root, which reads
+  as three broken file operations — a container runs as root unless told
+  otherwise.
 
 ## Tasks
 
@@ -105,7 +109,8 @@ is open again, not broken.
 - Confirmation dialogs open on `Choice::No`.
 - Deleting means the trash (F8); permanent deletion is Shift+F8, and the trash
   is never a fallback — failing to reach it is a failure to delete, reported as
-  one. Not built yet: F8 still deletes for good.
+  one. On macOS that is `NsFileManager` rather than our own move, so what the
+  Finder offers to put back is what Mula took away.
 - A transfer flattens: every item lands under its own name, whatever it was
   nested in. **Holds while** marks are absolute and may come from any
   directory, which leaves no root to keep a structure relative to.
