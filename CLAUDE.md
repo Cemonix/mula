@@ -105,7 +105,8 @@ is open again, not broken.
 - Confirmation dialogs open on `Choice::No`.
 - Deleting means the trash (F8); permanent deletion is Shift+F8, and the trash
   is never a fallback — failing to reach it is a failure to delete, reported as
-  one. Not built yet: F8 still deletes for good.
+  one. On macOS that is `NsFileManager` rather than our own move, so what the
+  Finder offers to put back is what Mula took away.
 - A transfer flattens: every item lands under its own name, whatever it was
   nested in. **Holds while** marks are absolute and may come from any
   directory, which leaves no root to keep a structure relative to.
