@@ -33,6 +33,10 @@ Rationale/trade-offs/alternatives go under **Decisions** below, not in source.
 - Widgets are dumb: `App` computes content, the widget draws it. Never `&App`.
 - Test a widget by rendering into a `Buffer` and asserting on symbols.
 - `cargo fmt` and `cargo test` before reporting anything done.
+- Run the suite as an ordinary user. The tests that revoke a permission and
+  expect `PermissionDenied` pass as anyone else and fail as root, which reads
+  as three broken file operations — a container runs as root unless told
+  otherwise.
 
 ## Tasks
 
