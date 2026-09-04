@@ -1,142 +1,36 @@
 # Mula
 
-A dual-pane terminal file manager, in the Total Commander tradition: two
+A dual-pane terminal file manager in the Total Commander tradition: two
 directories side by side, marks, and the work — copy, move, delete — on the
 function keys where muscle memory expects them.
 
-Built with [ratatui](https://ratatui.rs) and
-[crossterm](https://github.com/crossterm-rs/crossterm).
+Built with [ratatui](https://ratatui.rs).
 
-## What it does
-
-**Two panels, two directories.** `Tab` moves the cursor between them. Copy and
-move always go from the panel you are in to the one you are not, so "where does
-this land" is never a question the dialog has to ask.
-
-**Deleting means the trash.** F8 moves the marked items to the system trash;
-Shift+F8 deletes them for good. The trash is never a fallback — if it cannot be
-reached, that is a failure to delete and is reported as one, because "if the
-trash fails, delete for real" takes the safety net away at exactly the moment
-someone was relying on it.
-
-**Tabs in each panel.** Every tab keeps its own directory, its own cursor and
-its own marks, and can be renamed so a long path is one word on the tab bar.
-
-**Marks, then an operation.** `Space` marks the item under the cursor;
-`Shift+Up`/`Shift+Down` mark and move in one keystroke, `Alt+Up`/`Alt+Down`
-unmark the same way, `a` marks everything the panel is showing, and `Esc`
-drops the filter, or the marks when there is no filter — two presses reach a
-clean panel, and marks made across several directories are the thing it is
-slowest to give up. F5, F6 and F8 then act on
-everything marked. Delete names every item it is about to remove rather than
-counting them — marks can be made in a directory you have since left, and a
-count is not something you can check against what you remember marking.
-
-**Hidden files, when you ask.** `.` shows or hides the entries whose names
-begin with a dot, per panel. The listing is read whole and the filter sits
-above it, so nothing is read again to change what is on screen. The parent entry is never filtered away —
-it is how you leave a directory whose own name begins with a dot.
-
-**Filter what is in front of you.** `f` narrows the listing to the names
-matching what you type, live, as you type it — no directory is read again,
-because the filter sits above the listing rather than inside the read. `*`
-stands for any run of characters and `?` for one, and a pattern with neither is
-read as if it had a star at each end: `log` finds `mula.log`, while `*.log`
-means the extension and leaves `logbook.txt` out. `Enter` keeps the filter, so
-`a` then F5 acts on exactly what is left; `Esc` drops it.
-
-It is a different question from `/`, which walks the tree below the panel to
-find something you cannot see, and takes you there.
-
-**Size and date, by default.** A listing shows the name, the size and the
-modification time — the three things you open two panels side by side to
-compare. `c` drops a column when you would rather have the room, and brings
-them all back from the name alone. It is a cycle rather than a setting because
-the columns are only paid for while they are drawn: names come free with
-reading a directory, sizes and dates are a `stat` per entry, and dropping them
-drops those syscalls with them.
-
-**Quick View.** `v` replaces the panel opposite the cursor with the contents of
-whatever the cursor is on: text as text, a directory as its listing, an image
-as an image, and anything else as a hex dump. What a file *is* comes from its
-first bytes, never from its extension, so a file that lies about its format
-falls back to the dump rather than to an error. Quick View is a view toggle,
-not a mode — every browse key and every operation goes on working underneath
-it.
-
-**Images, drawn properly where the terminal allows it.** Mula asks the terminal
-what it can do before the first frame. A terminal that speaks the Kitty
-graphics protocol gets real pixels; everything else gets half-block rendering,
-which is exact to the colour and needs nothing from the terminal at all.
-
-**Find.** `/` walks the tree below the panel for a name, showing hits as they
-arrive rather than at the end. `Enter` on a hit opens the folder holding it
-with the cursor already on it. The walk skips `.git`, `node_modules` and
-`target`, stops at sixteen levels and two hundred hits, and can be cancelled
-while it runs.
-
-**Opening a file follows from what the file is.** `Enter` on a directory enters
-it; on a text file it opens `$EDITOR`, handed the terminal; on anything else it
-hands the file to the system opener, detached, so a picture viewer neither
-freezes Mula nor writes over the frame. F3 and F4 are the named exceptions —
-you asked for `$PAGER` or `$EDITOR`, so nothing is sniffed.
-
-**A collision is one question for the whole batch.** A transfer moves
-everything that lands on a free name, then asks once about the rest —
-overwrite, skip, or keep both under a new name. It asks afterwards rather than
-during, because nothing is forbidden while a job runs and a question arriving
-mid-copy would land on a dialog you opened yourself. Directories merge instead
-of replacing each other, so copying a folder onto one of the same name never
-takes the files that were only in the destination, and a batch can never
-overwrite what it has just written itself.
-
-**Nothing blocks.** Directory reads, tree walks, previews and the file
-operations all run off the drawing thread. A copy of 4 GB does not stop you
-navigating, and it reports progress and a summary — "3 of 5 copied, 1 skipped"
-— rather than a bare error. F9 cancels the running operation.
-
-**Every mode says what it can do.** The bar along the bottom carries the keys
-that matter in whatever is on screen, and `F1` lists all of them, including the
-ones the bar had no room for. Both are generated from the same key table the
-keys themselves are resolved from, so neither can drift.
-
-## Requirements
-
-- Linux or macOS. Mula uses POSIX process and signal handling directly, so
-  Windows is out; the other Unixes are only out because the crate that reaches
-  the system trash covers these two.
-- Rust 1.88 or later. Edition 2024 asks for 1.85; ratatui asks for 1.88, and
-  it is the higher of the two that decides.
-- A [Nerd Font](https://www.nerdfonts.com/) in your terminal, for the file
-  icons. Install the **Mono** variant specifically: the other variants draw the
-  glyph wider than one cell and it overflows into the column beside it. Without
-  a Nerd Font at all the icons show up as empty boxes and nothing else breaks.
-
-## Installing
+## Install
 
 ```sh
 cargo install --git https://github.com/Cemonix/mula
 ```
 
-That puts `mula` in `~/.cargo/bin`. From a clone, `cargo install --path .` does
-the same thing, and `cargo build --release` leaves the binary in `target/`
-instead if you would rather not install it.
-
-## Running
+Then:
 
 ```sh
 mula            # both panels open where you are
 mula ~/Music    # both panels open there instead
 ```
 
-Mula takes one directory, not two: the other panel follows you soon enough, and
-a second argument would be a second place to explain. `--version` and `--help`
-answer and exit; everything else is a key press once it is running.
+Needs Rust 1.88 or later, Linux or macOS — Windows is on the list, see
+[Not there yet](#not-there-yet) — and a [Nerd Font](https://www.nerdfonts.com/)
+for the file icons, the **Mono** variant, since the others draw a glyph wider
+than one cell. Without one the icons are empty boxes and nothing else breaks.
+
+From a clone, `cargo install --path .` does the same thing, and
+`cargo build --release` leaves the binary in `target/` instead.
 
 ## Keys
 
-The running app is the authority: press **F1** for the full list of what works
-where you are standing. These are the ones worth knowing before you start.
+Press **F1** while it runs for everything that works where you are standing.
+These are the ones worth knowing first.
 
 | Key | |
 | --- | --- |
@@ -162,25 +56,45 @@ where you are standing. These are the ones worth knowing before you start.
 | `[` / `]` | Previous / next tab |
 | `q` | Quit |
 
-The tab family sits on plain letters rather than on `Ctrl+PageUp` and friends
-because terminals with their own tabs claim those first — WezTerm takes
-`Ctrl+PageUp`/`Ctrl+PageDown`, `Ctrl+Tab` and `Ctrl+W` before the app ever sees
-them. Printable characters cannot be intercepted that way, and every mode that
-reads text has a key table of its own, so they are free here.
+## What it does
+
+- **Two panels.** Copy and move always go from the panel you are in to the one
+  you are not, so "where does this land" is never a question.
+- **Tabs in each panel**, each with its own directory, cursor and marks, and a
+  name you can change so a long path is one word.
+- **Marks, then an operation.** `Space` marks, `Shift+Up`/`Down` mark and move
+  in one keystroke, `a` marks everything shown. Marks survive leaving the
+  directory they were made in.
+- **Deleting means the trash.** F8 names every item before it goes; Shift+F8
+  deletes for good. A trash that cannot be reached is a failed delete, never a
+  silent fall back to permanent deletion.
+- **A collision is one question for the whole batch** — overwrite, skip, or
+  keep both — asked after everything else has moved. Directories merge rather
+  than replacing each other.
+- **Quick View.** `v` fills the opposite panel with whatever the cursor is on:
+  text, a listing, an image, or a hex dump. What a file is comes from its first
+  bytes, so one that lies about its format falls back to the dump.
+- **Images drawn properly** — real pixels where the terminal speaks the Kitty
+  graphics protocol, exact half-blocks everywhere else.
+- **Find and filter.** `/` walks the tree below the panel and shows hits as they
+  arrive; `f` narrows the listing as you type, with `*` and `?`, reading no
+  directory twice.
+- **Size and date columns**, with `c` to drop one when you would rather have
+  the room.
+- **Nothing blocks.** Reads, walks, previews and file operations all run off
+  the drawing thread. A 4 GB copy reports progress and a summary — "3 of 5
+  copied, 1 skipped" — and F9 cancels it.
+- **Every mode says what it can do.** The bottom bar and F1 are generated from
+  the same table the keys are resolved from, so neither can drift.
+
+Why each of these works the way it does is in [`docs/`](docs), one file per
+subsystem.
 
 ## Configuration
 
 `~/.config/mula/config.toml` (or `$XDG_CONFIG_HOME/mula/config.toml`) rebinds
-the browse keys. Mula never writes it for you; nothing is created and nothing
-changes until you put one there.
-
-[`config.example.toml`](config.example.toml) in this repository is every action
-written out at the key it already has — copy it over and keep the lines you
-want to change. A test holds it to the defaults, so it cannot quietly stop
-being true.
-
-A config names an *action* and gives it the keys that should reach it — one
-key, a list of them, or an empty list to leave it unreachable:
+the browse keys. Nothing is created for you and nothing changes until you put a
+file there.
 
 ```toml
 [keys.browse]
@@ -189,39 +103,14 @@ entry.delete  = "d"           # delete on d, and no longer on F8
 tab.close     = []            # nothing closes a tab
 ```
 
-Anything the file does not mention keeps the key it has, so a config is as
-short as the changes in it. What a rebound action is called in the bar, what it
-says under F1 and where it sits in both are not the config's to decide — an
-action carries them wherever it moves.
-
-Key names are the ones F1 prints: `F5`, `Tab`, `Enter`, `Backspace`, `Delete`,
-`Esc`, `Space`, `PageUp`, `PageDown`, `Home`, `End`, `Insert`, the four arrows,
-and any single character. `Ctrl+`, `Alt+` and `Shift+` go in front, in that
-order. A capital letter carries Shift whether the name says so or not, so `G`
-and `Shift+G` are one key.
-
-The actions:
-
-| | |
-| --- | --- |
-| `cursor.up` `cursor.down` `cursor.first` `cursor.last` | Move the cursor |
-| `panel.toggle` `panel.parent` `panel.find` `panel.filter` `panel.clear` | Focus the other panel, leave for the one above, find by name in the tree, narrow this listing, drop the filter then the marks |
-| `entry.open` `entry.view` `entry.edit` | Open under the cursor, in `$PAGER`, in `$EDITOR` |
-| `entry.rename` `entry.create` `entry.delete` `entry.delete-permanent` | Rename, create, delete to the trash, delete for good |
-| `mark.toggle` `mark.all` `mark.up` `mark.down` | Mark under the cursor, mark everything shown, mark and move |
-| `unmark.up` `unmark.down` | Unmark and move |
-| `transfer.copy` `transfer.move` | Copy or move the marked items across |
-| `tab.new` `tab.close` `tab.rename` `tab.previous` `tab.next` | Tabs |
-| `view.quick` `view.columns` `view.dotfiles` | Quick View, listing columns, show or hide dot files |
-| `job.cancel` `app.quit` | Cancel the running operation, quit |
-
-A config Mula cannot use costs you your keys and nothing else: the defaults
-stand, and the reason appears as an error the moment it starts. Two actions
-cannot share a key, and no action can take `F1` — it is resolved ahead of the
-browse table and would never arrive.
+[`config.example.toml`](config.example.toml) is every action written out at the
+key it already has — copy it and keep the lines you want to change. Key names
+are the ones F1 prints. Anything the file leaves out keeps the key it has, and
+a config Mula cannot use costs you your keys and nothing else: the defaults
+stand and the reason appears at startup.
 
 Only the browse keys are configurable. The overlays answer to `Esc`, `Enter`
-and the arrows, which are not keys anyone needs to move.
+and the arrows.
 
 ## Environment
 
@@ -229,28 +118,31 @@ and the arrows, which are not keys anyone needs to move.
 | --- | --- |
 | `$VISUAL`, `$EDITOR` | What F4 and `Enter` on a text file open, in that order, falling back to `vi`. Split on whitespace, so `code -w` works; nothing reaches a shell. |
 | `$PAGER` | What F3 opens, falling back to `less`. |
-| `$TZ` | Which zone the date column is drawn in, as everywhere else on the system. |
-| `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it: a file manager is run from every directory there is, and one that logs by default leaves a trail of them behind. |
+| `$TZ` | Which zone the date column is drawn in. |
+| `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it. |
 | `XDG_STATE_HOME` | Where the log goes, under `mula/`. Unset, that is `~/Library/Logs/mula` on macOS and `~/.local/state/mula` elsewhere. |
-| `XDG_CONFIG_HOME` | Where `mula/config.toml` is looked for. Unset, that is `~/.config` — on macOS too, unlike the log: a config is a file you edit and carry between machines. |
+| `XDG_CONFIG_HOME` | Where `mula/config.toml` is looked for. Unset, that is `~/.config`, on macOS too. |
 
 ## Not there yet
 
+- **Windows.** Mula reaches for POSIX process and signal handling directly: a
+  detached opener gets `/dev/null` and a session of its own, `$EDITOR` is
+  handed the terminal with the default signal handlers put back, and a symlink
+  is copied as a symlink. Each of those needs a counterpart before the panels
+  could open there.
 - **Remote panels.** Managing files on a server over SSH is the reason the
   directory reads were moved off the drawing thread ahead of needing to be.
-  When it arrives, Mula will not authenticate anything itself.
-- **Settings in the config file.** It rebinds keys and nothing else yet; the
-  column choice and the file icons are still decided in the running app and
-  forgotten on exit.
+- **Settings in the config file.** It rebinds keys and nothing else; the column
+  choice and the icons are decided in the running app and forgotten on exit.
 
 ## Contributing
 
-`docs/` holds the reasoning behind the design, one file per subsystem:
-background I/O, previews, keys and overlays, marks and operations, opening.
+[`docs/`](docs) holds the reasoning behind the design, one file per subsystem;
 `CLAUDE.md` holds the rules those documents argue for. Read the one covering
 what you are about to change.
 
-`cargo fmt` and `cargo test` before opening a pull request.
+`cargo fmt` and `cargo test` before opening a pull request — as an ordinary
+user, since three tests revoke a permission and expect to be refused.
 
 ## License
 
