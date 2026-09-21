@@ -124,7 +124,13 @@ pub struct Outcome {
     pub kind: JobKind,
     pub summary: ProcessedSummary,
     /// The items the job could not handle, so they can be marked again and
-    /// retried. Cancelled items are not among them: they were never tried.
+    /// retried.
+    ///
+    /// A cancelled transfer or delete leaves nothing here: what it had
+    /// already done stands, and marking the rest again would offer to do it
+    /// twice. Packing and unpacking undo the archive they were interrupted
+    /// in, so for those a cancel leaves nothing done and every item it
+    /// touched comes back.
     pub failed: Vec<PathBuf>,
     /// The pairs whose destination was already taken. Not failures — nothing
     /// was tried and nothing went wrong — so they are never marked again for

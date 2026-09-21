@@ -292,9 +292,10 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                     summary.process();
                     left_out = packed.refused;
                 }
-                // An archive that was cancelled was removed with the run, so
-                // there is nothing to report but the marks coming back.
-                Err(_) if reporter.cancelled() => (),
+                // A cancelled archive was removed with the run, so nothing
+                // came of any of the items. They go back on the panel for the
+                // key to be pressed again.
+                Err(_) if reporter.cancelled() => failed = items,
                 Err(e) => {
                     tracing::error!(path = ?archive, error = %e, "packing failed");
                     reason = Some(e.to_string());
@@ -322,8 +323,14 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             );
 
             let mut summary = ProcessedSummary::new(items.len());
-            for (item, size) in items.into_iter().zip(sizes) {
+            let mut queue = items.into_iter().zip(sizes);
+            while let Some((item, size)) = queue.next() {
+                // An unpack leaves nothing behind when it is cancelled, so the
+                // archive that was interrupted and the ones behind it are in
+                // the same position: they all go back on the panel.
                 if reporter.cancelled() {
+                    failed.push(item);
+                    failed.extend(queue.map(|(item, _)| item));
                     break;
                 }
                 reporter.start_item(&item, size);
@@ -334,7 +341,11 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                         kept.push(unpacked.into);
                         left_out.extend(unpacked.refused);
                     }
-                    Err(_) if reporter.cancelled() => break,
+                    Err(_) if reporter.cancelled() => {
+                        failed.push(item);
+                        failed.extend(queue.by_ref().map(|(item, _)| item));
+                        break;
+                    }
                     Err(e) => {
                         tracing::error!(path = ?item, error = %e, "unpacking failed");
                         reason = Some(e.to_string());
@@ -612,6 +623,33 @@ mod worker_tests {
             fs::read_to_string(back.join("notes/one.txt")).unwrap(),
             "one"
         );
+    }
+
+    /// Cancelling takes the archive with it, so nothing was done and every
+    /// item goes back on the panel.
+    #[test]
+    fn a_cancelled_pack_gives_every_mark_back() {
+        let t = TempTree::new();
+        let items = vec![
+            t.make_file("one.txt", "one"),
+            t.make_file("two.txt", "two"),
+            t.make_file("three.txt", "three"),
+        ];
+        let archive = t.at("notes.zip");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Pack {
+                items: items.clone(),
+                archive: archive.clone(),
+                format: Format::Zip,
+            })
+            .unwrap();
+        worker.cancel();
+        let finished = settle(&mut worker);
+
+        assert!(!archive.exists(), "a cancelled pack left an archive");
+        assert_eq!(finished[0].failed, items);
     }
 
     /// A name that is taken fails the job, and the marks come back so the key
