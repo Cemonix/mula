@@ -48,6 +48,7 @@ These are the ones worth knowing first.
 | `r` | Rename |
 | `v` / `e` | Open in `$PAGER` / `$EDITOR` |
 | `c` / `m` | Copy / move the marked items into the other panel |
+| `z` / `u` | Pack the marked items into one archive / unpack the marked archives |
 | `n` | Create a file, or a folder if the name ends with `/` |
 | `d` | Move the marked items to the trash, naming each one first |
 | `Shift+D` | Delete them for good, without the trash |
@@ -77,9 +78,15 @@ These are the ones worth knowing first.
 - **A collision is one question for the whole batch** — overwrite, skip, or
   keep both — asked after everything else has moved. Directories merge rather
   than replacing each other.
+- **Archives.** `z` packs the marked items into one archive — zip, tar or
+  tar.gz, chosen by the suffix you type — and `u` unpacks the marked ones into
+  the other panel. An unpack goes into a directory of its own and takes a
+  numbered name when that one is taken, so it never writes over anything, and
+  a cancelled one leaves nothing behind.
 - **Preview.** `p` fills the opposite panel with whatever the cursor is on:
-  text, a listing, an image, or a hex dump. What a file is comes from its first
-  bytes, so one that lies about its format falls back to the dump.
+  text, a listing, an archive's contents, an image, or a hex dump. What a file
+  is comes from its first bytes, so one that lies about its format falls back
+  to the dump.
 - **Images drawn properly** — real pixels where the terminal speaks the Kitty
   graphics protocol, exact half-blocks everywhere else.
 - **Find and filter.** `f` walks the tree below the panel and shows hits as they
@@ -138,6 +145,10 @@ and the arrows.
 
 - **Remote panels.** Managing files on a server over SSH is the reason the
   directory reads were moved off the drawing thread ahead of needing to be.
+- **Walking into an archive.** `p` shows what one holds and `u` gets it out,
+  but Enter on an archive does not open it as a directory. Doing that means
+  entries that are not local paths — the same thing a remote panel needs, so
+  the two wait for one another.
 - **Settings in the config file.** It rebinds keys and nothing else; the column
   choice and the icons are decided in the running app and forgotten on exit.
 
