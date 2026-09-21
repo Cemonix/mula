@@ -4,7 +4,10 @@
 
 use std::path::PathBuf;
 
-use crate::fs::ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp};
+use crate::fs::{
+    archive::format::Format,
+    ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
+};
 
 /// Rides along with a job and comes back on its outcome untouched. The worker
 /// never looks inside; it is only how the main loop recognises which of its
@@ -17,6 +20,8 @@ pub type JobTag = u64;
 pub enum JobKind {
     Transfer(TransferOp),
     Delete(DeleteMode),
+    Pack,
+    Unpack,
     Mutate,
 }
 
@@ -40,6 +45,19 @@ pub enum Work {
         /// the job, never decided while it runs.
         mode: DeleteMode,
     },
+    /// Everything marked, into one archive. The format is settled from the
+    /// name the user typed, so nothing is sniffed on this side.
+    Pack {
+        items: Vec<PathBuf>,
+        archive: PathBuf,
+        format: Format,
+    },
+    /// Every marked archive, each into a directory of its own under `into`.
+    /// What each one is comes from its first bytes, read by the job.
+    Unpack {
+        items: Vec<PathBuf>,
+        into: PathBuf,
+    },
     Mutate(MutationOp),
 }
 
@@ -48,6 +66,8 @@ impl Work {
         match self {
             Work::Transfer { op, .. } => JobKind::Transfer(*op),
             Work::Delete { mode, .. } => JobKind::Delete(*mode),
+            Work::Pack { .. } => JobKind::Pack,
+            Work::Unpack { .. } => JobKind::Unpack,
             Work::Mutate(_) => JobKind::Mutate,
         }
     }
@@ -104,7 +124,13 @@ pub struct Outcome {
     pub kind: JobKind,
     pub summary: ProcessedSummary,
     /// The items the job could not handle, so they can be marked again and
-    /// retried. Cancelled items are not among them: they were never tried.
+    /// retried.
+    ///
+    /// A cancelled transfer or delete leaves nothing here: what it had
+    /// already done stands, and marking the rest again would offer to do it
+    /// twice. Packing and unpacking undo the archive they were interrupted
+    /// in, so for those a cancel leaves nothing done and every item it
+    /// touched comes back.
     pub failed: Vec<PathBuf>,
     /// The pairs whose destination was already taken. Not failures — nothing
     /// was tried and nothing went wrong — so they are never marked again for
@@ -115,6 +141,11 @@ pub struct Outcome {
     /// they went in under is not the one that was asked for, so it has to be
     /// said out loud.
     pub kept: Vec<PathBuf>,
+    /// Parts of a job that were not carried out and are named rather than
+    /// counted: an entry an archive held that could not be written, or an
+    /// item an archive has no way to carry. Neither is a failure of the job
+    /// it belongs to, which is why they are not in `failed`.
+    pub left_out: Vec<String>,
     /// The last error, for a job whose counts alone would not say what went
     /// wrong.
     pub reason: Option<String>,

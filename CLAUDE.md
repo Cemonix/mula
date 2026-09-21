@@ -8,7 +8,7 @@ in a task file.
 
 `docs/` holds the reasoning behind the rules below, one file per subsystem:
 `background-io.md`, `preview.md`, `keys-overlays.md`, `marks-operations.md`,
-`opening.md`.
+`opening.md`, `archives.md`.
 Read the one covering what you are about to change. A rule that acquires a
 rationale worth keeping puts it there, not here.
 
@@ -135,6 +135,35 @@ is open again, not broken.
   behind "overwrite".
 - Nothing is asked when nothing is at stake: a merge with no clashing leaf runs
   in silence.
+
+**Archives**
+- The items of a batch are what was marked, never the entries inside them: an
+  unpack counts archives, a pack counts the one archive it writes, and the
+  entries move the bar through `Observer` the way files inside a marked
+  directory already do. That is what lets a format with no index report
+  progress without `Progress` knowing anything new.
+- An unpack writes into a staging directory and renames it at the end, so it
+  is all of an archive or none of it, and it never asks about a collision:
+  the directory takes the archive's name, or the next free numbered one.
+  Merging into a tree that exists is unpack then F5 — two steps the user can
+  take, and the second already knows how to ask.
+- A staging directory holding one directory and nothing else is renamed by
+  that directory's name. Worked out after the run, not from an index, so a
+  tar gets it too.
+- Packing asks for a name and reads the format off its suffix. No second
+  field, no format dialog, and an unknown suffix stops before anything is
+  queued with the marks still standing.
+- A name out of an archive is the one name in Mula that did not come from the
+  filesystem. `make_way` keeps a symlink from ever being a component inside
+  the destination, which is what makes `inside` sound while it reasons
+  lexically — and it has to, because a link may point at what is not there
+  yet. Modes are masked to the low nine bits; anything that is not a file, a
+  directory or a link is left out, and so is an encrypted entry.
+- Codecs run in process, never as `bsdtar` or `7z`. Not because of the shell
+  rule — that is about a shell, not `argv` — but because a subprocess costs
+  the progress per entry and the cancel between them. **Holds while** a
+  format has a Rust implementation; `.tar.zst` can be read but not written,
+  since no Rust zstd encoder exists.
 
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once

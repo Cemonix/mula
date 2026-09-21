@@ -19,6 +19,7 @@ use crate::{
     config,
     favorites::{Added, Favorites},
     fs::{
+        archive::format::{self, Format},
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Outcome, Progress, Work},
@@ -144,11 +145,28 @@ impl PendingMutation {
     }
 }
 
+/// An archive waiting for its name. The name settles two things at once —
+/// what the file is called and which format it is written in — which is why
+/// packing needs no second field and no dialog of its own.
+///
+/// The items and the destination are taken when the prompt opens rather than
+/// when it is answered, the same way a rename holds the path it was opened
+/// on.
+#[derive(Debug, Clone)]
+pub struct PendingPack {
+    items: Vec<PathBuf>,
+    into: PathBuf,
+    side: Side,
+    tab: TabId,
+}
+
 /// Where the text of a confirmed `Input` prompt goes: into a filesystem
-/// mutation, or into the title of the tab that was open for renaming.
+/// mutation, into an archive's name, or into the title of the tab that was
+/// open for renaming.
 #[derive(Debug, Clone)]
 pub enum InputTarget {
     Mutation(PendingMutation),
+    Pack(PendingPack),
     RenameTab,
 }
 
@@ -754,7 +772,7 @@ impl App {
         match action {
             Action::Quit => self.confirm_quit(),
             Action::CancelJob => {
-                self.worker.cancel();
+                self.cancel_job();
                 Ok(())
             }
             Action::ToggleSide => {
@@ -826,6 +844,8 @@ impl App {
                 Ok(())
             }
             Action::Transfer { op } => self.queue_transfer(op),
+            Action::Pack => self.prompt_pack(),
+            Action::Unpack => self.queue_unpack(),
             Action::Delete(mode) => self.confirm_delete(mode),
             Action::Rename => self.prompt_rename(),
             Action::CreateEntry => self.prompt_create_entry(),
@@ -888,6 +908,24 @@ impl App {
             },
             ConfirmTarget::Delete(_) | ConfirmTarget::Quit => Ok(()),
         }
+    }
+
+    /// Asks the running job to stop, and says so.
+    ///
+    /// A job does not end at the key: it stops at its next entry, and an
+    /// unpack then has a staging directory to take away, which can cost as
+    /// long as writing it did. What is on screen through all of that is a
+    /// progress bar that has stopped moving, so the press itself has to be
+    /// acknowledged or it reads as an app that has stopped answering.
+    ///
+    /// Nothing is said with an idle worker, where the key does nothing.
+    fn cancel_job(&mut self) {
+        if self.worker.is_idle() {
+            return;
+        }
+
+        self.worker.cancel();
+        self.notify(ToastLevel::Info, "Cancelling…", None);
     }
 
     fn move_cursor(&mut self, dir: VerticalDir) {
@@ -1054,6 +1092,7 @@ impl App {
                 } else {
                     let result = match pending {
                         InputTarget::Mutation(mutation) => self.mutate(mutation, text),
+                        InputTarget::Pack(pending) => self.queue_pack(pending, text),
                         InputTarget::RenameTab => {
                             self.get_focused_tabs_mut().active_tab_mut().rename(text);
                             Ok(())
@@ -1268,22 +1307,127 @@ impl App {
         Ok(())
     }
 
+    /// Opens the prompt for the name of an archive holding what is marked.
+    ///
+    /// The name is prefilled with the one item that is marked, or with the
+    /// directory they all came from, and with `.zip` after it. Typing another
+    /// suffix over it is what asks for another format.
+    fn prompt_pack(&mut self) -> Result<(), AppError> {
+        let side = self.focused_side;
+        let (from, to) = self.both_sides();
+        let into = to.get_pane().get_current_dir().to_path_buf();
+        let items: Vec<PathBuf> = from
+            .get_selected_items()
+            .iter()
+            .map(|item| item.to_path_buf())
+            .collect();
+        let tab = from.id();
+        let suggested = match items.as_slice() {
+            [only] => ui::name_of(only),
+            _ => ui::name_of(from.get_pane().get_current_dir()),
+        };
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
+        }
+
+        let mut prompt = Prompt::new("Pack into");
+        prompt.set_text(format!("{suggested}.zip"));
+        self.mode = Mode::Input {
+            prompt,
+            pending: InputTarget::Pack(PendingPack {
+                items,
+                into,
+                side,
+                tab,
+            }),
+        };
+        Ok(())
+    }
+
+    /// Hands the marked items to the worker under the name that was typed.
+    ///
+    /// A name asking for no format Mula writes stops here: the marks are
+    /// still standing, so the key can simply be pressed again.
+    fn queue_pack(&mut self, pending: PendingPack, name: String) -> Result<(), AppError> {
+        let Some(format) = Format::of_name(&name) else {
+            self.notify(
+                ToastLevel::Warning,
+                format!("Name it {} to say which format", format::WRITABLE),
+                None,
+            );
+            return Ok(());
+        };
+
+        let PendingPack {
+            items,
+            into,
+            side,
+            tab,
+        } = pending;
+        if let Some(tab) = self.panel_mut(side).tabs_mut().tab_mut(tab) {
+            tab.deselect_items();
+        }
+
+        let tag = self.worker.queue(Work::Pack {
+            items,
+            archive: into.join(name),
+            format,
+        })?;
+        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        Ok(())
+    }
+
+    /// Hands every marked archive to the worker, to be unpacked into the
+    /// other panel.
+    ///
+    /// Nothing is asked first. Each archive goes into a directory of its own
+    /// and takes a numbered name when that one is taken, so there is no
+    /// collision for a question to be about.
+    fn queue_unpack(&mut self) -> Result<(), AppError> {
+        let side = self.focused_side;
+        let (from, to) = self.both_sides();
+        let into = to.get_pane().get_current_dir().to_path_buf();
+        let items: Vec<PathBuf> = from
+            .get_selected_items()
+            .iter()
+            .map(|item| item.to_path_buf())
+            .collect();
+        let tab = from.id();
+        from.deselect_items();
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
+        }
+
+        let tag = self.worker.queue(Work::Unpack { items, into })?;
+        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        Ok(())
+    }
+
+    /// The focused tab and the one opposite it, in that order.
+    fn both_sides(&mut self) -> (&mut Tab, &mut Tab) {
+        match self.focused_side {
+            Side::Left => (
+                self.left.tabs_mut().active_tab_mut(),
+                self.right.tabs_mut().active_tab_mut(),
+            ),
+            Side::Right => (
+                self.right.tabs_mut().active_tab_mut(),
+                self.left.tabs_mut().active_tab_mut(),
+            ),
+        }
+    }
+
     /// Takes the marks of the focused tab and hands them to the worker. The
     /// paths are copied out here and never read again, so the batch is settled
     /// the moment the key is pressed.
     fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
         let side = self.focused_side;
         let (items, tab) = {
-            let (from, to) = match side {
-                Side::Left => (
-                    self.left.tabs_mut().active_tab_mut(),
-                    self.right.tabs_mut().active_tab_mut(),
-                ),
-                Side::Right => (
-                    self.right.tabs_mut().active_tab_mut(),
-                    self.left.tabs_mut().active_tab_mut(),
-                ),
-            };
+            let (from, to) = self.both_sides();
 
             let to_dir = to.get_pane().get_current_dir().to_path_buf();
             // The batch flattens here, once: every item lands under its own
@@ -1653,7 +1797,10 @@ impl App {
         }
 
         if !outcome.kept.is_empty() {
-            self.notify_kept(&outcome.kept);
+            self.notify_landed(outcome.kind, &outcome.kept);
+        }
+        if !outcome.left_out.is_empty() {
+            self.notify_left_out(&outcome.left_out);
         }
 
         let reason = outcome.reason.as_deref();
@@ -1670,6 +1817,8 @@ impl App {
             JobKind::Delete(DeleteMode::Permanent) => {
                 self.notify_summary("deleted", &outcome.summary, reason)
             }
+            JobKind::Pack => self.notify_summary("packed", &outcome.summary, reason),
+            JobKind::Unpack => self.notify_summary("unpacked", &outcome.summary, reason),
             // A single mutation has nothing worth counting: it either happened,
             // or the error itself is the whole report.
             JobKind::Mutate => {
@@ -1702,14 +1851,28 @@ impl App {
     /// `reason` is the last error the batch met. Counts alone say that
     /// something went wrong but never what, and the log is no help while the
     /// toast is still on screen.
-    /// Says where the items went that took a name of their own. One is named
-    /// outright; several would not fit a toast, so they are counted.
-    fn notify_kept(&mut self, kept: &[PathBuf]) {
-        let message = match kept {
-            [only] => format!("Kept both, as {}", ui::name_of(only)),
-            many => format!("Kept both, {} under new names", many.len()),
+    /// Says where items went that did not land under the name that was asked
+    /// for. One is named outright; several would not fit a toast, so they are
+    /// counted.
+    fn notify_landed(&mut self, kind: JobKind, landed: &[PathBuf]) {
+        let message = match (kind, landed) {
+            (JobKind::Unpack, [only]) => format!("Unpacked into {}", ui::name_of(only)),
+            (JobKind::Unpack, many) => format!("Unpacked into {} directories", many.len()),
+            (_, [only]) => format!("Kept both, as {}", ui::name_of(only)),
+            (_, many) => format!("Kept both, {} under new names", many.len()),
         };
         self.notify(ToastLevel::Info, message, None);
+    }
+
+    /// Says what an archive could not carry or could not give back. Not a
+    /// failure of the job — the rest of the archive is there — but not
+    /// something to pass over in silence either.
+    fn notify_left_out(&mut self, left_out: &[String]) {
+        let message = match left_out {
+            [only] => format!("{only} was left out"),
+            many => format!("{} entries were left out", many.len()),
+        };
+        self.notify(ToastLevel::Warning, message, None);
     }
 
     fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary, reason: Option<&str>) {

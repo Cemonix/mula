@@ -49,6 +49,9 @@ unmark.down = "Alt+Down"
 transfer.copy = "c"
 transfer.move = "m"
 
+archive.pack = "z"
+archive.unpack = "u"
+
 favorites.open = "b"
 favorites.add = "Shift+B"
 
