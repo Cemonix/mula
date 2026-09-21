@@ -1,3 +1,4 @@
+pub(crate) mod archive;
 pub(crate) mod directory;
 pub(crate) mod find;
 pub(crate) mod job;

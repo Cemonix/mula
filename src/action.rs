@@ -39,6 +39,12 @@ pub enum Action {
     Transfer {
         op: TransferOp,
     },
+    /// Opens the prompt for the archive's name. What format it is written in
+    /// follows from that name, so only the asking half is an action here too.
+    Pack,
+    /// Unpacks every marked archive into the other panel. Nothing is asked:
+    /// each one goes into a directory of its own and nothing is overwritten.
+    Unpack,
     /// Opens the confirmation for one of the two deletions. Which one is
     /// settled by the key, since only the asking half is an `Action`.
     Delete(DeleteMode),

@@ -12,15 +12,21 @@ categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+flate2 = "1.1.10"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2.189"
 ratatui = "0.30.2"
 rustix = { version = "1.1.4", features = ["process", "termios"] }
+tar = "0.4.46"
 thiserror = "2.0.20"
 toml = { version = "1.1.4", default-features = false, features = ["display", "parse", "serde", "std"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Deflate alone, through the flate2 already here. The defaults add AES, zopfli,
+# lzma, zstd and a date library; nothing reads an encrypted archive yet, and
+# zstd is the one codec with no pure-Rust encoder.
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 trash = "5.2.6"

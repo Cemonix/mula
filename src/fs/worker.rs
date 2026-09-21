@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::fs::{
+    archive::{pack::pack, unpack::unpack},
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
     ops::{
         MutationError, MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp,
@@ -170,6 +171,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
     let mut failed = Vec::new();
     let mut collided = Vec::new();
     let mut kept = Vec::new();
+    let mut left_out = Vec::new();
     let mut reason = None;
 
     let summary = match job.work {
@@ -273,6 +275,79 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             summary
         }
 
+        // One archive, however many items go into it, so the batch is the
+        // archive and the bar fills with what the items weigh on disk.
+        Work::Pack {
+            items,
+            archive,
+            format,
+        } => {
+            let total = items.iter().map(|item| tree_size(item)).sum();
+            reporter.begin(1, Measure::Bytes { done: 0, total });
+            reporter.start_item(&archive, total);
+
+            let mut summary = ProcessedSummary::new(1);
+            match pack(&items, &archive, format, reporter) {
+                Ok(packed) => {
+                    summary.process();
+                    left_out = packed.refused;
+                }
+                // An archive that was cancelled was removed with the run, so
+                // there is nothing to report but the marks coming back.
+                Err(_) if reporter.cancelled() => (),
+                Err(e) => {
+                    tracing::error!(path = ?archive, error = %e, "packing failed");
+                    reason = Some(e.to_string());
+                    summary.fail();
+                    failed = items;
+                }
+            }
+            reporter.finish_item();
+            summary
+        }
+
+        // The archives are the batch, and each is weighed by its own size on
+        // disk: what moves the bar is how far into the file the job has read.
+        Work::Unpack { items, into } => {
+            let sizes: Vec<u64> = items
+                .iter()
+                .map(|item| item.metadata().map(|meta| meta.len()).unwrap_or_default())
+                .collect();
+            reporter.begin(
+                items.len(),
+                Measure::Bytes {
+                    done: 0,
+                    total: sizes.iter().sum(),
+                },
+            );
+
+            let mut summary = ProcessedSummary::new(items.len());
+            for (item, size) in items.into_iter().zip(sizes) {
+                if reporter.cancelled() {
+                    break;
+                }
+                reporter.start_item(&item, size);
+
+                match unpack(&item, &into, reporter) {
+                    Ok(unpacked) => {
+                        summary.process();
+                        kept.push(unpacked.into);
+                        left_out.extend(unpacked.refused);
+                    }
+                    Err(_) if reporter.cancelled() => break,
+                    Err(e) => {
+                        tracing::error!(path = ?item, error = %e, "unpacking failed");
+                        reason = Some(e.to_string());
+                        summary.fail();
+                        failed.push(item);
+                    }
+                }
+
+                reporter.finish_item();
+            }
+            summary
+        }
+
         Work::Mutate(op) => {
             reporter.begin(1, Measure::Items);
 
@@ -297,6 +372,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
         failed,
         collided,
         kept,
+        left_out,
         reason,
     }
 }
@@ -435,7 +511,7 @@ mod worker_tests {
     use crate::fs::ops::{DeleteMode, OnCollision};
     use std::{fs, path::PathBuf};
 
-    use crate::fs::{job::JobKind, temp_tree::TempTree};
+    use crate::fs::{archive::format::Format, job::JobKind, temp_tree::TempTree};
 
     /// Drains until every queued job has reported, the way the main loop does,
     /// and gives up rather than hanging if the worker never answers.
@@ -496,6 +572,69 @@ mod worker_tests {
         // One worker takes the queue in order, so the outcomes come back in the
         // order the jobs went out.
         assert_eq!(tags, vec![first, second]);
+    }
+
+    /// Packing and unpacking are one round trip through the queue, which is
+    /// also the only way to see that the worker drives both halves.
+    #[test]
+    fn a_pack_job_and_an_unpack_job_bring_a_tree_back() {
+        let t = TempTree::new();
+        t.make_file("notes/one.txt", "one");
+        let archive = t.at("notes.zip");
+        let back = t.make_dir("back");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Pack {
+                items: vec![t.at("notes")],
+                archive: archive.clone(),
+                format: Format::Zip,
+            })
+            .unwrap();
+        worker
+            .queue(Work::Unpack {
+                items: vec![archive.clone()],
+                into: back.clone(),
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert!(archive.exists(), "the archive was not written");
+        assert_eq!(finished[0].summary.processed(), 1);
+        assert!(matches!(finished[0].kind, JobKind::Pack));
+
+        assert_eq!(finished[1].summary.processed(), 1);
+        assert!(matches!(finished[1].kind, JobKind::Unpack));
+        // The archive holds one directory, so it is lifted out of its wrapper
+        // rather than unpacking as notes/notes.
+        assert_eq!(finished[1].kept, vec![back.join("notes")]);
+        assert_eq!(
+            fs::read_to_string(back.join("notes/one.txt")).unwrap(),
+            "one"
+        );
+    }
+
+    /// A name that is taken fails the job, and the marks come back so the key
+    /// can be pressed again once it is not.
+    #[test]
+    fn a_pack_onto_a_name_that_is_taken_gives_the_marks_back() {
+        let t = TempTree::new();
+        let item = t.make_file("one.txt", "one");
+        let archive = t.make_file("notes.zip", "not an archive");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Pack {
+                items: vec![item.clone()],
+                archive: archive.clone(),
+                format: Format::Zip,
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert!(finished[0].summary.has_failures());
+        assert_eq!(finished[0].failed, vec![item]);
+        assert_eq!(fs::read_to_string(&archive).unwrap(), "not an archive");
     }
 
     #[test]

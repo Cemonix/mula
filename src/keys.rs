@@ -423,6 +423,20 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Moves marked items into the other panel",
     },
     Entry {
+        name: "archive.pack",
+        action: Action::Pack,
+        keys: &[KeyBinding::plain(KeyCode::Char('z'))],
+        bar: None,
+        help: "Packs marked items into one archive in the other panel",
+    },
+    Entry {
+        name: "archive.unpack",
+        action: Action::Unpack,
+        keys: &[KeyBinding::plain(KeyCode::Char('u'))],
+        bar: None,
+        help: "Unpacks every marked archive into the other panel",
+    },
+    Entry {
         name: "entry.create",
         action: Action::CreateEntry,
         keys: &[KeyBinding::plain(KeyCode::Char('n'))],

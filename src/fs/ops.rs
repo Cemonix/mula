@@ -594,7 +594,7 @@ const KEEP_BOTH_LIMIT: u32 = 1000;
 /// the placeholder, and only a directory has to be claimed as one, so its
 /// children have somewhere to land.
 #[derive(Clone, Copy, Debug)]
-enum Claim {
+pub enum Claim {
     File,
     Directory,
 }
@@ -610,11 +610,24 @@ impl Claim {
 
     /// Creates `path`, failing with `AlreadyExists` when something is already
     /// there. Both calls create or fail; neither opens what it finds.
-    fn take(self, path: &Path) -> io::Result<()> {
+    pub fn take(self, path: &Path) -> io::Result<()> {
         match self {
             Claim::File => fs::File::create_new(path).map(|_| ()),
             Claim::Directory => fs::create_dir(path),
         }
+    }
+}
+
+/// Takes `to` itself if it is free, and the first free numbered name beside
+/// it if it is not, giving back the name it took.
+///
+/// Unlike [`claim_free_name`], which answers a collision that has already
+/// been found, this is for a name nobody has looked at yet.
+pub fn claim_or_number(to: &Path, claim: Claim) -> io::Result<PathBuf> {
+    match claim.take(to) {
+        Ok(()) => Ok(to.to_path_buf()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => claim_free_name(to, claim),
+        Err(e) => Err(e),
     }
 }
 
@@ -680,7 +693,7 @@ fn insertion_point(name: &str) -> usize {
 /// What is left behind by a run that died is not stepped around: the transfer
 /// that finds it fails and says so, which is the whole point of writing here
 /// rather than over the destination.
-fn staging_path(to: &Path) -> PathBuf {
+pub fn staging_path(to: &Path) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
     to.with_file_name(format!(
@@ -690,7 +703,7 @@ fn staging_path(to: &Path) -> PathBuf {
     ))
 }
 
-fn remove_partial(to: &Path) {
+pub fn remove_partial(to: &Path) {
     if to.symlink_metadata().is_err() {
         return;
     }
