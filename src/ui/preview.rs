@@ -18,10 +18,13 @@ use ratatui::{
 
 use crate::{
     fs::{
+        archive::contents::{Entry, EntryKind},
         directory::DirEntryKind,
         preview::{Bitmap, Content, LinkTarget, Refused},
     },
     ui::{
+        self,
+        columns::bytes,
         graphics::capabilities::{CellSize, Graphics},
         icon::Icon,
         name_of,
@@ -38,11 +41,35 @@ mod words {
     pub const NOT_A_FILE: &str = "Not a regular file";
     pub const MORE: &str = "…";
     pub const EMPTY_DIRECTORY: &str = "Empty directory";
+    pub const EMPTY_ARCHIVE: &str = "Empty archive";
     pub const EMPTY_FILE: &str = "Empty file";
     pub const BROKEN_LINK: &str = "broken link";
     pub const LINK_TO_DIRECTORY: &str = "directory";
     pub const LINK_TO_FILE: &str = "file";
     pub const LINK_TO_OTHER: &str = "special file";
+}
+
+/// Columns an archive row gives its size, the gap in front of it included, so
+/// the name has the rest.
+const ARCHIVE_SIZE_WIDTH: usize = 7;
+
+/// One row of an archive: what the entry is, what it is called, and how big it
+/// unpacks to, with the size against the right edge. A directory is drawn
+/// without a size, the way the listing columns draw one.
+fn archive_line(entry: &Entry, width: u16) -> Line<'static> {
+    let icon = Icon::for_archive_entry(entry);
+    let room = (width as usize).saturating_sub(2 + ARCHIVE_SIZE_WIDTH);
+    let name = ui::clip(&entry.name, room);
+    let size = match entry.kind {
+        EntryKind::Directory => String::new(),
+        _ => bytes(entry.size),
+    };
+
+    Line::from(vec![
+        Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
+        Span::raw(format!("{name:<room$}")),
+        Span::raw(format!("{size:>ARCHIVE_SIZE_WIDTH$}")).fg(Color::DarkGray),
+    ])
 }
 
 /// Paints the upper of the two pixels a cell holds; the cell's background is
@@ -148,6 +175,27 @@ impl<'a> PreviewPane<'a> {
                     })
                     .collect();
                 if entries.len() > lines.len() {
+                    lines.pop();
+                    lines.push(muted(words::MORE));
+                }
+                lines
+            }
+
+            // An archive is the one thing drawn here that has no paths in it.
+            // Nothing is unpacked to show this, and nothing on the row can be
+            // opened.
+            Content::Archive(contents) => {
+                if contents.entries.is_empty() {
+                    return Body::Lines(vec![muted(words::EMPTY_ARCHIVE)]);
+                }
+
+                let mut lines: Vec<Line> = contents
+                    .entries
+                    .iter()
+                    .take(rows)
+                    .map(|entry| archive_line(entry, area.width))
+                    .collect();
+                if contents.clipped || contents.entries.len() > lines.len() {
                     lines.pop();
                     lines.push(muted(words::MORE));
                 }
@@ -452,7 +500,10 @@ mod preview_pane_tests {
 
     use crate::ui::graphics::capabilities::Protocol;
 
-    use crate::fs::directory::{Detail, DirEntry, Directory};
+    use crate::fs::{
+        archive::contents::Contents,
+        directory::{Detail, DirEntry, Directory},
+    };
 
     /// Renders into a buffer and gives the rows back as strings, without the
     /// border the block draws around them and without trailing blanks.
@@ -545,6 +596,61 @@ mod preview_pane_tests {
         assert_eq!(bytes_per_row(78), 16);
         // Too narrow to fit even one, and still a row rather than nothing.
         assert_eq!(bytes_per_row(4), 4);
+    }
+
+    #[test]
+    fn an_archive_lists_the_names_it_holds_with_their_sizes() {
+        let content = Content::Archive(Contents {
+            entries: vec![
+                Entry {
+                    name: String::from("notes/"),
+                    size: 0,
+                    kind: EntryKind::Directory,
+                },
+                Entry {
+                    name: String::from("notes/one.txt"),
+                    size: 2048,
+                    kind: EntryKind::File,
+                },
+            ],
+            clipped: false,
+        });
+        let path = PathBuf::from("notes.zip");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let rows = rows(&pane, 30, 5);
+        assert!(rows[1].contains("notes/"), "the row was {:?}", rows[1]);
+        // A directory has no size worth showing, the same as in the listing.
+        assert!(!rows[1].contains("B"), "the row was {:?}", rows[1]);
+        assert!(
+            rows[2].contains("notes/one.txt"),
+            "the row was {:?}",
+            rows[2]
+        );
+        assert!(
+            rows[2].trim_end().ends_with("2.0K"),
+            "the row was {:?}",
+            rows[2]
+        );
+    }
+
+    /// An archive read only as far as its limit says so, rather than quietly
+    /// looking like a short one.
+    #[test]
+    fn an_archive_that_was_only_read_part_way_says_so() {
+        let content = Content::Archive(Contents {
+            entries: vec![Entry {
+                name: String::from("one.txt"),
+                size: 1,
+                kind: EntryKind::File,
+            }],
+            clipped: true,
+        });
+        let path = PathBuf::from("big.tar.gz");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let rows = rows(&pane, 30, 5);
+        assert!(rows[1].starts_with("…"), "the row was {:?}", rows[1]);
     }
 
     #[test]

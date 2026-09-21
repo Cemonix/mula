@@ -20,6 +20,10 @@ use std::{
 use image::{ImageFormat, ImageReader};
 
 use crate::fs::{
+    archive::{
+        contents::{self, Contents},
+        format,
+    },
     directory::{Detail, Directory},
     reader::{Live, Outbox, ReadJob},
 };
@@ -54,6 +58,10 @@ pub struct Limits {
     /// The longest side of the bitmap that is carried back. A panel is tens of
     /// cells across, so anything beyond this is detail nothing can draw.
     pub max_bitmap_side: u32,
+    /// Names read out of an archive. A tar has no index, so reading further
+    /// than this means decompressing more of a file nobody has asked to
+    /// unpack.
+    pub max_archive_entries: usize,
 }
 
 impl Default for Limits {
@@ -65,6 +73,7 @@ impl Default for Limits {
             max_image_bytes: 32 * 1024 * 1024,
             max_source_side: 20_000,
             max_bitmap_side: 512,
+            max_archive_entries: 500,
         }
     }
 }
@@ -169,6 +178,9 @@ pub enum Content {
         clipped: bool,
     },
     Image(Bitmap),
+    /// The names an archive holds. Nothing is unpacked to draw them, and none
+    /// of them is a path.
+    Archive(Contents),
     Refused(Refused),
     /// Permissions, a file that vanished between the listing and the read. A
     /// normal state of a file manager, drawn in the panel rather than raised
@@ -246,6 +258,18 @@ fn read(path: &Path, limits: &Limits, live: &Live<'_>) -> Option<Content> {
             // A file whose first bytes claim a format it does not keep is
             // shown as the bytes it actually holds.
             Decoded::Failed => (),
+        }
+    }
+
+    // An archive says what it holds without being taken apart, which is the
+    // one thing a hex dump of its first bytes could never show.
+    if let Some(archive) = format::sniff(&bytes) {
+        match contents::read(path, archive, limits.max_archive_entries, live) {
+            Ok(Some(contents)) => return Some(Content::Archive(contents)),
+            Ok(None) => return None,
+            // Truncated, or not the archive its first bytes claimed. What it
+            // actually holds is drawn instead.
+            Err(_) => (),
         }
     }
 
@@ -462,6 +486,26 @@ mod preview_tests {
         };
         assert_eq!(lines, ["first", "second"]);
         assert!(!clipped);
+    }
+
+    /// A zip is binary, and a hex dump of its first bytes would say nothing
+    /// about it. The names it holds are what there is to show.
+    #[test]
+    fn an_archive_comes_back_as_the_names_it_holds() {
+        let tree = TempTree::new();
+        let path = tree.at("notes.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file("one.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, b"one").unwrap();
+        zip.finish().unwrap();
+
+        let Content::Archive(contents) = read_at(&path, &limits()) else {
+            panic!("an archive did not read as one");
+        };
+        assert_eq!(contents.entries.len(), 1);
+        assert_eq!(contents.entries[0].name, "one.txt");
+        assert!(!contents.clipped);
     }
 
     #[test]

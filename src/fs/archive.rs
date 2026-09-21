@@ -9,6 +9,7 @@
 //! it its final name with one `rename` at the end, so an unpack is all of an
 //! archive or none of it.
 
+pub(crate) mod contents;
 pub(crate) mod format;
 pub(crate) mod pack;
 pub(crate) mod unpack;

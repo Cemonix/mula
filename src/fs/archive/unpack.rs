@@ -88,7 +88,7 @@ pub fn unpack(archive: &Path, into: &Path, watcher: &mut dyn Observer) -> io::Re
     Ok(Unpacked { into, refused })
 }
 
-fn open(archive: &Path) -> io::Result<BufReader<File>> {
+pub fn open(archive: &Path) -> io::Result<BufReader<File>> {
     Ok(BufReader::new(File::open(archive)?))
 }
 
@@ -304,7 +304,7 @@ fn unreadable(archive: &Path) -> io::Error {
     )
 }
 
-fn from_zip_error(error: zip::result::ZipError) -> io::Error {
+pub fn from_zip_error(error: zip::result::ZipError) -> io::Error {
     match error {
         zip::result::ZipError::Io(e) => e,
         other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),

@@ -2,7 +2,10 @@ use std::path::Path;
 
 use ratatui::style::Color;
 
-use crate::fs::directory::{DirEntry, DirEntryKind};
+use crate::fs::{
+    archive::contents::{self, EntryKind},
+    directory::{DirEntry, DirEntryKind},
+};
 
 // The glyph codepoints and most of the colours below were taken from the
 // `devicons` crate (https://github.com/alexpasmantier/rust-devicons), version
@@ -38,6 +41,19 @@ impl Icon {
                 .and_then(|name| name.to_str())
                 .and_then(Self::by_name)
                 .or_else(|| Self::by_extension(&entry.path))
+                .unwrap_or(DEFAULT_FILE),
+        }
+    }
+
+    /// The icon for a name inside an archive, where there is no `DirEntry` to
+    /// ask. The kind decides first and the name after it, the same order
+    /// [`Icon::icon_for`] takes.
+    pub fn for_archive_entry(entry: &contents::Entry) -> Icon {
+        match entry.kind {
+            EntryKind::Directory => DIRECTORY,
+            EntryKind::Symlink => SYMLINK,
+            EntryKind::File => Self::by_name(&entry.name)
+                .or_else(|| Self::by_extension(Path::new(&entry.name)))
                 .unwrap_or(DEFAULT_FILE),
         }
     }

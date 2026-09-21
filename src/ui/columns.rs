@@ -132,7 +132,7 @@ fn cell(text: &str, width: usize, colour: Color) -> Span<'static> {
 /// A byte count in at most [`Columns::SIZE_WIDTH`] columns: exact below a
 /// kibibyte, then scaled to the largest unit it reaches, with one decimal
 /// while it stays under ten of them.
-fn bytes(count: u64) -> String {
+pub fn bytes(count: u64) -> String {
     const UNITS: [&str; 6] = ["K", "M", "G", "T", "P", "E"];
 
     if count < 1024 {
