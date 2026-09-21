@@ -19,13 +19,19 @@ mula            # both panels open where you are
 mula ~/Music    # both panels open there instead
 ```
 
-Needs Rust 1.88 or later, Linux or macOS — Windows is on the list, see
-[Not there yet](#not-there-yet) — and a [Nerd Font](https://www.nerdfonts.com/)
-for the file icons, the **Mono** variant, since the others draw a glyph wider
-than one cell. Without one the icons are empty boxes and nothing else breaks.
+Needs Rust 1.88 or later, Linux or macOS, and a
+[Nerd Font](https://www.nerdfonts.com/) for the file icons, the **Mono**
+variant, since the others draw a glyph wider than one cell. Without one the
+icons are empty boxes and nothing else breaks.
 
 From a clone, `cargo install --path .` does the same thing, and
 `cargo build --release` leaves the binary in `target/` instead.
+
+Windows is not a target. Mula reaches for POSIX process and signal handling
+directly — a detached opener gets `/dev/null` and a session of its own,
+`$EDITOR` is handed the terminal with the default signal handlers put back, and
+a symlink is copied as a symlink — and under WSL none of that needs a
+counterpart. Set `OPENER=wslview` and `Enter` hands a file to Windows.
 
 ## Keys
 
@@ -123,6 +129,7 @@ and the arrows.
 | --- | --- |
 | `$VISUAL`, `$EDITOR` | What F4 and `Enter` on a text file open, in that order, falling back to `vi`. Split on whitespace, so `code -w` works; nothing reaches a shell. |
 | `$PAGER` | What F3 opens, falling back to `less`. |
+| `$OPENER` | What `Enter` hands a file the terminal cannot show, falling back to `open` on macOS and `xdg-open` elsewhere. Started detached, so Mula keeps the screen. |
 | `$TZ` | Which zone the date column is drawn in. |
 | `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it. |
 | `XDG_STATE_HOME` | Where the log and the favorites go, under `mula/`. Unset, the log is `~/Library/Logs/mula` on macOS and the favorites `~/Library/Application Support/mula`; elsewhere both are `~/.local/state/mula`. |
@@ -130,11 +137,6 @@ and the arrows.
 
 ## Not there yet
 
-- **Windows.** Mula reaches for POSIX process and signal handling directly: a
-  detached opener gets `/dev/null` and a session of its own, `$EDITOR` is
-  handed the terminal with the default signal handlers put back, and a symlink
-  is copied as a symlink. Each of those needs a counterpart before the panels
-  could open there.
 - **Remote panels.** Managing files on a server over SSH is the reason the
   directory reads were moved off the drawing thread ahead of needing to be.
 - **Settings in the config file.** It rebinds keys and nothing else; the column
