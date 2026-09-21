@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::{
     action::{Action, ListEnd, VerticalDir},
     config,
+    favorites::{Added, Favorites},
     fs::{
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
@@ -33,6 +34,7 @@ use crate::{
         self,
         columns::Columns,
         dialog::{Choice, Dialog, DialogMsg},
+        favorites::{FavoritesMsg, FavoritesView},
         filter::{Filter, FilterMsg},
         finder::{FindMsg, Finder},
         graphics::{
@@ -99,6 +101,11 @@ pub enum Mode {
     },
     Find {
         finder: Finder,
+    },
+    /// Picking a favorite directory. The list itself lives on `App`; what the
+    /// mode carries is where the cursor stands in it.
+    Favorites {
+        view: FavoritesView,
     },
     /// Typing a filter. It draws no overlay — the whole point is watching the
     /// listing narrow — so it is a mode only in the sense that the keys go
@@ -229,6 +236,12 @@ pub struct App {
     /// Resolved from the key table once, so the hint the info bar draws while a
     /// job runs cannot drift from the key that actually cancels it.
     cancel_key: Option<KeyBinding>,
+    /// Resolved the way `cancel_key` is, so an empty favorites overlay names
+    /// the key that fills it rather than the key it was written with.
+    add_favorite_key: Option<KeyBinding>,
+    /// The directories the user comes back to. Outlives every time the
+    /// overlay is opened, and is written to a file of its own.
+    favorites: Favorites,
     worker: Worker,
     /// Serves the find overlay. Separate from `worker` because a walk of a
     /// large tree queued behind a copy would report its first hit minutes late,
@@ -310,6 +323,13 @@ impl App {
         };
         let cancel_key =
             keys::find(&browse_keys, |a| matches!(a, Action::CancelJob)).map(|binding| binding.key);
+        let add_favorite_key = keys::find(&browse_keys, |a| matches!(a, Action::AddFavorite))
+            .map(|binding| binding.key);
+
+        // A favorites file that cannot be read costs the user the list for
+        // this run and never the file: nothing is written back until it has
+        // been read once.
+        let (favorites, unread) = Favorites::load();
 
         let mut app = Self {
             left: Panel::new()?,
@@ -322,6 +342,8 @@ impl App {
             help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
                 .map(|binding| binding.key),
             cancel_key,
+            add_favorite_key,
+            favorites,
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
@@ -342,6 +364,9 @@ impl App {
         };
 
         if let Some(e) = complaint {
+            app.notify(ToastLevel::Error, e, None);
+        }
+        if let Some(e) = unread {
             app.notify(ToastLevel::Error, e, None);
         }
         Ok(app)
@@ -536,6 +561,16 @@ impl App {
             frame.set_cursor_position(cursor);
         }
 
+        if let Mode::Favorites { view } = &mut self.mode {
+            let area = frame.area();
+            view.render(
+                self.favorites.paths(),
+                self.add_favorite_key,
+                area,
+                frame.buffer_mut(),
+            );
+        }
+
         // Newest toast in the bottom-right corner, older ones stacked above it.
         // The first that no longer fits ends the stack; nothing older would fit
         // either.
@@ -622,6 +657,10 @@ impl App {
                     Keybar::new(Finder::FIND_KEYS).help_key(self.help_key),
                     keys_area,
                 ),
+                Mode::Favorites { .. } => frame.render_widget(
+                    Keybar::new(FavoritesView::FAVORITE_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
                 Mode::Filter => frame.render_widget(
                     Keybar::new(Filter::FILTER_KEYS).help_key(self.help_key),
                     keys_area,
@@ -644,6 +683,12 @@ impl App {
                 }
                 Mode::Find { .. } => {
                     frame.render_widget(Help::new(Finder::FIND_KEYS, globals, state), area);
+                }
+                Mode::Favorites { .. } => {
+                    frame.render_widget(
+                        Help::new(FavoritesView::FAVORITE_KEYS, globals, state),
+                        area,
+                    );
                 }
                 Mode::Filter => {
                     frame.render_widget(Help::new(Filter::FILTER_KEYS, globals, state), area);
@@ -692,6 +737,7 @@ impl App {
             Mode::Confirm { .. } => self.handle_confirm_key(key),
             Mode::Input { .. } => self.handle_input_key(key),
             Mode::Find { .. } => self.handle_find_key(key),
+            Mode::Favorites { .. } => self.handle_favorites_key(key),
             Mode::Filter => self.handle_filter_key(key),
             Mode::Browse => {
                 if let Some(action) = keys::resolve(&self.browse_keys, &key)
@@ -785,6 +831,16 @@ impl App {
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
             Action::Find => self.open_finder(),
+            Action::OpenFavorites => {
+                self.mode = Mode::Favorites {
+                    view: FavoritesView::new(self.favorites.paths().len()),
+                };
+                Ok(())
+            }
+            Action::AddFavorite => {
+                self.add_favorite();
+                Ok(())
+            }
             Action::Filter => {
                 // A fresh filter every time, so Esc always lands back on the
                 // whole listing rather than on whatever was typed before.
@@ -1079,6 +1135,87 @@ impl App {
         }
     }
 
+    /// Puts the directory the focused panel is in on the list.
+    ///
+    /// The directory rather than the entry under the cursor: one rule for
+    /// what is added, and the way to a directory the cursor stands on is to
+    /// enter it first.
+    fn add_favorite(&mut self) {
+        let path = Arc::clone(self.get_focused_pane().get_current_dir());
+        match self.favorites.add(&path) {
+            Ok(Added::Added) => self.notify(
+                ToastLevel::Info,
+                format!("{} is a favorite", path.display()),
+                None,
+            ),
+            Ok(Added::AlreadyListed) => {
+                self.notify(ToastLevel::Warning, "That is already a favorite", None)
+            }
+            Err(e) => self.notify(ToastLevel::Error, e, None),
+        }
+    }
+
+    fn handle_favorites_key(&mut self, key: KeyEvent) {
+        let Some(msg) = keys::resolve(FavoritesView::FAVORITE_KEYS, &key) else {
+            return;
+        };
+        // Both are read before the overlay is borrowed: the list is on `App`
+        // beside the mode holding the cursor into it.
+        let count = self.favorites.paths().len();
+        let Mode::Favorites { view } = &mut self.mode else {
+            return;
+        };
+        let selected = view.selected();
+
+        match msg {
+            FavoritesMsg::MoveSelection(dir) => view.move_selection(dir, count),
+            FavoritesMsg::Cancel => self.mode = Mode::Browse,
+            FavoritesMsg::Remove => self.remove_favorite(selected),
+            FavoritesMsg::Confirm => self.go_to_favorite(selected),
+        }
+    }
+
+    /// Takes the favorite under the cursor off the list, and fits the cursor
+    /// to what is left. Nothing on disk is touched, which is why nothing is
+    /// asked first.
+    fn remove_favorite(&mut self, selected: Option<usize>) {
+        let Some(path) = self.favorite_at(selected) else {
+            return;
+        };
+
+        if let Err(e) = self.favorites.remove(&path) {
+            self.notify(ToastLevel::Error, e, None);
+            return;
+        }
+
+        let count = self.favorites.paths().len();
+        if let Mode::Favorites { view } = &mut self.mode {
+            view.fit(count);
+        }
+    }
+
+    /// Sends the focused panel to the favorite under the cursor and closes the
+    /// overlay.
+    ///
+    /// The overlay closes whatever the path turns out to be. A directory that
+    /// is gone is read like any other: the pane stays where it is and the
+    /// failure arrives as a toast, over the panel the user is looking at.
+    fn go_to_favorite(&mut self, selected: Option<usize>) {
+        let Some(path) = self.favorite_at(selected) else {
+            return;
+        };
+
+        self.mode = Mode::Browse;
+        self.get_focused_pane_mut().jump(path);
+    }
+
+    /// The favorite on a row of the overlay. A row the list no longer holds,
+    /// and an overlay with the cursor on nothing, are both nothing to act on.
+    fn favorite_at(&self, selected: Option<usize>) -> Option<Arc<Path>> {
+        let path = selected.and_then(|index| self.favorites.paths().get(index))?;
+        Some(Arc::from(path.as_path()))
+    }
+
     fn prompt_rename(&mut self) -> Result<(), AppError> {
         let entry = self.get_focused_pane().selected_entry()?;
         if entry.kind == DirEntryKind::Parent {
@@ -1344,8 +1481,17 @@ impl App {
                 self.notify(ToastLevel::Error, e, None);
             }
 
-            if let Entered::Open { path, kind } = collected.entered {
-                self.open_entered(path, kind);
+            match collected.entered {
+                Entered::Open { path, kind } => self.open_entered(path, kind),
+                // A path the pane was sent to as a directory and is not one.
+                // Nothing is opened: what pointed at it was a favorite rather
+                // than a cursor, and it is out of date.
+                Entered::NotADirectory { path } => self.notify(
+                    ToastLevel::Error,
+                    format!("{} is no longer a directory", path.display()),
+                    None,
+                ),
+                Entered::Nothing => (),
             }
         }
     }

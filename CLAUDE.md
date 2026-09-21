@@ -87,6 +87,11 @@ is open again, not broken.
   find. A config that cannot be used falls back whole, never line by line.
 - `Display` and `FromStr` on `KeyBinding` are one spelling, so what F1 prints
   is what a config can say. Guard it by round-tripping every table's keys.
+- One list of favorites for both panels, held on `App` and not in the mode —
+  the mode carries the cursor into it. Which panel goes there is answered by
+  where the focus is, never by which list was drawn. Nothing is asked before a
+  favorite is taken off: the directory is untouched. Adding is a Browse key,
+  so what is added is the path already on screen.
 - A key working in every mode lives in `GLOBAL_KEYS`, not in each table.
   Resolved before the mode's, so it needs the invariant `validate` cannot give:
   no mode may bind a global key. Nothing printable can be global while a mode
@@ -151,6 +156,12 @@ is open again, not broken.
   holds is thinner than what it draws, never when it is thicker.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
   have no non-blocking API; SSH panes are sockets and do.
+- The favorites file is the one `fs::` write on the loop: it has nothing to be
+  ordered against, and the queue it would sit in carries 4 GB copies. It is
+  written whole at every change and the list is put back when the write fails,
+  so the screen never claims a save that did not happen. A file that could not
+  be read closes writing for the run rather than replacing it.
+  **Holds while** the list stays small and local.
 - One worker for mutations, no pool. **Holds while** a batch stays on one
   device. One `Reader` instance per answer that can be outstanding on its own,
   each with its own generation — the two panels are two of those, not one

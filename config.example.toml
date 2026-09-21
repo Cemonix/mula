@@ -49,6 +49,9 @@ unmark.down = "Alt+Down"
 transfer.copy = "F5"
 transfer.move = "F6"
 
+favorites.open = "b"
+favorites.add = "Shift+B"
+
 tab.new = "t"
 tab.close = "w"
 tab.rename = "r"

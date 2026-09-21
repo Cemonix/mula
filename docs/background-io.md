@@ -103,6 +103,37 @@ Refusing a second operation would cost more than accepting it: a refusal needs
 its own "something is running" state and a toast, while queueing is a plain
 `send`. The queue is *less* code than its prohibition.
 
+## The favorites file is written on the loop
+
+Every `fs::` call in the running app goes to the worker or a reader. The
+favorites file is the exception: adding or removing one writes the whole file
+from the main loop and waits for it.
+
+The worker is the wrong place for it. It is one FIFO queue kept that way so
+that writes to the tree happen in the order the keys were pressed, and a
+favorites file has nothing to be ordered against — while a 4 GB copy runs,
+the two hundred bytes would sit behind it and the list on screen would be
+ahead of the file for minutes. A reader is worse: readers answer, they do not
+write.
+
+What makes the synchronous write affordable is its size. It is a handful of
+paths, written whole rather than appended to, into a file nothing else holds
+open; the cost is one `write` of well under a page, on the same loop that
+already waits 100 ms for a key. The reason reads moved off the loop — a
+directory on a wire, or a disk that has to spin up first — does not reach a
+file under `$XDG_STATE_HOME`.
+
+**Holds while** the list stays small and local. A favorites file that grew
+into something the user syncs from somewhere far away would be a read like
+any other.
+
+The list and the file agree, which is the other half of writing at once: a
+write that fails puts the list back the way it was and the failure becomes a
+toast, so nothing on screen claims to have been saved. A file that could not
+be *read* at startup closes writing for the run — the user's own list is
+still in it, and rewriting it from an empty list would be the one way this
+feature could take something away.
+
 ## The worker never touches `App`
 
 It sends `Progress` and `Done { summary }`. The main loop refreshes panes and
