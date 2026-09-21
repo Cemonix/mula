@@ -772,7 +772,7 @@ impl App {
         match action {
             Action::Quit => self.confirm_quit(),
             Action::CancelJob => {
-                self.worker.cancel();
+                self.cancel_job();
                 Ok(())
             }
             Action::ToggleSide => {
@@ -908,6 +908,24 @@ impl App {
             },
             ConfirmTarget::Delete(_) | ConfirmTarget::Quit => Ok(()),
         }
+    }
+
+    /// Asks the running job to stop, and says so.
+    ///
+    /// A job does not end at the key: it stops at its next entry, and an
+    /// unpack then has a staging directory to take away, which can cost as
+    /// long as writing it did. What is on screen through all of that is a
+    /// progress bar that has stopped moving, so the press itself has to be
+    /// acknowledged or it reads as an app that has stopped answering.
+    ///
+    /// Nothing is said with an idle worker, where the key does nothing.
+    fn cancel_job(&mut self) {
+        if self.worker.is_idle() {
+            return;
+        }
+
+        self.worker.cancel();
+        self.notify(ToastLevel::Info, "Cancelling…", None);
     }
 
     fn move_cursor(&mut self, dir: VerticalDir) {
