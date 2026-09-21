@@ -52,6 +52,7 @@ These are the ones worth knowing first.
 | `.` | Show or hide the entries whose names begin with a dot |
 | `/` | Find by name below this panel |
 | `f` | Narrow this listing to the names holding what you type |
+| `b` / `Shift+B` | Favorites: go to one / add the directory this panel is in |
 | `t` / `w` / `r` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
 | `q` | Quit |
@@ -79,6 +80,10 @@ These are the ones worth knowing first.
 - **Find and filter.** `/` walks the tree below the panel and shows hits as they
   arrive; `f` narrows the listing as you type, with `*` and `?`, reading no
   directory twice.
+- **Favorites.** `Shift+B` writes the directory you are in down, `b` opens the
+  list and `Enter` sends the panel there. One list for both panels, kept in a
+  file of its own between runs. A favorite that has gone away says so and
+  leaves the panel where it is.
 - **Size and date columns**, with `c` to drop one when you would rather have
   the room.
 - **Nothing blocks.** Reads, walks, previews and file operations all run off
@@ -120,7 +125,7 @@ and the arrows.
 | `$PAGER` | What F3 opens, falling back to `less`. |
 | `$TZ` | Which zone the date column is drawn in. |
 | `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it. |
-| `XDG_STATE_HOME` | Where the log goes, under `mula/`. Unset, that is `~/Library/Logs/mula` on macOS and `~/.local/state/mula` elsewhere. |
+| `XDG_STATE_HOME` | Where the log and the favorites go, under `mula/`. Unset, the log is `~/Library/Logs/mula` on macOS and the favorites `~/Library/Application Support/mula`; elsewhere both are `~/.local/state/mula`. |
 | `XDG_CONFIG_HOME` | Where `mula/config.toml` is looked for. Unset, that is `~/.config`, on macOS too. |
 
 ## Not there yet

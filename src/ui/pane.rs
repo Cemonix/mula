@@ -25,12 +25,15 @@ pub enum PaneError {
     IO(#[from] io::Error),
 }
 
-/// Why a listing was asked for. Only entering an entry turns "that is not a
-/// directory" into something to open; a pane catching up with the disk finds a
-/// directory replaced by a file and says nothing.
+/// Why a listing was asked for. Each of the three has its own answer to "that
+/// is not a directory": entering an entry turns it into something to open,
+/// going somewhere named as a directory turns it into something to report, and
+/// a pane catching up with the disk finds a directory replaced by a file and
+/// says nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Intent {
     Enter,
+    Jump,
     Refresh,
 }
 
@@ -53,6 +56,9 @@ pub enum Entered {
     Nothing,
     /// The entry the user entered is not a directory, and is this to open.
     Open { path: Arc<Path>, kind: Kind },
+    /// What the pane was sent to is there and is not a directory, so the pane
+    /// has stayed where it was and the caller has something to report.
+    NotADirectory { path: Arc<Path> },
 }
 
 /// The listing a pane is waiting for. A pane showing what it wants awaits
@@ -321,6 +327,17 @@ impl Pane {
         self.want(Arc::from(parent), Some(Arc::from(path)), Intent::Refresh);
     }
 
+    /// Waits for the listing of `path`, which the caller names as a directory:
+    /// a favorite, and not an entry the cursor stands on.
+    ///
+    /// A path that cannot be read leaves the pane where it is and comes back
+    /// as an error; a path that is read and is no directory comes back as
+    /// [`Entered::NotADirectory`]. Neither is opened with a program — nothing
+    /// here was pointed at by a cursor.
+    pub fn jump(&mut self, path: Arc<Path>) {
+        self.want(path, None, Intent::Jump);
+    }
+
     /// Waits for the current directory to be read again when the listing on
     /// screen was read with less than `detail`. A column cannot be filled from
     /// a listing that never read what goes in it, and one read with more than
@@ -391,8 +408,10 @@ impl Pane {
     /// An answer of "not a directory" is not a failure. Entering the entry
     /// under the cursor asks for the listing of something that may be a file,
     /// and finding that out is what the question was for; it comes back as
-    /// [`Entered::Open`] for the caller to open. A pane merely catching up with
-    /// the disk asked no such question and is told nothing.
+    /// [`Entered::Open`] for the caller to open. A jump was told it was going
+    /// to a directory and comes back as [`Entered::NotADirectory`] to be
+    /// reported. A pane merely catching up with the disk asked no such
+    /// question and is told nothing.
     ///
     /// Either way the pane stops waiting, so a directory that cannot be read
     /// is not asked for again on every pass that follows.
@@ -411,11 +430,15 @@ impl Pane {
                 Ok(Entered::Nothing)
             }
             Listed::NotADirectory(kind) => Ok(match request {
-                Some(request) if request.intent == Intent::Enter => Entered::Open {
-                    path: request.path,
-                    kind,
+                Some(request) => match request.intent {
+                    Intent::Enter => Entered::Open {
+                        path: request.path,
+                        kind,
+                    },
+                    Intent::Jump => Entered::NotADirectory { path: request.path },
+                    Intent::Refresh => Entered::Nothing,
                 },
-                _ => Entered::Nothing,
+                None => Entered::Nothing,
             }),
         }
     }
@@ -1021,6 +1044,32 @@ mod pane_tests {
 
         assert!(matches!(entered, Entered::Open { path, kind }
                 if path.as_ref() == Path::new("/1") && kind == Kind::Text));
+        assert_eq!(pane.get_current_dir().as_ref(), Path::new("/"));
+        assert!(pane.take_unsent().is_none());
+    }
+
+    #[test]
+    fn a_jump_asks_for_the_path_it_was_given() {
+        let mut pane = pane(3);
+
+        pane.jump(Arc::from(Path::new("/elsewhere")));
+
+        assert_eq!(pane.take_unsent().as_deref(), Some(Path::new("/elsewhere")));
+    }
+
+    /// A jump was told it was going to a directory, so a path that is a file
+    /// comes back to be reported rather than being opened: nothing pointed at
+    /// it but a list written down some time ago.
+    #[test]
+    fn jumping_onto_something_that_is_not_a_directory_comes_back_to_be_reported() {
+        let mut pane = pane(3);
+        pane.jump(Arc::from(Path::new("/elsewhere")));
+        pane.take_unsent();
+
+        let entered = pane.listed(Ok(Listed::NotADirectory(Kind::Text))).unwrap();
+
+        assert!(matches!(entered, Entered::NotADirectory { path }
+                if path.as_ref() == Path::new("/elsewhere")));
         assert_eq!(pane.get_current_dir().as_ref(), Path::new("/"));
         assert!(pane.take_unsent().is_none());
     }

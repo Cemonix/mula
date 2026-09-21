@@ -120,6 +120,69 @@ matters and only in one direction: marks can stand for work done across several
 directories, so the cheaper thing to lose goes first, and the second press is
 still there for the rest. Making `Esc` global means taking it away from both.
 
+## The favorites are one list, and the overlay does not own it
+
+Both panels read the same list. Per-panel lists were the first shape asked
+for, and the thing they cost is the thing they are for: a directory added on
+the left is not there on the right, so it is added twice and then the two
+halves drift. Which panel is involved is answered by where the cursor is when
+the overlay opens, not by which list was drawn. Tabs settle it too — "per
+panel" with tabs underneath immediately asks why not per tab, and there is no
+answer that a single list does not already give.
+
+The list lives on `App` and the mode carries only the cursor into it. It
+outlives every time the overlay is opened and it is written to a file, which
+is state no overlay should be holding; `Finder` keeps its hits because they
+belong to the search that ended when the overlay closed.
+
+Nothing is asked before a favorite is taken off. A confirmation exists to
+stand between the user and something they cannot get back, and this removes a
+line from a list — the directory is untouched. It is also the case that asking
+would want a dialog over an overlay, which there is no stack for; that is a
+consequence and not the reason.
+
+Adding is `Shift+B` in Browse and not a key inside the overlay, so the path
+being added is the one on the screen in front of the user. Nothing is typed:
+a favorite is a path, and the day it grows a name of its own the overlay takes
+a `TextInput` of its own the way `Finder` has one, rather than opening a
+prompt over itself.
+
+`b` and `Shift+B` rather than `Ctrl+D`, which is where Total Commander keeps
+its hotlist: `Ctrl+<letter>` is contested ground, and a terminal or a user's
+own config can take it before Mula ever sees it. Printable characters in
+Browse cannot be intercepted that way.
+
+## The favorites box is sized to the list
+
+Not to a share of the screen. A share is a guess twice over: three favorites
+in a box covering half the terminal say nothing about what is in them, and a
+list of forty would be cut off at the same percentage on a tall terminal that
+had room for all of it.
+
+So the box asks for its widest path and a row per favorite, inside a band of
+the terminal: a quarter to four fifths of it. Below the floor a list of two is
+a box too small to read as a list; above the ceiling a list of eighty covers
+the panels it was opened over. Both ends are shares rather than numbers of
+cells, for the same reason the box is not a fixed size — and what the ceiling
+cuts off scrolls, which is what the walk of every entry at 80x24 guards.
+
+Everything it measures is measured: the widest path and the title with
+`Span::width`, the borders and the padding off the `Block` itself, the status
+line at the widest it can print for a list of that length.
+
+A path too long for the box keeps its last three components behind an
+ellipsis. Cutting the tail, which is what `ui::clip` does everywhere else,
+would take exactly the part that tells one favorite from another: they are
+paths, they share their beginnings, and the name at the end is the one the
+user wrote the favorite down for.
+
+## An empty overlay names the key that fills it
+
+The line under an empty list says which key adds a directory, and it reads the
+key out of the built Browse table the way the info bar reads the cancel key.
+Spelling it into the sentence would be a fourth place a key is written down,
+and the config can move it.
+
 ## `DialogMsg` never becomes an `Action`
 
 A dialog's messages describe moving around inside the dialog. Only its

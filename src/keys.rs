@@ -486,6 +486,20 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Narrows the listing to what you type, with * and ?",
     },
     Entry {
+        name: "favorites.open",
+        action: Action::OpenFavorites,
+        keys: &[KeyBinding::plain(KeyCode::Char('b'))],
+        bar: None,
+        help: "Opens the favorite directories, to go to one or take it off",
+    },
+    Entry {
+        name: "favorites.add",
+        action: Action::AddFavorite,
+        keys: &[KeyBinding::plain(KeyCode::Char('B')).shift()],
+        bar: None,
+        help: "Adds the directory this panel is in to the favorites",
+    },
+    Entry {
         name: "tab.new",
         action: Action::NewTab,
         keys: &[KeyBinding::plain(KeyCode::Char('t'))],
@@ -532,7 +546,10 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
 #[cfg(test)]
 mod keys_tests {
     use super::*;
-    use crate::ui::{dialog::Dialog, filter::Filter, finder::Finder, help, prompt::Prompt};
+    use crate::ui::{
+        dialog::Dialog, favorites::FavoritesView, filter::Filter, finder::Finder, help,
+        prompt::Prompt,
+    };
 
     /// The Browse table as it stands with no config to override it.
     fn defaults() -> Vec<Binding<Action>> {
@@ -643,6 +660,7 @@ mod keys_tests {
         round_trip(Dialog::DIALOG_KEYS);
         round_trip(Prompt::PROMPT_KEYS);
         round_trip(Finder::FIND_KEYS);
+        round_trip(FavoritesView::FAVORITE_KEYS);
         round_trip(Filter::FILTER_KEYS);
         round_trip(help::HELP_KEYS);
     }
@@ -708,6 +726,7 @@ mod keys_tests {
             ("dialog", bound(Dialog::DIALOG_KEYS)),
             ("prompt", bound(Prompt::PROMPT_KEYS)),
             ("finder", bound(Finder::FIND_KEYS)),
+            ("favorites", bound(FavoritesView::FAVORITE_KEYS)),
             ("filter", bound(Filter::FILTER_KEYS)),
             ("help", bound(help::HELP_KEYS)),
         ] {
