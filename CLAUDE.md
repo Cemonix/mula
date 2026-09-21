@@ -219,7 +219,7 @@ is open again, not broken.
   `t`/`w`/`Shift+T`/`[`/`]` for exactly that reason.
 - `Ctrl+<letter>` is contested ground even beyond terminal defaults — a user's
   own config takes what it likes, and the key then never reaches the app at
-  all. Function keys are the safe family, which is what Cancel sits on.
+  all. Function keys are the safe family, which is why F1 is one.
 - Style goes on `Span`, never `Line` — a `Line` repaints its whole area.
 - `Self` in `impl Widget for &Foo` means `&Foo`; associated consts need
   `Foo::<T>::CONST`.
