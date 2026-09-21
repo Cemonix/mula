@@ -1,4 +1,4 @@
-//! The Quick View panel: whatever is under the cursor, drawn where the
+//! The preview panel: whatever is under the cursor, drawn where the
 //! opposite listing would be.
 //!
 //! Dumb like every other widget. Everything it draws was settled by the

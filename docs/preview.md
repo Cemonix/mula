@@ -1,10 +1,11 @@
 # Preview
 
-Why Quick View works the way it does. The rules themselves are in `CLAUDE.md`.
+Why the preview panel works the way it does. The rules themselves are in
+`CLAUDE.md`.
 
 ## A view toggle, never a `Mode`
 
-Quick View replaces the panel opposite the cursor. Making it a `Mode` would
+The preview replaces the panel opposite the cursor. Making it a `Mode` would
 take the browse keys away with it; as a toggle on `App`, every operation keeps
 working while a preview is up.
 
@@ -57,7 +58,7 @@ Ratatui cannot help here, because no cell of a picture it never drew ever
 changes. So the screen is reconciled the way `Buffer` is diffed, one level up:
 what should be on it against what is. Everything that would otherwise be a
 separate case — the cursor moving, the panel changing sides, the window being
-resized, an overlay opening, Quick View closing — becomes the same comparison
+resized, an overlay opening, the preview closing — becomes the same comparison
 of two `Placement`s, and two passes that agree write nothing at all.
 
 Nothing writes because they agree is what keeps a bitmap off the wire sixty

@@ -254,7 +254,7 @@ pub struct App {
     /// `sync_listings`, which is what turns it into the metadata a listing is
     /// read with.
     columns: Columns,
-    /// Serves the Quick View panel. A reader of its own rather than another
+    /// Serves the preview panel. A reader of its own rather than another
     /// job on `reader`: one generation counter for both would cancel a running
     /// walk every time the cursor moved, and would hold together only because
     /// the find overlay happens to be modal.
@@ -848,7 +848,7 @@ impl App {
                 self.mode = Mode::Filter;
                 Ok(())
             }
-            Action::ToggleQuickView => {
+            Action::TogglePreview => {
                 self.opposite = self.opposite.toggle();
                 Ok(())
             }

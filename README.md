@@ -1,8 +1,7 @@
 # Mula
 
-A dual-pane terminal file manager in the Total Commander tradition: two
-directories side by side, marks, and the work — copy, move, delete — on the
-function keys where muscle memory expects them.
+A dual-pane terminal file manager: two directories side by side, marks, and the
+work — copy, move, delete — on the letter each of them starts with.
 
 Built with [ratatui](https://ratatui.rs).
 
@@ -40,20 +39,20 @@ These are the ones worth knowing first.
 | `Space` | Mark or unmark the item under the cursor |
 | `a` | Mark everything the panel is showing |
 | `g` / `Shift+G` | Jump to the first / last item |
-| `F2` | Rename |
-| `F3` / `F4` | Open in `$PAGER` / `$EDITOR` |
-| `F5` / `F6` | Copy / move the marked items into the other panel |
-| `F7` | Create a file, or a folder if the name ends with `/` |
-| `F8` | Move the marked items to the trash, naming each one first |
-| `Shift+F8` | Delete them for good, without the trash |
-| `F9` | Cancel the running operation |
-| `v` | Quick View in the opposite panel |
-| `c` | Drop a listing column, and bring them all back from the name alone |
+| `r` | Rename |
+| `v` / `e` | Open in `$PAGER` / `$EDITOR` |
+| `c` / `m` | Copy / move the marked items into the other panel |
+| `n` | Create a file, or a folder if the name ends with `/` |
+| `d` | Move the marked items to the trash, naming each one first |
+| `Shift+D` | Delete them for good, without the trash |
+| `x` | Cancel the running operation |
+| `p` | Preview in the opposite panel |
+| `,` | Drop a listing column, and bring them all back from the name alone |
 | `.` | Show or hide the entries whose names begin with a dot |
-| `/` | Find by name below this panel |
-| `f` | Narrow this listing to the names holding what you type |
+| `f` | Find by name below this panel |
+| `/` | Narrow this listing to the names holding what you type |
 | `b` / `Shift+B` | Favorites: go to one / add the directory this panel is in |
-| `t` / `w` / `r` | New tab / close tab / rename tab |
+| `t` / `w` / `Shift+T` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
 | `q` | Quit |
 
@@ -66,29 +65,29 @@ These are the ones worth knowing first.
 - **Marks, then an operation.** `Space` marks, `Shift+Up`/`Down` mark and move
   in one keystroke, `a` marks everything shown. Marks survive leaving the
   directory they were made in.
-- **Deleting means the trash.** F8 names every item before it goes; Shift+F8
+- **Deleting means the trash.** `d` names every item before it goes; `Shift+D`
   deletes for good. A trash that cannot be reached is a failed delete, never a
   silent fall back to permanent deletion.
 - **A collision is one question for the whole batch** — overwrite, skip, or
   keep both — asked after everything else has moved. Directories merge rather
   than replacing each other.
-- **Quick View.** `v` fills the opposite panel with whatever the cursor is on:
+- **Preview.** `p` fills the opposite panel with whatever the cursor is on:
   text, a listing, an image, or a hex dump. What a file is comes from its first
   bytes, so one that lies about its format falls back to the dump.
 - **Images drawn properly** — real pixels where the terminal speaks the Kitty
   graphics protocol, exact half-blocks everywhere else.
-- **Find and filter.** `/` walks the tree below the panel and shows hits as they
-  arrive; `f` narrows the listing as you type, with `*` and `?`, reading no
+- **Find and filter.** `f` walks the tree below the panel and shows hits as they
+  arrive; `/` narrows the listing as you type, with `*` and `?`, reading no
   directory twice.
 - **Favorites.** `Shift+B` writes the directory you are in down, `b` opens the
   list and `Enter` sends the panel there. One list for both panels, kept in a
   file of its own between runs. A favorite that has gone away says so and
   leaves the panel where it is.
-- **Size and date columns**, with `c` to drop one when you would rather have
+- **Size and date columns**, with `,` to drop one when you would rather have
   the room.
 - **Nothing blocks.** Reads, walks, previews and file operations all run off
   the drawing thread. A 4 GB copy reports progress and a summary — "3 of 5
-  copied, 1 skipped" — and F9 cancels it.
+  copied, 1 skipped" — and `x` cancels it.
 - **Every mode says what it can do.** The bottom bar and F1 are generated from
   the same table the keys are resolved from, so neither can drift.
 
@@ -103,8 +102,8 @@ file there.
 
 ```toml
 [keys.browse]
-transfer.copy = ["y", "F5"]   # copy on y as well as F5
-entry.delete  = "d"           # delete on d, and no longer on F8
+transfer.copy = ["c", "y"]    # copy on y as well as c
+entry.delete  = "Delete"      # delete on Delete, and no longer on d
 tab.close     = []            # nothing closes a tab
 ```
 
@@ -121,8 +120,8 @@ and the arrows.
 
 | | |
 | --- | --- |
-| `$VISUAL`, `$EDITOR` | What F4 and `Enter` on a text file open, in that order, falling back to `vi`. Split on whitespace, so `code -w` works; nothing reaches a shell. |
-| `$PAGER` | What F3 opens, falling back to `less`. |
+| `$VISUAL`, `$EDITOR` | What `e` and `Enter` on a text file open, in that order, falling back to `vi`. Split on whitespace, so `code -w` works; nothing reaches a shell. |
+| `$PAGER` | What `v` opens, falling back to `less`. |
 | `$TZ` | Which zone the date column is drawn in. |
 | `RUST_LOG` | Log filter, e.g. `RUST_LOG=debug`. Nothing is logged without it. |
 | `XDG_STATE_HOME` | Where the log and the favorites go, under `mula/`. Unset, the log is `~/Library/Logs/mula` on macOS and the favorites `~/Library/Application Support/mula`; elsewhere both are `~/.local/state/mula`. |

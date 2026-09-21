@@ -18,7 +18,11 @@ rationale worth keeping puts it there, not here.
   the bottom bar, and the F1 help. Single source, so they can't drift.
 - `Mode` owns the overlay: a dialog is a state, not a field on `App`.
 - No vim-like modes for the user. Modality must be visible (bottom bar, F1).
-  Total Commander style keys (F1/F5/F6/F8), not mnemonics.
+- A key is the first letter of what it does — `c` copy, `m` move, `f` find.
+  Where the letter is taken, the neighbouring word wins it (`d` delete, `e`
+  edit) and the loser moves rather than sharing. Shift is for the rarer half
+  of a pair (`Shift+D` permanent delete), and function keys are for what
+  cannot be printable: F1 only.
 
 ## Comments
 
@@ -75,8 +79,8 @@ is open again, not broken.
   it — waiting is only enough because a collision is never asked in flight.
 - `DialogMsg` never becomes an `Action`; only the result leaves the dialog.
 - Key bar is curated, not truncated: a fixed set fitting 80 columns beside the
-  help hint every mode draws, rest under F1. Guard with a test over summed
-  `Span::width()`, never against a constant of our own.
+  help hint that leads every mode's row, rest under F1. Guard with a test that
+  measures the row it drew, never against a constant of our own.
 - An overlay is sized to the terminal and scrolls, never to a constant of ours.
   Guard against 80x24 — the smallest that counts — by walking the whole table
   and asserting every entry can be reached.
@@ -112,7 +116,7 @@ is open again, not broken.
 - Operations report summaries (`{ transferred, skipped, total }`), not bare
   errors, so a partial failure can say "Deleted 3 of 5".
 - Confirmation dialogs open on `Choice::No`.
-- Deleting means the trash (F8); permanent deletion is Shift+F8, and the trash
+- Deleting means the trash (`d`); permanent deletion is `Shift+D`, and the trash
   is never a fallback — failing to reach it is a failure to delete, reported as
   one. On macOS that is `NsFileManager` rather than our own move, so what the
   Finder offers to put back is what Mula took away.
@@ -139,7 +143,7 @@ is open again, not broken.
   session, is never waited for, and is `try_wait`ed once a pass so it cannot
   stay in the process table.
 - What opens a file follows from what the file is, not from which key was
-  pressed. F3 and F4 are the named exceptions.
+  pressed. `v` and `e` are the named exceptions.
 - Entering asks the reader one question. `Listed::NotADirectory` is an answer,
   not a failure, and only `Intent::Enter` acts on it.
 - Nothing reaches a shell. `$EDITOR` splits on whitespace and the path is one
@@ -185,7 +189,7 @@ is open again, not broken.
   the main loop acts on them.
 
 **Preview**
-- Quick View is a view toggle on `App`, never a `Mode`: browse keys and every
+- The preview is a view toggle on `App`, never a `Mode`: browse keys and every
   operation under them keep working.
 - What to preview is settled once per pass of the loop, not from each action
   that moves the cursor, the tab or the side.
@@ -212,7 +216,7 @@ is open again, not broken.
   `Ctrl+PageUp/Down`, `Ctrl+Tab`/`Ctrl+Shift+Tab`, and `Ctrl+W` closes its tab).
   Plain printable chars can't be intercepted this way; free in Browse since
   every text-reading mode has its own key table. The tab family sits on
-  `t`/`w`/`r`/`[`/`]` for exactly that reason.
+  `t`/`w`/`Shift+T`/`[`/`]` for exactly that reason.
 - `Ctrl+<letter>` is contested ground even beyond terminal defaults — a user's
   own config takes what it likes, and the key then never reaches the app at
   all. Function keys are the safe family, which is what Cancel sits on.

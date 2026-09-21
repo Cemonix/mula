@@ -53,7 +53,7 @@ pub enum Action {
     /// Puts the directory the focused panel is in on the list of favorites.
     /// Nothing is asked: the panel is already standing in the answer.
     AddFavorite,
-    ToggleQuickView,
+    TogglePreview,
     CycleColumns,
     ToggleDotFiles,
 }

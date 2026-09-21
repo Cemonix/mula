@@ -152,14 +152,15 @@ anything.
 
 ## The trash is never a fallback
 
-Deleting means the trash (F8); permanent deletion is Shift+F8, a deliberate
+Deleting means the trash (`d`); permanent deletion is `Shift+D`, a deliberate
 choice. "If the trash fails, delete for real" would take the safety net away
 at exactly the moment someone was relying on it — a failure to reach the trash
 is a failure to delete, and it is reported as one.
 
 This rule was written before any of it was built, lost in a pass that condensed
 `CLAUDE.md` (`848ec26`), and put back here once `feat-trash-delete` turned out
-to be resting on it. Today F8 still deletes for good.
+to be resting on it. Today `Shift+D` is still the only key that deletes for
+good.
 
 Two things about the `trash` crate that the task was wrong about, both checked
 against 5.2.6 rather than remembered:
@@ -190,7 +191,7 @@ to prevent, and Mula has nothing else like it. The crate does escape, and
 percent-encodes a path that is not UTF-8.
 
 `NsFileManager` is what `move_to_trash` sets. A permission the user has to
-grant before F8 works — and which fails the key outright if they decline —
+grant before `d` works — and which fails the key outright if they decline —
 costs more than "Put Back" is worth, and macOS only records Put Back for the
 first item a process trashes anyway, so what is given up is closer to nothing
 than the table suggests. The file lands in the trash either way; dragging it

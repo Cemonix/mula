@@ -322,18 +322,17 @@ mod infobar_tests {
     /// The widget draws whatever key it is handed, so which one the table
     /// actually binds is `keys.rs`'s business, not this module's.
     fn cancel_key() -> Option<KeyBinding> {
-        Some(KeyBinding::plain(ratatui::crossterm::event::KeyCode::F(9)))
+        Some(KeyBinding::plain(ratatui::crossterm::event::KeyCode::Char(
+            'x',
+        )))
     }
 
-    /// How the widget renders that key. It is the half of the hint the label's
-    /// wording cannot move, so absence of the hint is asserted against this.
-    fn cancel_key_text() -> String {
-        cancel_key().unwrap().to_string()
-    }
-
-    /// The hint as `segments` assembles it: the key, then the label.
+    /// The hint as `segments` assembles it: the key, then the label. The key
+    /// and the label are drawn as one unit, so this is what both presence and
+    /// absence are asserted against — a one-character key on its own turns up
+    /// inside a file name.
     fn cancel_hint() -> String {
-        format!("{}{}", cancel_key_text(), InfoBar::CANCEL_LABEL)
+        format!("{}{}", cancel_key().unwrap(), InfoBar::CANCEL_LABEL)
     }
 
     /// A count as `segments` draws it, taking the label from the widget.
@@ -363,7 +362,7 @@ mod infobar_tests {
             InfoBar::new().progress(Some(done)).cancel_key(cancel_key()),
             80,
         );
-        assert!(!row.contains(&cancel_key_text()), "{row}");
+        assert!(!row.contains(&cancel_hint()), "{row}");
     }
 
     #[test]
@@ -379,7 +378,7 @@ mod infobar_tests {
         );
 
         assert!(row.contains(&marked(3)), "{row}");
-        assert!(!row.contains(&cancel_key_text()), "{row}");
+        assert!(!row.contains(&cancel_hint()), "{row}");
     }
 
     #[test]

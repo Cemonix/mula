@@ -252,7 +252,7 @@ mod surface_tests {
         assert_eq!(run(&passes), "place 8 at 0,0;forget;place 8 at 3,0;");
     }
 
-    /// What an overlay opening over the panel, and Quick View closing, both
+    /// What an overlay opening over the panel, and the preview closing, both
     /// come to.
     #[test]
     fn wanting_nothing_takes_the_picture_back() {

@@ -202,6 +202,18 @@ mod config_tests {
         )
     }
 
+    /// The key copying answers to when no config has moved it, read out of the
+    /// catalogue rather than written down here: a test about the config file
+    /// has nothing to say about which key that is.
+    fn default_copy_key() -> KeyCode {
+        BROWSE_ACTIONS
+            .iter()
+            .find(|entry| entry.name == "transfer.copy")
+            .and_then(|entry| entry.keys.first())
+            .expect("the catalogue gives copying a key")
+            .code
+    }
+
     const EXAMPLE: &str = include_str!("../config.example.toml");
 
     /// The example is what a user starts from, so it has to name everything
@@ -241,7 +253,7 @@ mod config_tests {
     fn an_empty_config_is_the_default_table() {
         let table = built("").unwrap();
 
-        assert!(copies(&table, KeyCode::F(5)));
+        assert!(copies(&table, default_copy_key()));
     }
 
     /// The whole point: an action moves to the key the config names and stops
@@ -257,7 +269,7 @@ mod config_tests {
         .unwrap();
 
         assert!(copies(&table, KeyCode::Char('y')));
-        assert!(!copies(&table, KeyCode::F(5)));
+        assert!(!copies(&table, default_copy_key()));
     }
 
     /// TOML reads the unquoted form as a nested table. Both spellings have to
@@ -270,7 +282,7 @@ mod config_tests {
 
         for table in [quoted, dotted, sectioned] {
             assert!(copies(&table, KeyCode::Char('y')));
-            assert!(!copies(&table, KeyCode::F(5)));
+            assert!(!copies(&table, default_copy_key()));
         }
     }
 
@@ -285,7 +297,7 @@ mod config_tests {
     fn an_empty_list_leaves_the_action_unbound() {
         let table = built("[keys.browse]\n\"transfer.copy\" = []").unwrap();
 
-        assert!(!copies(&table, KeyCode::F(5)));
+        assert!(!copies(&table, default_copy_key()));
         assert!(
             keys::find(&table, |a| matches!(
                 a,

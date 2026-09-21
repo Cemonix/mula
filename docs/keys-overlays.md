@@ -3,6 +3,42 @@
 Why the key tables and the overlay states look the way they do. The rules
 themselves are in `CLAUDE.md`.
 
+## A key is the first letter of what it does
+
+Browse ran on function keys first — rename, view, edit, copy, move, new,
+delete, cancel on F2 to F9 in that order. The order is the thing that was
+wrong with it. It is not a fact about the actions, it is a fact about a row of
+keys, so the only way to know which one copies is to have learned the row; the
+labels in the bar are read off the screen every time instead of recalled. A
+letter is recalled: `c` copy, `m` move, `f` find, `v` view, `e` edit, `n` new,
+`d` delete, `r` rename.
+
+Twenty-six letters and more actions than that, so the interesting part is the
+collisions. Three of them mattered.
+
+`f` was the filter and `/` was find. One `f` cannot be both, and find is the
+one a user names with a word — so find took `f`, and the filter took `/`,
+which is what typing into a listing means everywhere else. The filter loses
+nothing by it: the key that is hard to guess is the key for the action nobody
+looks up.
+
+`c` was the column cycle and is now copy. The columns did not move to
+`Shift+C`, even though the letter fits, because the two directions of that
+mistake do not cost the same: reaching for the columns and landing on `c`
+starts copying a batch, and reaching for copy and landing on `Shift+C` drops a
+column. Shift is a weak guard against the expensive direction. `,` sits beside
+`.`, which already toggles dotfiles, so the two view toggles are two
+neighbouring keys and neither pretends to be a first letter.
+
+`v` was the preview and is now the pager, which is what `v` says. That left
+the preview needing a word of its own, and it had one already: `ui::preview`,
+`fs::preview`, this directory's `preview.md`. "Quick View" was the last name
+in the codebase that came from somewhere else, so the feature is called the
+preview now and the key is `p`.
+
+What is left on a function key is F1, and it is there because it cannot be
+printable — see **Globals** below. Nothing else needs to be.
+
 ## Help is not a `Mode`
 
 Help draws over whatever mode is running and lists *that mode's* keys, so the
@@ -44,7 +80,7 @@ and a table nobody wants to move is not worth a format.
 Nothing about a rebound action changes but the key: it keeps its label, its
 help line and its place in both listings, because those never left the
 catalogue. Only the first key of an action carries the bar label — two keys
-would otherwise draw `F5 Copy  y Copy`.
+would otherwise draw `c Copy  y Copy`.
 
 A config that cannot be used costs the user their keys and never their file
 manager: the defaults stand and the reason arrives as a toast. It is all or
@@ -65,15 +101,22 @@ that fails it is one nobody could bind.
 ## The key bar is curated, not truncated
 
 The bar carries a fixed set of keys chosen to fit 80 columns, and everything
-else lives under `?`.
+else lives under F1.
 
-The guard test sums `Span::width()` against 80 because **80 columns is an
-outside fact**, not a number we picked. A test that measures a list against a
-constant we raise whenever the list outgrows it proves nothing — it is a
-tautology, and it stays green right up until the thing it guards is broken.
+The guard test measures against 80 because **80 columns is an outside fact**,
+not a number we picked. A test that measures a list against a constant we
+raise whenever the list outgrows it proves nothing — it is a tautology, and it
+stays green right up until the thing it guards is broken.
 
 Any budget test in this codebase should measure against something it cannot
 move.
+
+What it measures is the row the widget drew: it renders into a `Buffer` and
+reads the cells back. Adding the layout up a second time in the test was the
+first shape, and it went stale the moment the help hint moved from the right
+edge into the row — the arithmetic still agreed with itself and no longer with
+`render`, which had gained a separator the test knew nothing about. A test that
+re-implements what it checks can only catch the thing it was told about.
 
 ## At most one overlay
 
@@ -108,6 +151,13 @@ hint into every mode's row, so the bar of a dialog is now measured beside it
 against the same 80 columns. And the help overlay lists the globals under the
 mode's own keys — it claims to list every key working right now, and the key
 that opened it is one of those.
+
+The hint leads the row rather than sitting right-aligned at the far end of it,
+which is where it started. Right-aligned was the honest drawing of "this key
+is not one of the mode's" — and on a wide terminal it put the one key a user
+has to find if they know nothing else as far from the other keys as the row
+allows, with empty cells between. Leading the row costs the same columns and
+is read first.
 
 The overlay resolves its own keys before the globals, so F1 closes what F1
 opened rather than reopening it.
@@ -147,10 +197,9 @@ a favorite is a path, and the day it grows a name of its own the overlay takes
 a `TextInput` of its own the way `Finder` has one, rather than opening a
 prompt over itself.
 
-`b` and `Shift+B` rather than `Ctrl+D`, which is where Total Commander keeps
-its hotlist: `Ctrl+<letter>` is contested ground, and a terminal or a user's
-own config can take it before Mula ever sees it. Printable characters in
-Browse cannot be intercepted that way.
+`b` and `Shift+B` rather than a `Ctrl+<letter>`: Ctrl is contested ground, and
+a terminal or a user's own config can take the key before Mula ever sees it.
+Printable characters in Browse cannot be intercepted that way.
 
 ## The favorites box is sized to the list
 

@@ -8,8 +8,8 @@ use ratatui::{
 
 use crate::keys::{Binding, KeyBinding};
 
-/// The bottom row. Draws the entries of `bindings` that carry a `bar` label as
-/// `key label`, the number of marked items, and `help_key` followed by `Help`.
+/// The bottom row. Draws `help_key` followed by `Help`, then the entries of
+/// `bindings` that carry a `bar` label, each as `key label`.
 ///
 /// Reads only `key` and `bar`, never `msg`, so `T` needs no bound and any
 /// binding table can be passed in. `help_key` is resolved by the caller and
@@ -41,6 +41,12 @@ impl<'b, T> Keybar<'b, T> {
 impl<'b, T> Widget for Keybar<'b, T> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut spans = Vec::new();
+        if let Some(help) = self.help_key {
+            // Owned, since the key is a copy on the stack rather than part of
+            // the table the other spans borrow from.
+            spans.push(Span::raw(help.to_string()).bold());
+            spans.push(Span::raw(Self::HELP_LABEL));
+        }
         for binding in self.bindings {
             if let Some(bar) = binding.bar {
                 if !spans.is_empty() {
@@ -54,15 +60,9 @@ impl<'b, T> Widget for Keybar<'b, T> {
 
         buf.set_style(area, Style::new().fg(Color::White).bg(Color::DarkGray));
 
+        // The styling stays on the spans: a `Line` lays its own style over the
+        // whole area first, which would take the row's background with it.
         Widget::render(Line::from(spans), area, buf);
-
-        // Both lines share one area. The second only overwrites the cells it
-        // draws into, but a `Line` lays its own style over the whole area first,
-        // so the styling stays on the spans and never on the line.
-        if let Some(help) = self.help_key {
-            let help = Line::from(vec![help.to_span().bold(), Span::raw(Self::HELP_LABEL)]);
-            Widget::render(help.right_aligned(), area, buf);
-        }
     }
 }
 
@@ -80,30 +80,37 @@ mod keybar_tests {
     /// The narrowest terminal the bar is curated against.
     const COLUMNS: u16 = 80;
 
-    /// Columns the entries carrying a `bar` label take, plus the separators
-    /// between them. Measured the way `render` lays them out.
-    fn bar_width<T>(bindings: &[Binding<T>]) -> u16 {
-        let labelled: Vec<&Binding<T>> = bindings.iter().filter(|b| b.bar.is_some()).collect();
-        let entries: u16 = labelled
-            .iter()
-            .map(|b| b.key.to_span().width() as u16 + 1 + Span::raw(b.bar.unwrap()).width() as u16)
-            .sum();
-        let separators = labelled.len().saturating_sub(1) as u16;
-        entries + separators * Span::raw(Keybar::<T>::SEPARATOR).width() as u16
+    /// The key the hint is drawn from, taken from the globals the way `App`
+    /// takes it.
+    fn help_key() -> Option<KeyBinding> {
+        Some(
+            find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
+                .expect("the globals reach the help overlay")
+                .key,
+        )
     }
 
-    fn help_width() -> u16 {
-        let key = find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
-            .expect("the globals reach the help overlay");
-        key.key.to_span().width() as u16 + Span::raw(Keybar::<()>::HELP_LABEL).width() as u16
+    /// Columns the row takes, read off the cells `render` drew rather than by
+    /// adding its layout up a second time. The buffer is wide enough that a
+    /// row reaching its end would mean the measurement was clipped, which the
+    /// last cell being blank rules out.
+    fn row_width<T>(bindings: &[Binding<T>], help: Option<KeyBinding>) -> u16 {
+        let area = Rect::new(0, 0, 200, 1);
+        let mut buf = Buffer::empty(area);
+
+        Keybar::new(bindings).help_key(help).render(area, &mut buf);
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+
+        assert!(row.ends_with(' '), "the row filled the buffer: {row:?}");
+        Span::raw(row.trim_end()).width() as u16
     }
 
     /// The bar is curated rather than truncated: an entry that does not fit
-    /// belongs under `?` instead. The help hint is right-aligned into the same
-    /// row, so it counts against the same 80 columns.
+    /// belongs under the help overlay instead. The hint leads the same row, so
+    /// it counts against the same 80 columns.
     #[test]
     fn the_browse_bar_fits_eighty_columns_beside_the_help_hint() {
-        let width = bar_width(&keys::table(BROWSE_ACTIONS, |_| None)) + help_width();
+        let width = row_width(&keys::table(BROWSE_ACTIONS, |_| None), help_key());
 
         assert!(width <= COLUMNS, "the browse bar takes {width} columns");
     }
@@ -114,18 +121,40 @@ mod keybar_tests {
     #[test]
     fn every_overlay_bar_fits_eighty_columns() {
         for (name, width) in [
-            ("dialog", bar_width(Dialog::DIALOG_KEYS) + help_width()),
-            ("prompt", bar_width(Prompt::PROMPT_KEYS) + help_width()),
-            ("finder", bar_width(Finder::FIND_KEYS) + help_width()),
+            ("dialog", row_width(Dialog::DIALOG_KEYS, help_key())),
+            ("prompt", row_width(Prompt::PROMPT_KEYS, help_key())),
+            ("finder", row_width(Finder::FIND_KEYS, help_key())),
             (
                 "favorites",
-                bar_width(FavoritesView::FAVORITE_KEYS) + help_width(),
+                row_width(FavoritesView::FAVORITE_KEYS, help_key()),
             ),
-            ("filter", bar_width(Filter::FILTER_KEYS) + help_width()),
-            ("help", bar_width(help::HELP_KEYS)),
+            ("filter", row_width(Filter::FILTER_KEYS, help_key())),
+            ("help", row_width(help::HELP_KEYS, None)),
         ] {
             assert!(width <= COLUMNS, "the {name} bar takes {width} columns");
         }
+    }
+
+    /// The hint leads the row. It is the one key a user who knows nothing else
+    /// has to be able to find, and the right edge of a wide terminal is where
+    /// it used to sit on its own, far from everything it belongs with.
+    #[test]
+    fn the_help_hint_leads_the_row() {
+        let table = [Binding {
+            key: KeyBinding::plain(KeyCode::Char('q')),
+            msg: (),
+            bar: Some("Quit"),
+            help: "labelled",
+        }];
+        let area = Rect::new(0, 0, 20, 1);
+        let mut buf = Buffer::empty(area);
+
+        Keybar::new(&table)
+            .help_key(Some(KeyBinding::plain(KeyCode::F(1))))
+            .render(area, &mut buf);
+        let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+
+        assert!(row.starts_with("F1 Help  q Quit"), "the row was {row:?}");
     }
 
     #[test]

@@ -7,8 +7,8 @@
 # Each action takes one key, a list of keys, or an empty list to leave it
 # unreachable:
 #
-#     transfer.copy = ["F5", "y"]   # copy on y as well as F5
-#     entry.delete  = "d"           # delete on d, and no longer on F8
+#     transfer.copy = ["c", "F5"]   # copy on F5 as well as c
+#     entry.delete  = "Delete"      # delete on Delete, and no longer on d
 #     tab.close     = []            # nothing closes a tab
 #
 # Key names are the ones F1 prints. Ctrl+, Alt+ and Shift+ go in front, in that
@@ -27,16 +27,16 @@ cursor.last = "Shift+G"
 
 panel.toggle = "Tab"
 panel.parent = "Backspace"
-panel.find = "/"
-panel.filter = "f"
+panel.find = "f"
+panel.filter = "/"
 
 entry.open = "Enter"
-entry.rename = "F2"
-entry.view = "F3"
-entry.edit = "F4"
-entry.create = "F7"
-entry.delete = "F8"
-entry.delete-permanent = "Shift+F8"
+entry.rename = "r"
+entry.view = "v"
+entry.edit = "e"
+entry.create = "n"
+entry.delete = "d"
+entry.delete-permanent = "Shift+D"
 
 mark.toggle = "Space"
 mark.all = "a"
@@ -46,21 +46,21 @@ panel.clear = "Esc"
 unmark.up = "Alt+Up"
 unmark.down = "Alt+Down"
 
-transfer.copy = "F5"
-transfer.move = "F6"
+transfer.copy = "c"
+transfer.move = "m"
 
 favorites.open = "b"
 favorites.add = "Shift+B"
 
 tab.new = "t"
 tab.close = "w"
-tab.rename = "r"
+tab.rename = "Shift+T"
 tab.previous = "["
 tab.next = "]"
 
-view.quick = "v"
-view.columns = "c"
+view.preview = "p"
+view.columns = ","
 view.dotfiles = "."
 
-job.cancel = "F9"
+job.cancel = "x"
 app.quit = "q"

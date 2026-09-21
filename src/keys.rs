@@ -259,7 +259,7 @@ pub enum GlobalMsg {
 
 /// The keys that work in every mode, resolved before the mode's own table so
 /// nothing can shadow them. A global carries no `bar` label: the keybar draws
-/// it right-aligned into every mode's row instead.
+/// it at the head of every mode's row instead.
 ///
 /// F1 rather than `?`, because a global has to survive the modes that read
 /// text — a prompt and the find overlay would swallow a printable character.
@@ -386,21 +386,21 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     Entry {
         name: "entry.rename",
         action: Action::Rename,
-        keys: &[KeyBinding::plain(KeyCode::F(2))],
+        keys: &[KeyBinding::plain(KeyCode::Char('r'))],
         bar: Some("Rename"),
         help: "Renames the item under the cursor",
     },
     Entry {
         name: "entry.view",
         action: Action::Open(Opener::View),
-        keys: &[KeyBinding::plain(KeyCode::F(3))],
+        keys: &[KeyBinding::plain(KeyCode::Char('v'))],
         bar: Some("View"),
         help: "Opens the file under the cursor in $PAGER",
     },
     Entry {
         name: "entry.edit",
         action: Action::Open(Opener::Edit),
-        keys: &[KeyBinding::plain(KeyCode::F(4))],
+        keys: &[KeyBinding::plain(KeyCode::Char('e'))],
         bar: Some("Edit"),
         help: "Opens the file under the cursor in $EDITOR",
     },
@@ -409,7 +409,7 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         action: Action::Transfer {
             op: TransferOp::Copy,
         },
-        keys: &[KeyBinding::plain(KeyCode::F(5))],
+        keys: &[KeyBinding::plain(KeyCode::Char('c'))],
         bar: Some("Copy"),
         help: "Copies marked items into the other panel",
     },
@@ -418,49 +418,49 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         action: Action::Transfer {
             op: TransferOp::Move,
         },
-        keys: &[KeyBinding::plain(KeyCode::F(6))],
+        keys: &[KeyBinding::plain(KeyCode::Char('m'))],
         bar: Some("Move"),
         help: "Moves marked items into the other panel",
     },
     Entry {
         name: "entry.create",
         action: Action::CreateEntry,
-        keys: &[KeyBinding::plain(KeyCode::F(7))],
+        keys: &[KeyBinding::plain(KeyCode::Char('n'))],
         bar: Some("New"),
         help: "Creates a file, or a folder if the name ends with /",
     },
     Entry {
         name: "entry.delete",
         action: Action::Delete(DeleteMode::Trash),
-        keys: &[KeyBinding::plain(KeyCode::F(8))],
+        keys: &[KeyBinding::plain(KeyCode::Char('d'))],
         bar: Some("Delete"),
         help: "Moves marked items to the trash, asking first",
     },
     Entry {
         name: "entry.delete-permanent",
         action: Action::Delete(DeleteMode::Permanent),
-        keys: &[KeyBinding::plain(KeyCode::F(8)).shift()],
+        keys: &[KeyBinding::plain(KeyCode::Char('D')).shift()],
         bar: None,
         help: "Deletes marked items for good, without the trash, asking first",
     },
     Entry {
         name: "job.cancel",
         action: Action::CancelJob,
-        keys: &[KeyBinding::plain(KeyCode::F(9))],
+        keys: &[KeyBinding::plain(KeyCode::Char('x'))],
         bar: None,
         help: "Stops the running operation",
     },
     Entry {
-        name: "view.quick",
-        action: Action::ToggleQuickView,
-        keys: &[KeyBinding::plain(KeyCode::Char('v'))],
+        name: "view.preview",
+        action: Action::TogglePreview,
+        keys: &[KeyBinding::plain(KeyCode::Char('p'))],
         bar: None,
         help: "Shows what is under the cursor in the other panel",
     },
     Entry {
         name: "view.columns",
         action: Action::CycleColumns,
-        keys: &[KeyBinding::plain(KeyCode::Char('c'))],
+        keys: &[KeyBinding::plain(KeyCode::Char(','))],
         bar: None,
         help: "Drops a column from the listing, and brings them all back",
     },
@@ -474,14 +474,14 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     Entry {
         name: "panel.find",
         action: Action::Find,
-        keys: &[KeyBinding::plain(KeyCode::Char('/'))],
+        keys: &[KeyBinding::plain(KeyCode::Char('f'))],
         bar: None,
         help: "Searches the tree below this panel for a name",
     },
     Entry {
         name: "panel.filter",
         action: Action::Filter,
-        keys: &[KeyBinding::plain(KeyCode::Char('f'))],
+        keys: &[KeyBinding::plain(KeyCode::Char('/'))],
         bar: None,
         help: "Narrows the listing to what you type, with * and ?",
     },
@@ -516,7 +516,7 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     Entry {
         name: "tab.rename",
         action: Action::RenameTab,
-        keys: &[KeyBinding::plain(KeyCode::Char('r'))],
+        keys: &[KeyBinding::plain(KeyCode::Char('T')).shift()],
         bar: None,
         help: "Renames the active tab",
     },
@@ -556,6 +556,24 @@ mod keys_tests {
         table(BROWSE_ACTIONS, |_| None)
     }
 
+    /// The first key the catalogue gives an action, so a test can name the key
+    /// an action is moving away from without writing that key down.
+    fn default_key(name: &str) -> KeyBinding {
+        let entry = BROWSE_ACTIONS
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("{name} is not in the catalogue"));
+
+        *entry
+            .keys
+            .first()
+            .unwrap_or_else(|| panic!("{name} has no default key"))
+    }
+
+    fn press(key: KeyBinding) -> KeyEvent {
+        KeyEvent::new(key.code, key.mods)
+    }
+
     #[test]
     fn browse_keys_bind_every_key_once() {
         validate(&defaults()).unwrap();
@@ -574,11 +592,11 @@ mod keys_tests {
     }
 
     /// An action reachable two ways is still one entry in the bar, or the bar
-    /// would draw `F5 Copy  y Copy`.
+    /// would draw `c Copy  y Copy`.
     #[test]
     fn only_the_first_key_of_an_action_carries_the_bar_label() {
         let two = [
-            KeyBinding::plain(KeyCode::F(5)),
+            default_key("transfer.copy"),
             KeyBinding::plain(KeyCode::Char('y')),
         ];
         let built = table(BROWSE_ACTIONS, |name| {
@@ -608,14 +626,13 @@ mod keys_tests {
             (name == "transfer.copy").then_some(&rebound[..])
         });
 
-        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
         assert!(matches!(
-            resolve(&built, &press(KeyCode::Char('y'))),
+            resolve(&built, &press(KeyBinding::plain(KeyCode::Char('y')))),
             Some(Action::Transfer {
                 op: TransferOp::Copy
             })
         ));
-        assert!(resolve(&built, &press(KeyCode::F(5))).is_none());
+        assert!(resolve(&built, &press(default_key("transfer.copy"))).is_none());
     }
 
     #[test]

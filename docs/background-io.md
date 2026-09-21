@@ -243,6 +243,6 @@ narrow is the entire point of it.
 
 Marks need nothing from any of this. They are absolute paths in a set on the
 `Tab`, so an entry filtered off the screen stays marked, the same way a mark
-survives leaving its directory. What that does mean is that F5 acts on marks
+survives leaving its directory. What that does mean is that a copy acts on marks
 the filter is hiding — consistent with how marks already behave, but closer
 together in time, and the delete dialog naming every item is what catches it.

@@ -46,7 +46,7 @@ Two rules, which is all an association table amounts to here:
 | any other regular file | the system's opener, detached |
 | a fifo, a socket, a device | nothing, and a toast |
 
-F3 and F4 override it: the user named the program, so nothing is sniffed.
+`v` and `e` override it: the user named the program, so nothing is sniffed.
 
 ## Signals
 
@@ -141,11 +141,11 @@ between two passes must not open an editor nobody asked for.
 
 ## What is not checked
 
-F3 and F4 hand over whatever is under the cursor, a directory aside. A fifo
+`v` and `e` hand over whatever is under the cursor, a directory aside. A fifo
 given to `$PAGER` will block it — the listing reports fifos, sockets and
 devices as `File`, and telling them apart would need a `symlink_metadata` the
 panel has not done.
 
-Enter does check, because it was already reading. F3 and F4 do not, because the
+Enter does check, because it was already reading. `v` and `e` do not, because the
 user named both the program and the file, and because Ctrl-C now gets out of
 it — which is what the signal work above buys.
