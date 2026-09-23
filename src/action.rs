@@ -27,6 +27,8 @@ pub enum Action {
     MoveCursorTo(ListEnd),
     OpenSelected,
     GoToParent,
+    /// Opens the prompt for a path to send the focused panel to.
+    Jump,
     Open(Opener),
     ToggleMark,
     ToggleTab(ToggleDirection),
@@ -62,4 +64,6 @@ pub enum Action {
     TogglePreview,
     CycleColumns,
     ToggleDotFiles,
+    CycleSort,
+    ReverseSort,
 }

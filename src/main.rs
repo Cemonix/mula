@@ -1,4 +1,11 @@
-use std::{env, io, panic, path::PathBuf, process::ExitCode};
+use std::{
+    env, io,
+    os::unix::ffi::OsStrExt,
+    panic,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use tracing_appender::{
     non_blocking::WorkerGuard,
@@ -27,12 +34,17 @@ const USAGE: &str = "\
 mula — a dual-pane terminal file manager
 
 Usage:
-    mula [DIRECTORY]
+    mula [OPTIONS] [DIRECTORY]
 
 Both panels open in DIRECTORY, or in the directory mula was started from when
 none is given.
 
 Options:
+    --init SHELL     Print the shell function that leaves your shell in the
+                     directory mula was quit in; SHELL is bash, zsh or fish.
+                     Put `eval \"$(mula --init zsh)\"` in your rc file
+    --cwd-file FILE  On quitting, write the directory of the focused panel
+                     to FILE; the function above uses this
     -h, --help       Print this and exit
     -V, --version    Print the version and exit
 
@@ -41,11 +53,19 @@ Press F1 while it runs for the keys that work where you are standing.
 
 /// What the command line asked for, when it did not ask for the app to run.
 enum Answered {
-    /// A question the command line answers on its own: `--help`, `--version`.
+    /// A question the command line answers on its own: `--help`, `--version`,
+    /// `--init`.
     Question(String),
     /// Nothing that can be run: an unknown option, or a directory that cannot
     /// be entered.
     Refusal(String),
+}
+
+/// What the command line asked of a run.
+#[derive(Default)]
+struct Options {
+    /// Where the directory the focused panel ends in is written.
+    cwd_file: Option<PathBuf>,
 }
 
 /// Reads the command line and leaves the process in the directory the panels
@@ -55,16 +75,46 @@ enum Answered {
 /// listings grow from `env::current_dir()`, so `mula /tmp` and `cd /tmp &&
 /// mula` are the same run, and the paths handed to other programs stay
 /// absolute without anything else having to know an argument was given.
-fn read_command_line(args: impl Iterator<Item = String>) -> Result<(), Answered> {
+fn read_command_line(mut args: impl Iterator<Item = String>) -> Result<Options, Answered> {
     let mut directory: Option<PathBuf> = None;
+    let mut options = Options::default();
 
-    for arg in args {
+    while let Some(arg) = args.next() {
+        if let Some(file) = arg.strip_prefix("--cwd-file=") {
+            options.cwd_file = Some(PathBuf::from(file));
+            continue;
+        }
         match arg.as_str() {
             "-h" | "--help" => return Err(Answered::Question(USAGE.to_string())),
             "-V" | "--version" => {
                 let version = format!("{} {}\n", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
                 return Err(Answered::Question(version));
             }
+            "--init" => {
+                let function = match args.next().as_deref() {
+                    Some("bash" | "zsh") => include_str!("shell/posix.sh"),
+                    Some("fish") => include_str!("shell/fish.fish"),
+                    Some(shell) => {
+                        return Err(Answered::Refusal(format!(
+                            "no function for {shell}; there is one for bash, zsh and fish."
+                        )));
+                    }
+                    None => {
+                        return Err(Answered::Refusal(
+                            "--init needs a shell: bash, zsh or fish.".to_string(),
+                        ));
+                    }
+                };
+                return Err(Answered::Question(function.to_string()));
+            }
+            "--cwd-file" => match args.next() {
+                Some(file) => options.cwd_file = Some(PathBuf::from(file)),
+                None => {
+                    return Err(Answered::Refusal(
+                        "--cwd-file needs the file to write to.".to_string(),
+                    ));
+                }
+            },
             _ if arg.starts_with('-') => {
                 return Err(Answered::Refusal(format!(
                     "unknown option: {arg}\nTry `mula --help`."
@@ -80,14 +130,21 @@ fn read_command_line(args: impl Iterator<Item = String>) -> Result<(), Answered>
     }
 
     let Some(directory) = directory else {
-        return Ok(());
+        return Ok(options);
     };
 
     // `set_current_dir` is the whole check: a path that is not a directory
     // comes back as `Not a directory`, which is the complaint we would have
     // written ourselves.
     env::set_current_dir(&directory)
-        .map_err(|e| Answered::Refusal(format!("{}: {e}", directory.display())))
+        .map_err(|e| Answered::Refusal(format!("{}: {e}", directory.display())))?;
+    Ok(options)
+}
+
+/// Writes `directory` to `file` as raw bytes with nothing after it, so a name
+/// that is not UTF-8 reaches the shell as it is on disk.
+fn write_cwd(file: &Path, directory: &Path) -> io::Result<()> {
+    std::fs::write(file, directory.as_os_str().as_bytes())
 }
 
 /// Where a log goes: `$XDG_STATE_HOME/mula`, or the directory the platform
@@ -128,8 +185,8 @@ fn init_logging() -> Option<WorkerGuard> {
 }
 
 fn main() -> ExitCode {
-    match read_command_line(env::args().skip(1)) {
-        Ok(()) => (),
+    let options = match read_command_line(env::args().skip(1)) {
+        Ok(options) => options,
         Err(Answered::Question(text)) => {
             print!("{text}");
             return ExitCode::SUCCESS;
@@ -138,12 +195,12 @@ fn main() -> ExitCode {
             eprintln!("mula: {reason}");
             return ExitCode::FAILURE;
         }
-    }
+    };
 
     let _guard = init_logging();
 
     tracing::info!("App starting...");
-    let outcome: Result<(), AppError> = ratatui::run(|terminal| {
+    let outcome: Result<Arc<Path>, AppError> = ratatui::run(|terminal| {
         // Asked before the loop starts: the terminal answers on standard
         // input, and `handle_events` would read the answer as keystrokes.
         let capabilities = Capabilities::detect();
@@ -153,13 +210,25 @@ fn main() -> ExitCode {
             forget_pictures_on_panic(graphics.protocol);
         }
 
-        App::new(capabilities)?.run(terminal)
+        let mut app = App::new(capabilities)?;
+        app.run(terminal)?;
+        Ok(Arc::clone(app.get_focused_pane().get_current_dir()))
     });
 
     // Reported here rather than returned: `main` prints a `Result` through
     // `Debug`, and the terminal is its own again by the time this runs.
-    if let Err(e) = outcome {
-        eprintln!("mula: {e}");
+    let directory = match outcome {
+        Ok(directory) => directory,
+        Err(e) => {
+            eprintln!("mula: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Some(file) = options.cwd_file
+        && let Err(e) = write_cwd(&file, &directory)
+    {
+        eprintln!("mula: {}: {e}", file.display());
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -187,7 +256,7 @@ fn forget_pictures_on_panic(protocol: Protocol) {
 mod command_line_tests {
     use super::*;
 
-    fn read(args: &[&str]) -> Result<(), Answered> {
+    fn read(args: &[&str]) -> Result<Options, Answered> {
         read_command_line(args.iter().map(|arg| arg.to_string()))
     }
 
@@ -231,5 +300,43 @@ mod command_line_tests {
     #[test]
     fn a_second_directory_is_refused() {
         assert!(matches!(read(&["/tmp", "/var"]), Err(Answered::Refusal(_))));
+    }
+
+    #[test]
+    fn both_spellings_of_the_cwd_file_name_it() {
+        for args in [&["--cwd-file", "/tmp/cwd"][..], &["--cwd-file=/tmp/cwd"]] {
+            let Ok(options) = read(args) else {
+                panic!("{args:?} is a run, not an answer");
+            };
+
+            assert_eq!(options.cwd_file.as_deref(), Some(Path::new("/tmp/cwd")));
+        }
+    }
+
+    /// The function has to call the binary past itself, or `mula` inside a
+    /// function named `mula` would call the function again.
+    #[test]
+    fn every_shell_is_given_a_function_that_calls_the_binary() {
+        for shell in ["bash", "zsh", "fish"] {
+            let Err(Answered::Question(text)) = read(&["--init", shell]) else {
+                panic!("--init {shell} is a question, not a refusal");
+            };
+
+            assert!(text.contains("command mula --cwd-file="), "{shell}");
+        }
+    }
+
+    #[test]
+    fn a_shell_without_a_function_is_refused() {
+        assert!(matches!(
+            read(&["--init", "tcsh"]),
+            Err(Answered::Refusal(_))
+        ));
+        assert!(matches!(read(&["--init"]), Err(Answered::Refusal(_))));
+    }
+
+    #[test]
+    fn a_cwd_file_without_a_name_is_refused() {
+        assert!(matches!(read(&["--cwd-file"]), Err(Answered::Refusal(_))));
     }
 }

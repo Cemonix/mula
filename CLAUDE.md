@@ -200,8 +200,9 @@ is open again, not broken.
   each with its own generation — the two panels are two of those, not one
   "listing" role.
 - What is on screen is a view — indices into the listing — and the cursor
-  indexes the view, never the listing. Filtering happens above the read, so a
-  criterion typed letter by letter costs no disk. One function rebuilds the
+  indexes the view, never the listing. Filtering and sorting happen above the
+  read, so a criterion typed letter by letter costs no disk; a sort key that
+  compares metadata raises what the listing is read with, as a column does. One function rebuilds the
   view and refits the cursor, and every change to listing or criteria goes
   through it: `select_prev`/`select_next` wrap with `%` and would divide by
   zero on a view that emptied under a cursor. The parent entry is never

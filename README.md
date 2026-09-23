@@ -8,8 +8,11 @@ Built with [ratatui](https://ratatui.rs).
 ## Install
 
 ```sh
-cargo install --git https://github.com/Cemonix/mula
+cargo install --locked --git https://github.com/Cemonix/mula
 ```
+
+`--locked` builds with the dependency versions in `Cargo.lock`, the ones the
+tests passed with; without it Cargo picks the newest it can find.
 
 Then:
 
@@ -23,8 +26,25 @@ Needs Rust 1.88 or later, Linux or macOS, and a
 variant, since the others draw a glyph wider than one cell. Without one the
 icons are empty boxes and nothing else breaks.
 
-From a clone, `cargo install --path .` does the same thing, and
+From a clone, `cargo install --locked --path .` does the same thing, and
 `cargo build --release` leaves the binary in `target/` instead.
+
+### Staying where you quit
+
+To have your shell end up in the directory you quit Mula in, add one line to
+your shell's config:
+
+```sh
+eval "$(mula --init zsh)"     # ~/.zshrc
+eval "$(mula --init bash)"    # ~/.bashrc
+mula --init fish | source     # ~/.config/fish/config.fish
+```
+
+`mula` is then a shell function that runs Mula and does the `cd` afterwards. A
+program cannot change the directory of the shell that started it, so the `cd`
+has to happen in the shell itself; `mula --init zsh` prints the function if you
+would rather read it first. Without the line, Mula works as before and leaves
+the shell where it was.
 
 Windows is not a target. Mula reaches for POSIX process and signal handling
 directly — a detached opener gets `/dev/null` and a session of its own,
@@ -56,6 +76,8 @@ These are the ones worth knowing first.
 | `p` | Preview in the opposite panel |
 | `,` | Drop a listing column, and bring them all back from the name alone |
 | `.` | Show or hide the entries whose names begin with a dot |
+| `s` / `Shift+S` | Sort by name, time, size or extension / turn the order around |
+| `j` | Go to a path you type: `~` is home, and a relative one starts here |
 | `f` | Find by name below this panel |
 | `/` | Narrow this listing to the names holding what you type |
 | `b` / `Shift+B` | Favorites: go to one / add the directory this panel is in |
@@ -98,6 +120,9 @@ These are the ones worth knowing first.
   leaves the panel where it is.
 - **Size and date columns**, with `,` to drop one when you would rather have
   the room.
+- **Sorting** by name, time, size or extension, each panel on its own:
+  newest and largest first, `Shift+S` for the other way. Directories stay on
+  top whatever the order.
 - **Nothing blocks.** Reads, walks, previews and file operations all run off
   the drawing thread. A 4 GB copy reports progress and a summary — "3 of 5
   copied, 1 skipped" — and `x` cancels it.

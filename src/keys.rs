@@ -486,6 +486,27 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Shows or hides the entries whose names begin with a dot",
     },
     Entry {
+        name: "view.sort",
+        action: Action::CycleSort,
+        keys: &[KeyBinding::plain(KeyCode::Char('s'))],
+        bar: None,
+        help: "Sorts by the next of name, time, size and extension",
+    },
+    Entry {
+        name: "view.sort-reverse",
+        action: Action::ReverseSort,
+        keys: &[KeyBinding::plain(KeyCode::Char('S')).shift()],
+        bar: None,
+        help: "Turns the order of the listing around",
+    },
+    Entry {
+        name: "panel.jump",
+        action: Action::Jump,
+        keys: &[KeyBinding::plain(KeyCode::Char('j'))],
+        bar: None,
+        help: "Goes to a typed path, ~ for home, relative to here",
+    },
+    Entry {
         name: "panel.find",
         action: Action::Find,
         keys: &[KeyBinding::plain(KeyCode::Char('f'))],

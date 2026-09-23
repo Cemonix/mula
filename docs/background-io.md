@@ -246,3 +246,29 @@ Marks need nothing from any of this. They are absolute paths in a set on the
 survives leaving its directory. What that does mean is that a copy acts on marks
 the filter is hiding — consistent with how marks already behave, but closer
 together in time, and the delete dialog naming every item is what catches it.
+
+## The order sits above the read too
+
+Sorting is the third thing the view is built from, after the dot files and the
+filter, and for the same reason: pressing `s` reorders what is already held,
+and the listing underneath stays in the order `Directory::new` gave it. That
+order is also what makes the default free — a stable sort over indices that
+are already in name order within each kind finds one run and stops.
+
+A key that compares metadata asks for it. `Sort::detail` is ordered alongside
+the columns', and the panel reads to whichever of the two wants more, so a
+panel showing names alone and sorted by time still gets its `stat`. Until that
+listing lands every entry compares equal on the key and falls back to its name,
+which is the order the pane was already showing.
+
+The order belongs to the pane, like the dot files, rather than to `App`, like
+the columns. Downloads by time beside a source tree by name is the ordinary
+case; columns are about how wide the screen is, which both panels share. It
+outlives a change of directory, since unlike a filter it says nothing about the
+names in front of you.
+
+Directories stay on top whatever the key, and the size key leaves them in name
+order: a directory's `st_size` is the size of its record, not of what it holds,
+and ordering by it would look like a meaning it does not have. The border says
+which order a pane is in whenever it is not the one every pane starts in — a
+list sorted by time looks like a list in no order at all.

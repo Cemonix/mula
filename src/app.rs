@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
-    io,
-    path::{Path, PathBuf},
+    env, io,
+    path::{Component, Path, PathBuf},
     process::Child,
     sync::Arc,
     time::Duration,
@@ -161,13 +161,41 @@ pub struct PendingPack {
 }
 
 /// Where the text of a confirmed `Input` prompt goes: into a filesystem
-/// mutation, into an archive's name, or into the title of the tab that was
-/// open for renaming.
+/// mutation, into an archive's name, into the title of the tab that was open
+/// for renaming, or into a path for the focused panel to go to.
 #[derive(Debug, Clone)]
 pub enum InputTarget {
     Mutation(PendingMutation),
     Pack(PendingPack),
     RenameTab,
+    /// Holds the directory a relative path is read from: the one the panel
+    /// stood in when the prompt opened.
+    Jump(Arc<Path>),
+}
+
+/// The absolute path `typed` names, read from `base`.
+///
+/// `~` alone or followed by `/` is `home`; without a home, and in `~user`, it
+/// stays a name like any other. `.` and `..` are resolved on the text without
+/// reading the disk, so the result carries neither.
+fn typed_path(typed: &str, base: &Path, home: Option<&Path>) -> PathBuf {
+    let expanded = match (typed.strip_prefix('~'), home) {
+        (Some(""), Some(home)) => home.to_path_buf(),
+        (Some(rest), Some(home)) if rest.starts_with('/') => home.join(&rest[1..]),
+        _ => PathBuf::from(typed),
+    };
+
+    let mut resolved = PathBuf::new();
+    for component in base.join(expanded).components() {
+        match component {
+            Component::CurDir => (),
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    resolved
 }
 
 /// What a `Confirm` dialog carries out once it is answered with `Yes`.
@@ -832,6 +860,14 @@ impl App {
                 self.get_focused_pane_mut().go_to_parent();
                 Ok(())
             }
+            Action::Jump => {
+                let base = Arc::clone(self.get_focused_pane().get_current_dir());
+                self.mode = Mode::Input {
+                    prompt: Prompt::new("Go to"),
+                    pending: InputTarget::Jump(base),
+                };
+                Ok(())
+            }
             Action::Open(opener) => self.open_selected(opener),
             Action::NewTab => {
                 if let Ok(new_tab) = Tab::new(String::from("New Tab")) {
@@ -878,6 +914,14 @@ impl App {
             }
             Action::ToggleDotFiles => {
                 self.get_focused_pane_mut().toggle_dot_files();
+                Ok(())
+            }
+            Action::CycleSort => {
+                self.get_focused_pane_mut().cycle_sort();
+                Ok(())
+            }
+            Action::ReverseSort => {
+                self.get_focused_pane_mut().reverse_sort();
                 Ok(())
             }
         }
@@ -1095,6 +1139,12 @@ impl App {
                         InputTarget::Pack(pending) => self.queue_pack(pending, text),
                         InputTarget::RenameTab => {
                             self.get_focused_tabs_mut().active_tab_mut().rename(text);
+                            Ok(())
+                        }
+                        InputTarget::Jump(base) => {
+                            let home = env::var_os("HOME").filter(|home| !home.is_empty());
+                            let path = typed_path(&text, &base, home.as_deref().map(Path::new));
+                            self.get_focused_pane_mut().jump(Arc::from(path));
                             Ok(())
                         }
                     };
@@ -1628,11 +1678,11 @@ impl App {
             match collected.entered {
                 Entered::Open { path, kind } => self.open_entered(path, kind),
                 // A path the pane was sent to as a directory and is not one.
-                // Nothing is opened: what pointed at it was a favorite rather
-                // than a cursor, and it is out of date.
+                // Nothing is opened: what pointed at it was a favorite or a
+                // typed path rather than a cursor.
                 Entered::NotADirectory { path } => self.notify(
                     ToastLevel::Error,
-                    format!("{} is no longer a directory", path.display()),
+                    format!("{} is not a directory", path.display()),
                     None,
                 ),
                 Entered::Nothing => (),
@@ -1928,5 +1978,51 @@ impl App {
             ToastLevel::Info => tracing::info!("{message}"),
         }
         self.toasts.push_back(Toast::new(message, level, duration));
+    }
+}
+
+#[cfg(test)]
+mod typed_path_tests {
+    use super::*;
+
+    fn typed(text: &str) -> PathBuf {
+        typed_path(text, Path::new("/work/mula"), Some(Path::new("/home/u")))
+    }
+
+    #[test]
+    fn an_absolute_path_is_taken_as_written() {
+        assert_eq!(typed("/etc"), Path::new("/etc"));
+    }
+
+    #[test]
+    fn a_relative_path_starts_where_the_panel_stood() {
+        assert_eq!(typed("src/ui"), Path::new("/work/mula/src/ui"));
+    }
+
+    #[test]
+    fn a_tilde_is_home() {
+        assert_eq!(typed("~"), Path::new("/home/u"));
+        assert_eq!(typed("~/Music"), Path::new("/home/u/Music"));
+    }
+
+    #[test]
+    fn a_tilde_before_a_name_is_part_of_the_name() {
+        assert_eq!(typed("~u"), Path::new("/work/mula/~u"));
+    }
+
+    #[test]
+    fn without_a_home_a_tilde_is_a_name() {
+        let path = typed_path("~/x", Path::new("/work"), None);
+
+        assert_eq!(path, Path::new("/work/~/x"));
+    }
+
+    /// A pane's parent entry comes from `Path::parent`, which reads `/a/..`
+    /// as a child of `/a`.
+    #[test]
+    fn dots_are_resolved_on_the_text() {
+        assert_eq!(typed(".."), Path::new("/work"));
+        assert_eq!(typed("./../x/./y/"), Path::new("/work/x/y"));
+        assert_eq!(typed("/../../tmp"), Path::new("/tmp"));
     }
 }

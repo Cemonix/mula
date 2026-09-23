@@ -14,7 +14,7 @@ use crate::{
         directory::{Detail, DirEntry, DirEntryKind, Directory},
         listing::{Kind, Listed},
     },
-    ui::{self, columns::Columns, filter::Filter, icon::Icon},
+    ui::{self, columns::Columns, filter::Filter, icon::Icon, sort::Sort},
 };
 
 #[derive(Error, Debug)]
@@ -121,6 +121,9 @@ pub struct Pane {
     /// and a filter is dropped the moment the pane goes somewhere else.
     dot_files: DotFiles,
     filter: Filter,
+    /// The order the view is drawn in. A setting the pane keeps, the way it
+    /// keeps `dot_files`.
+    sort: Sort,
     list_state: ListState,
     awaited: Awaited,
 }
@@ -155,6 +158,7 @@ impl Pane {
             view: Vec::new(),
             dot_files: DotFiles::default(),
             filter: Filter::default(),
+            sort: Sort::default(),
             list_state: ListState::default(),
             awaited: Awaited::Nothing,
         };
@@ -162,43 +166,64 @@ impl Pane {
         pane
     }
 
-    /// Builds the view from the listing and the filter, and fits the cursor to
-    /// it.
+    /// Builds the view from the listing, the filter and the order, and fits the
+    /// cursor to it.
     ///
-    /// Every change to either goes through here. That is what keeps the
+    /// Every change to any of them goes through here. That is what keeps the
     /// selection an index the view actually holds — `select_prev` and
     /// `select_next` wrap with `%`, and a cursor left on an emptied view would
     /// divide by zero.
     fn rebuild_view(&mut self) {
         let dot_files = self.dot_files;
         let filter = &self.filter;
-        self.view = self
-            .directory
-            .entries()
+        let entries = self.directory.entries();
+        self.view = entries
             .iter()
             .enumerate()
             .filter(|(_, entry)| shown(entry, dot_files, filter))
             .map(|(index, _)| index)
             .collect();
+        let sort = self.sort;
+        self.view
+            .sort_by(|&a, &b| sort.compare(&entries[a], &entries[b]));
 
         let selected = clamped(self.list_state.selected(), self.view.len());
         self.list_state.select(selected);
     }
 
-    /// Shows or hides the entries whose names begin with a dot, keeping the
-    /// cursor on the entry it stands on when the new view still holds it.
-    pub fn toggle_dot_files(&mut self) {
+    /// Rebuilds the view after `change`, keeping the cursor on the entry it
+    /// stands on when the new view still holds it.
+    fn keeping_cursor(&mut self, change: impl FnOnce(&mut Self)) {
         let standing = self
             .selected_entry()
             .ok()
             .map(|entry| Arc::clone(&entry.path));
 
-        self.dot_files = self.dot_files.toggle();
+        change(self);
         self.rebuild_view();
 
         if let Some(path) = standing {
             self.select_path(&path);
         }
+    }
+
+    /// Shows or hides the entries whose names begin with a dot.
+    pub fn toggle_dot_files(&mut self) {
+        self.keeping_cursor(|pane| pane.dot_files = pane.dot_files.toggle());
+    }
+
+    /// Orders the view by the next key, run its own way.
+    pub fn cycle_sort(&mut self) {
+        self.keeping_cursor(|pane| pane.sort = pane.sort.next_key());
+    }
+
+    /// Runs the key the view is ordered by the other way.
+    pub fn reverse_sort(&mut self) {
+        self.keeping_cursor(|pane| pane.sort = pane.sort.reversed());
+    }
+
+    pub fn sort(&self) -> Sort {
+        self.sort
     }
 
     /// The entries the view holds, in the order they are drawn. The parent is
@@ -483,13 +508,16 @@ impl Pane {
         columns: Columns,
     ) {
         let title = Line::from(self.directory.path().to_string_lossy().to_string().bold());
-        let block = Block::bordered()
+        let mut block = Block::bordered()
             .title_top(title.centered())
             .border_style(if focused {
                 Self::FOCUSED
             } else {
                 Self::UNFOCUSED
             });
+        if let Some(label) = self.sort.label() {
+            block = block.title_bottom(Line::from(format!(" {label} ")).right_aligned());
+        }
 
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
@@ -778,6 +806,101 @@ mod pane_tests {
 
         assert!(rows.contains("visible.txt"), "the rows were {rows:?}");
         assert!(!rows.contains(".hidden"), "the rows were {rows:?}");
+    }
+
+    /// Draws `pane` into a buffer and reads every cell back as one string.
+    fn drawn(pane: &mut Pane, width: u16, height: u16) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+
+        terminal
+            .draw(|frame| pane.render(frame, frame.area(), &HashSet::new(), true, Columns::Name))
+            .unwrap();
+
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn sized_directory(path: &str, files: &[(&str, u64)]) -> Directory {
+        let root: Arc<Path> = Arc::from(Path::new(path));
+        let entries = files
+            .iter()
+            .map(|(name, size)| DirEntry {
+                path: Arc::from(root.join(name).as_path()),
+                kind: DirEntryKind::File,
+                meta: Some(EntryMeta {
+                    size: *size,
+                    modified: 0,
+                }),
+            })
+            .collect();
+        Directory::new(root, entries, Detail::WithMetadata)
+    }
+
+    /// Name, then time, then size.
+    fn sort_by_size(pane: &mut Pane) {
+        pane.cycle_sort();
+        pane.cycle_sort();
+    }
+
+    #[test]
+    fn sorting_reorders_the_view_and_keeps_the_cursor_on_its_entry() {
+        let mut pane = Pane::new(sized_directory("/a", &[("a", 1), ("b", 30), ("c", 20)]));
+        pane.select_next();
+
+        sort_by_size(&mut pane);
+
+        assert_eq!(visible(&pane), ["b", "c", "a"]);
+        assert_eq!(
+            pane.selected_entry().unwrap().path.as_ref(),
+            Path::new("/a/b")
+        );
+    }
+
+    #[test]
+    fn a_filter_narrows_a_sorted_view_without_undoing_the_order() {
+        let mut pane = Pane::new(sized_directory(
+            "/a",
+            &[("a.log", 1), ("b.log", 30), ("c.txt", 20)],
+        ));
+        sort_by_size(&mut pane);
+
+        typed(&mut pane, "log");
+
+        assert_eq!(visible(&pane), ["b.log", "a.log"]);
+    }
+
+    /// The order is a setting the pane keeps, the way the dot files are; it
+    /// is not about the names in front of you the way a filter is.
+    #[test]
+    fn the_order_outlives_a_move_to_another_directory() {
+        let mut pane = Pane::new(sized_directory("/a", &[("a", 1)]));
+        sort_by_size(&mut pane);
+        pane.jump(Arc::from(Path::new("/b")));
+        pane.take_unsent();
+
+        pane.listed(Ok(Listed::Directory(sized_directory(
+            "/b",
+            &[("x", 1), ("y", 2)],
+        ))))
+        .unwrap();
+
+        assert_eq!(visible(&pane), ["y", "x"]);
+    }
+
+    #[test]
+    fn a_pane_sorted_by_something_else_says_so_on_its_border() {
+        let mut pane = Pane::new(sized_directory("/a", &[("a", 1)]));
+        assert!(!drawn(&mut pane, 40, 4).contains("by size"));
+
+        sort_by_size(&mut pane);
+
+        assert!(drawn(&mut pane, 40, 4).contains("by size"));
     }
 
     fn typed(pane: &mut Pane, text: &str) {
