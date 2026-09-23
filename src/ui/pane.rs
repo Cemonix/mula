@@ -1,4 +1,9 @@
-use std::{collections::HashSet, io, mem, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    io, mem,
+    path::Path,
+    sync::Arc,
+};
 
 use ratatui::{
     Frame,
@@ -13,6 +18,7 @@ use crate::{
     fs::{
         directory::{Detail, DirEntry, DirEntryKind, Directory},
         listing::{Kind, Listed},
+        sizes::DirSizes,
     },
     ui::{self, columns::Columns, filter::Filter, icon::Icon, sort::Sort},
 };
@@ -124,6 +130,9 @@ pub struct Pane {
     /// The order the view is drawn in. A setting the pane keeps, the way it
     /// keeps `dot_files`.
     sort: Sort,
+    /// What the directories of the listing measured to, as far as anybody
+    /// knows yet.
+    totals: HashMap<Arc<Path>, u64>,
     list_state: ListState,
     awaited: Awaited,
 }
@@ -159,11 +168,41 @@ impl Pane {
             dot_files: DotFiles::default(),
             filter: Filter::default(),
             sort: Sort::default(),
+            totals: HashMap::new(),
             list_state: ListState::default(),
             awaited: Awaited::Nothing,
         };
         pane.rebuild_view();
         pane
+    }
+
+    /// Takes the totals `sizes` holds for the directories of the listing,
+    /// reordering the view when it is sorted by size and one of them changed.
+    pub fn take_totals(&mut self, sizes: &DirSizes) {
+        let totals: HashMap<Arc<Path>, u64> = self
+            .directory
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind == DirEntryKind::Directory)
+            .filter_map(|entry| Some((Arc::clone(&entry.path), sizes.get(&entry.path)?)))
+            .collect();
+
+        if totals == self.totals {
+            return;
+        }
+        if self.sort.by_size() {
+            self.keeping_cursor(|pane| pane.totals = totals);
+        } else {
+            self.totals = totals;
+        }
+    }
+
+    /// The directories the view holds, in the order they are drawn.
+    pub fn visible_directories(&self) -> Vec<Arc<Path>> {
+        self.visible_entries()
+            .filter(|entry| entry.kind == DirEntryKind::Directory)
+            .map(|entry| Arc::clone(&entry.path))
+            .collect()
     }
 
     /// Builds the view from the listing, the filter and the order, and fits the
@@ -184,8 +223,12 @@ impl Pane {
             .map(|(index, _)| index)
             .collect();
         let sort = self.sort;
-        self.view
-            .sort_by(|&a, &b| sort.compare(&entries[a], &entries[b]));
+        let totals = &self.totals;
+        self.view.sort_by(|&a, &b| {
+            sort.compare(&entries[a], &entries[b], |entry| {
+                totals.get(&entry.path).copied()
+            })
+        });
 
         let selected = clamped(self.list_state.selected(), self.view.len());
         self.list_state.select(selected);
@@ -534,7 +577,8 @@ impl Pane {
         let list = List::new(self.view.iter().map(|&index| {
             let entry = &entries[index];
             let marked = selected_items.contains(&entry.path);
-            let item = ListItem::new(Self::row(entry, marked, columns, row_width));
+            let total = self.totals.get(&entry.path).copied();
+            let item = ListItem::new(Self::row(entry, total, marked, columns, row_width));
             if marked {
                 item.style(Style::new().bg(Self::MARKED_BG))
             } else {
@@ -548,7 +592,8 @@ impl Pane {
     }
 
     /// One row, `row_width` columns wide: the mark, the icon, the name padded
-    /// out to whatever is left, and the cells of `columns` behind it.
+    /// out to whatever is left, and the cells of `columns` behind it. `total`
+    /// is what a directory measured to.
     ///
     /// The name is padded rather than the cells positioned, so a row is built
     /// once, left to right, and the columns line up because everything else on
@@ -558,7 +603,13 @@ impl Pane {
     /// supplementary private use area is two columns to `Span::width`, one from
     /// the basic plane is one, and a row that assumed either would put the
     /// columns of the rows below it somewhere else.
-    fn row(entry: &DirEntry, marked: bool, columns: Columns, row_width: usize) -> Line<'static> {
+    fn row(
+        entry: &DirEntry,
+        total: Option<u64>,
+        marked: bool,
+        columns: Columns,
+        row_width: usize,
+    ) -> Line<'static> {
         // Every row, the parent included, is labelled by the last component of
         // its path.
         let label = ui::name_of(&entry.path);
@@ -585,7 +636,7 @@ impl Pane {
             Span::raw(label),
             Span::raw(" ".repeat(padding)),
         ];
-        spans.extend(columns.cells(entry));
+        spans.extend(columns.cells(entry, total));
 
         Line::from(spans)
     }
@@ -1341,7 +1392,7 @@ mod pane_tests {
         let area = Rect::new(0, 0, width, 1);
         let mut buf = Buffer::empty(area);
 
-        Pane::row(entry, false, columns, usize::from(width)).render(area, &mut buf);
+        Pane::row(entry, None, false, columns, usize::from(width)).render(area, &mut buf);
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
     }
 
