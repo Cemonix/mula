@@ -267,8 +267,64 @@ case; columns are about how wide the screen is, which both panels share. It
 outlives a change of directory, since unlike a filter it says nothing about the
 names in front of you.
 
-Directories stay on top whatever the key, and the size key leaves them in name
-order: a directory's `st_size` is the size of its record, not of what it holds,
-and ordering by it would look like a meaning it does not have. The border says
+Directories stay on top whatever the key, and the size key orders them by what
+they measured to — never by their own `st_size`, which is the size of their
+record rather than of what they hold. One not measured yet goes after the ones
+that were, and moves into place when its total arrives. The border says
 which order a pane is in whenever it is not the one every pane starts in — a
 list sorted by time looks like a list in no order at all.
+
+## A directory's size is a walk, not a column's detail
+
+Nothing stores what a directory holds; the only way to know is to read every
+entry below it. Measured on an M-series Mac, APFS, release build:
+
+| tree | entries | one thread, not read lately | one thread, again | four threads |
+| --- | --- | --- | --- | --- |
+| `~/.cargo` | 71 000 | 0.50 s | 0.23 s | 0.10 s |
+| `~/Programming` | 282 000 | 4.1 s | 1.0 s | 0.47 s |
+
+Eight or sixteen threads measured no faster than four: past that the
+filesystem is what is being waited on, not the CPU. Hence a pool of four,
+shared by both panels, and rayon for it — a walk is recursive and uneven, which
+is the shape work stealing is for. It is a pool of *reads*; "one worker, no
+pool" is about the order of writes and does not reach it.
+
+It does not go on the `Detail` ladder. `Detail` is a price per entry that the
+number of names predicts; a walk is a price per *tree* that nothing on the
+listing predicts, and a pane that asks again whenever its listing is thinner
+than what it draws would start walking trees every time a column came back.
+So it has a reader of its own per panel, beside the one for listings, and the
+listing arrives at once with the totals filling in behind it.
+
+Three things make it affordable:
+
+- **Every directory a walk finishes is reported**, not only the rows that were
+  asked about. Measuring `~/Programming` also measures `~/Programming/Rust` and
+  everything under it, and `App` keeps every total for both panels, so walking
+  down into what was just measured shows its numbers at once.
+- **A walk that is cancelled keeps what it finished.** Leaving a directory
+  stops the walk at its next directory, and the subtrees already done were
+  reported on the way.
+- **Only what is on screen is measured**: the rows the view holds, which
+  leaves out the dot directories — `~/Library` alone would cost more than
+  everything visible in `~`.
+
+A total goes stale with any change below it, and the directory above does not
+find out — `mtime` moves only for a change of its own entries. So entering a
+directory measures every row again, showing the kept totals meanwhile; a pane
+that stays asks only for what nobody knows. After one of Mula's own jobs the
+paths it touched are forgotten with every directory above them, the running
+walks are restarted — one begun before the job finished would put the old
+totals back — and the rows that lost their numbers are asked for at once.
+
+The number is what the files add up to (`du -A`), not the blocks they take
+(`du`): the files in the same column show their `st_size`, and a column that
+meant two things would be read as one. A file with several hard links counts
+once in every directory that holds any of them. Counting every link was the
+first version, on the guess that hard links are rare; `~/Programming` held
+173 000 of them — cargo links what it builds twice under `target/`, pnpm links
+`node_modules` — and came out 56 GB against `du -A`'s 43. Each directory
+therefore carries the linked files of its subtree by inode and its parent
+merges them, which keeps every level exact and independent of the order the
+threads finished in.
