@@ -16,6 +16,7 @@ pub(crate) mod pane;
 pub(crate) mod panel;
 pub(crate) mod preview;
 pub(crate) mod prompt;
+pub(crate) mod sort;
 pub(crate) mod tab;
 pub(crate) mod text_input;
 pub(crate) mod toast;

@@ -880,6 +880,14 @@ impl App {
                 self.get_focused_pane_mut().toggle_dot_files();
                 Ok(())
             }
+            Action::CycleSort => {
+                self.get_focused_pane_mut().cycle_sort();
+                Ok(())
+            }
+            Action::ReverseSort => {
+                self.get_focused_pane_mut().reverse_sort();
+                Ok(())
+            }
         }
     }
 

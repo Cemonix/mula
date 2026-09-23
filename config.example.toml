@@ -64,6 +64,8 @@ tab.next = "]"
 view.preview = "p"
 view.columns = ","
 view.dotfiles = "."
+view.sort = "s"
+view.sort-reverse = "Shift+S"
 
 job.cancel = "x"
 app.quit = "q"

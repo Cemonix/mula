@@ -79,7 +79,8 @@ impl Panel {
     }
 
     /// Hands the reader what the active tab is waiting for and has not asked
-    /// for yet, reading each entry to `detail`.
+    /// for yet, reading each entry to `detail`, or to more when the order the
+    /// tab is sorted in compares what `detail` leaves out.
     ///
     /// One reader serves every tab, so a request replaces whatever was in
     /// flight. The tab that loses it goes back to wanting its listing, or it
@@ -91,6 +92,7 @@ impl Panel {
     /// its listing too thin for the columns and reads it again.
     pub fn send_wanted(&mut self, detail: Detail) -> io::Result<()> {
         let id = self.tabs.active_tab().id();
+        let detail = detail.max(self.active_pane().sort().detail());
         self.active_pane_mut().want_detail(detail);
         let Some(path) = self.active_pane_mut().take_unsent() else {
             return Ok(());

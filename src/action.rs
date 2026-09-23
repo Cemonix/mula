@@ -62,4 +62,6 @@ pub enum Action {
     TogglePreview,
     CycleColumns,
     ToggleDotFiles,
+    CycleSort,
+    ReverseSort,
 }

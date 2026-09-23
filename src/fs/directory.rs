@@ -32,7 +32,7 @@ pub enum DirEntryKind {
 impl DirEntryKind {
     /// Position in the listing: the parent leads, then directories, symlinks,
     /// and files last.
-    fn rank(self) -> u8 {
+    pub(crate) fn rank(self) -> u8 {
         match self {
             DirEntryKind::Parent => 0,
             DirEntryKind::Directory => 1,
