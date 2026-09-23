@@ -168,6 +168,7 @@ fn run(jobs: &Receiver<Job>, msgs: &Sender<WorkerMsg>, cancel: &AtomicBool) {
 
 fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
     let kind = job.work.kind();
+    let touched = job.work.touched();
     let mut failed = Vec::new();
     let mut collided = Vec::new();
     let mut kept = Vec::new();
@@ -385,6 +386,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
         kept,
         left_out,
         reason,
+        touched,
     }
 }
 

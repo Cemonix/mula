@@ -199,6 +199,10 @@ is open again, not broken.
   device. One `Reader` instance per answer that can be outstanding on its own,
   each with its own generation — the two panels are two of those, not one
   "listing" role.
+- A directory's size is a walk, never a rung of `Detail`: its own reader per
+  panel, on one pool of four shared by both, and totals kept on `App` for
+  every directory a walk finishes. Entering a directory measures its rows
+  again; a job forgets what it touched and everything above it.
 - What is on screen is a view — indices into the listing — and the cursor
   indexes the view, never the listing. Filtering and sorting happen above the
   read, so a criterion typed letter by letter costs no disk; a sort key that

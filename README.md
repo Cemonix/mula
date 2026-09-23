@@ -119,7 +119,9 @@ These are the ones worth knowing first.
   file of its own between runs. A favorite that has gone away says so and
   leaves the panel where it is.
 - **Size and date columns**, with `,` to drop one when you would rather have
-  the room.
+  the room. A directory shows what its files add up to, measured in the
+  background and kept, so the listing never waits for it and a directory you
+  come back to has its numbers at once.
 - **Sorting** by name, time, size or extension, each panel on its own:
   newest and largest first, `Shift+S` for the other way. Directories stay on
   top whatever the order.

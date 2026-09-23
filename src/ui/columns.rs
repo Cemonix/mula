@@ -17,10 +17,12 @@ use ratatui::{
 
 use crate::fs::directory::{Detail, DirEntry, DirEntryKind};
 
-/// Stands in the size column for a row that has no size to show. A dash rather
-/// than a word: the icon already says what a directory is, and `<DIR>` down the
-/// column says it again in the place the eye goes looking for a number.
+/// Stands in the size column of the parent, which is never measured.
 const NO_SIZE: &str = "\u{2014}";
+
+/// Stands in the size column for a directory whose total is still being
+/// measured.
+const MEASURING: &str = "\u{2026}";
 
 /// What each row of a listing shows besides its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,26 +83,38 @@ impl Columns {
     /// exactly [`Columns::width`] wide.
     ///
     /// An entry with no metadata leaves its cells blank rather than dropping
-    /// them: the row still has to line up with the rows around it.
-    pub fn cells(self, entry: &DirEntry) -> Vec<Span<'static>> {
+    /// them: the row still has to line up with the rows around it. `total` is
+    /// what a directory measured to, `None` while it is being measured.
+    pub fn cells(self, entry: &DirEntry, total: Option<u64>) -> Vec<Span<'static>> {
         match self {
             Columns::Name => Vec::new(),
-            Columns::Size => vec![size_cell(entry)],
-            Columns::SizeAndTime => vec![size_cell(entry), time_cell(entry)],
+            Columns::Size => vec![size_cell(entry, total)],
+            Columns::SizeAndTime => vec![size_cell(entry, total), time_cell(entry)],
+        }
+    }
+
+    /// Whether the size column is drawn, and so whether directories are worth
+    /// measuring.
+    pub fn show_size(self) -> bool {
+        match self {
+            Columns::Name => false,
+            Columns::Size | Columns::SizeAndTime => true,
         }
     }
 }
 
 /// The size column of `entry`, padded to its width.
 ///
-/// A directory has no size worth showing: its own `st_size` is the size of the
-/// record the filesystem keeps, not of anything inside it. It draws a dash, in
-/// the colour the time is drawn in, so a column of them stays quiet under the
-/// sizes that mean something.
-fn size_cell(entry: &DirEntry) -> Span<'static> {
-    let (text, colour) = match entry.kind {
-        DirEntryKind::Parent | DirEntryKind::Directory => (String::from(NO_SIZE), Columns::MUTED),
-        DirEntryKind::Symlink | DirEntryKind::File => (
+/// A directory shows `total`, what its files add up to; its own `st_size` is
+/// the size of the record the filesystem keeps. Until it is measured it draws
+/// an ellipsis, and the parent a dash, both in the colour the time is drawn in
+/// so they stay quiet under the sizes that mean something.
+fn size_cell(entry: &DirEntry, total: Option<u64>) -> Span<'static> {
+    let (text, colour) = match (entry.kind, total) {
+        (DirEntryKind::Parent, _) => (String::from(NO_SIZE), Columns::MUTED),
+        (DirEntryKind::Directory, Some(total)) => (bytes(total), Columns::SIZE),
+        (DirEntryKind::Directory, None) => (String::from(MEASURING), Columns::MUTED),
+        (DirEntryKind::Symlink | DirEntryKind::File, _) => (
             entry.meta.map(|meta| bytes(meta.size)).unwrap_or_default(),
             Columns::SIZE,
         ),
@@ -257,16 +271,28 @@ mod columns_tests {
         assert_eq!(bytes(u64::MAX).len(), 3);
     }
 
-    /// A directory has no size to show, and the dash says that without
-    /// spelling out what the icon beside it already says.
     #[test]
-    fn a_directory_draws_a_dash_rather_than_the_size_of_its_record() {
+    fn a_directory_draws_what_it_measured_to() {
         assert_eq!(
-            text_of(size_cell(&entry(DirEntryKind::Directory, None))),
-            NO_SIZE
+            text_of(size_cell(&entry(DirEntryKind::Directory, None), Some(2048))),
+            "2.0K"
         );
+    }
+
+    #[test]
+    fn a_directory_still_being_measured_says_so() {
         assert_eq!(
-            text_of(size_cell(&entry(DirEntryKind::Parent, None))),
+            text_of(size_cell(&entry(DirEntryKind::Directory, None), None)),
+            MEASURING
+        );
+    }
+
+    /// The parent is the way out rather than something in this directory, so
+    /// it is never measured.
+    #[test]
+    fn the_parent_draws_a_dash() {
+        assert_eq!(
+            text_of(size_cell(&entry(DirEntryKind::Parent, None), None)),
             NO_SIZE
         );
     }
@@ -275,7 +301,10 @@ mod columns_tests {
     /// `stat`, leaves the cell blank rather than showing a size of zero.
     #[test]
     fn a_file_with_no_metadata_has_an_empty_size_cell() {
-        assert_eq!(text_of(size_cell(&entry(DirEntryKind::File, None))), "");
+        assert_eq!(
+            text_of(size_cell(&entry(DirEntryKind::File, None), None)),
+            ""
+        );
     }
 
     /// The zone the test runs in is whatever the machine is set to, so the
@@ -306,7 +335,7 @@ mod columns_tests {
     fn the_cells_of_a_row_are_exactly_as_wide_as_the_columns_they_sit_in() {
         for columns in [Columns::Name, Columns::Size, Columns::SizeAndTime] {
             let drawn: usize = columns
-                .cells(&file(1_000_000))
+                .cells(&file(1_000_000), None)
                 .iter()
                 .map(Span::width)
                 .sum();
@@ -319,7 +348,7 @@ mod columns_tests {
     #[test]
     fn a_row_with_no_metadata_still_fills_its_columns() {
         let drawn: usize = Columns::SizeAndTime
-            .cells(&entry(DirEntryKind::File, None))
+            .cells(&entry(DirEntryKind::File, None), None)
             .iter()
             .map(Span::width)
             .sum();

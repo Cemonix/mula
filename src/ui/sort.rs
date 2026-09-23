@@ -60,6 +60,10 @@ impl Sort {
 
     /// How much of each entry a listing has to be read with for this key to
     /// have anything to compare.
+    pub fn by_size(self) -> bool {
+        self.key == SortKey::Size
+    }
+
     pub fn detail(self) -> Detail {
         match self.key {
             SortKey::Name | SortKey::Extension => Detail::NamesOnly,
@@ -86,11 +90,17 @@ impl Sort {
         })
     }
 
-    pub fn compare(self, a: &DirEntry, b: &DirEntry) -> Ordering {
+    /// `total` is what a directory measured to, `None` while nobody knows.
+    pub fn compare(
+        self,
+        a: &DirEntry,
+        b: &DirEntry,
+        total: impl Fn(&DirEntry) -> Option<u64>,
+    ) -> Ordering {
         let by_key = match self.key {
             SortKey::Name => compare_file_names(&a.path, &b.path),
             SortKey::Extension => extension(a).cmp(&extension(b)),
-            SortKey::Size => size(b).cmp(&size(a)),
+            SortKey::Size => size(b, &total).cmp(&size(a, &total)),
             SortKey::Modified => modified(b).cmp(&modified(a)),
         };
         let by_key = match self.order {
@@ -112,11 +122,12 @@ fn extension(entry: &DirEntry) -> Option<String> {
     Some(extension.to_lowercase())
 }
 
-/// The size the size column shows: `None` for a directory, and for an entry
-/// read without metadata.
-fn size(entry: &DirEntry) -> Option<u64> {
+/// The size the size column shows: a directory's measured total, and nothing
+/// for the parent or for an entry read without metadata.
+fn size(entry: &DirEntry, total: impl Fn(&DirEntry) -> Option<u64>) -> Option<u64> {
     match entry.kind {
-        DirEntryKind::Parent | DirEntryKind::Directory => None,
+        DirEntryKind::Parent => None,
+        DirEntryKind::Directory => total(entry),
         DirEntryKind::Symlink | DirEntryKind::File => entry.meta.map(|meta| meta.size),
     }
 }
@@ -144,8 +155,17 @@ mod sort_tests {
         entry(name, DirEntryKind::File, Some((size, modified)))
     }
 
-    fn sorted(sort: Sort, mut entries: Vec<DirEntry>) -> Vec<String> {
-        entries.sort_by(|a, b| sort.compare(a, b));
+    fn sorted(sort: Sort, entries: Vec<DirEntry>) -> Vec<String> {
+        sorted_with(sort, entries, &[])
+    }
+
+    /// Sorts with `totals` standing in for what the directories measured to.
+    fn sorted_with(sort: Sort, mut entries: Vec<DirEntry>, totals: &[(&str, u64)]) -> Vec<String> {
+        let total = |entry: &DirEntry| {
+            let name = crate::ui::name_of(&entry.path);
+            totals.iter().find(|(n, _)| *n == name).map(|(_, t)| *t)
+        };
+        entries.sort_by(|a, b| sort.compare(a, b, total));
         entries
             .iter()
             .map(|entry| crate::ui::name_of(&entry.path))
@@ -203,16 +223,32 @@ mod sort_tests {
         );
     }
 
-    /// A directory's own `st_size` is not what is in it, so the size key does
-    /// not order directories by it; their names do.
+    /// A directory's own `st_size` is the size of its record, not of what is
+    /// in it, so the key orders directories by what they measured to.
     #[test]
-    fn directories_sorted_by_size_keep_their_names_order() {
+    fn directories_sort_by_what_they_measured_to() {
         let entries = vec![
-            entry("b", DirEntryKind::Directory, Some((64, 0))),
-            entry("a", DirEntryKind::Directory, Some((4096, 0))),
+            entry("small", DirEntryKind::Directory, Some((4096, 0))),
+            entry("big", DirEntryKind::Directory, Some((64, 0))),
         ];
 
-        assert_eq!(sorted(by(SortKey::Size), entries), ["a", "b"]);
+        assert_eq!(
+            sorted_with(by(SortKey::Size), entries, &[("small", 1), ("big", 100)]),
+            ["big", "small"]
+        );
+    }
+
+    #[test]
+    fn a_directory_not_measured_yet_goes_after_the_ones_that_were() {
+        let entries = vec![
+            entry("unknown", DirEntryKind::Directory, None),
+            entry("known", DirEntryKind::Directory, None),
+        ];
+
+        assert_eq!(
+            sorted_with(by(SortKey::Size), entries, &[("known", 1)]),
+            ["known", "unknown"]
+        );
     }
 
     #[test]

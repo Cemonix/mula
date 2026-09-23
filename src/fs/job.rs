@@ -71,6 +71,33 @@ impl Work {
             Work::Mutate(_) => JobKind::Mutate,
         }
     }
+
+    /// The paths the job may create, change or remove. A directory above one
+    /// of them changes with it; one below it is not listed.
+    pub fn touched(&self) -> Vec<PathBuf> {
+        match self {
+            Work::Transfer { op, items, .. } => items
+                .iter()
+                .flat_map(|item| match op {
+                    TransferOp::Copy => vec![item.to.clone()],
+                    TransferOp::Move => vec![item.from.clone(), item.to.clone()],
+                })
+                .collect(),
+            Work::Delete { items, .. } => items.clone(),
+            Work::Pack { archive, .. } => vec![archive.clone()],
+            Work::Unpack { into, .. } => vec![into.clone()],
+            Work::Mutate(op) => match op {
+                MutationOp::Delete { path, .. } => vec![path.clone()],
+                MutationOp::Rename { path, new_name } => {
+                    vec![path.clone(), path.with_file_name(new_name)]
+                }
+                MutationOp::CreateDir { parent, name }
+                | MutationOp::CreateFile { parent, name } => {
+                    vec![parent.join(name)]
+                }
+            },
+        }
+    }
 }
 
 /// What the bar fills with. A transfer weighs its tree before it starts, so it
@@ -149,6 +176,8 @@ pub struct Outcome {
     /// The last error, for a job whose counts alone would not say what went
     /// wrong.
     pub reason: Option<String>,
+    /// What [`Work::touched`] said before the job ran, whatever came of it.
+    pub touched: Vec<PathBuf>,
 }
 
 #[derive(Debug)]

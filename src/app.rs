@@ -12,6 +12,7 @@ use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Constraint, Direction, Flex, Layout, Rect},
 };
+use rayon::ThreadPoolBuilder;
 use thiserror::Error;
 
 use crate::{
@@ -27,6 +28,7 @@ use crate::{
         ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
+        sizes::DirSizes,
         worker::{Health, Worker},
     },
     keys::{self, Binding, GlobalMsg, KeyBinding},
@@ -269,6 +271,9 @@ pub enum AppError {
 pub struct App {
     left: Panel,
     right: Panel,
+    /// Every directory total the walks have reported, for both panels. Kept
+    /// across moves, so a directory entered again shows its numbers at once.
+    dir_sizes: DirSizes,
     focused_side: Side,
     toasts: VecDeque<Toast>,
     mode: Mode,
@@ -354,6 +359,9 @@ impl App {
     /// the ceiling is roughly what a full-screen panel could ask for.
     const GRAPHICS_BITMAP_SIDE: u32 = 1536;
 
+    /// Threads the directory walks share, both panels together.
+    const SIZING_THREADS: usize = 4;
+
     pub fn new(capabilities: Capabilities) -> Result<Self, AppError> {
         let mut preview_limits = preview::Limits::default();
         if capabilities.graphics().is_some() {
@@ -377,9 +385,17 @@ impl App {
         // been read once.
         let (favorites, unread) = Favorites::load();
 
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(Self::SIZING_THREADS)
+            .thread_name(|i| format!("mula-sizing-{i}"))
+            .build()
+            .map_err(io::Error::other)?;
+        let pool = Arc::new(pool);
+
         let mut app = Self {
-            left: Panel::new()?,
-            right: Panel::new()?,
+            left: Panel::new(Arc::clone(&pool))?,
+            right: Panel::new(pool)?,
+            dir_sizes: DirSizes::default(),
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
@@ -444,8 +460,12 @@ impl App {
             // the generation, and the drain that follows drops what is stale.
             self.sync_listings();
             self.collect_from_listings();
-            // After the listings, since a new one can move the cursor onto
-            // something else.
+            // After the listings, since a new one is what says which
+            // directories there are to measure.
+            self.sync_sizes();
+            self.collect_sizes();
+            // After the listings and the sizes, since either can move the
+            // cursor onto something else.
             self.sync_preview();
             self.collect_from_previewer();
             self.reap_detached();
@@ -1656,6 +1676,46 @@ impl App {
         }
     }
 
+    /// Sends the directories each side shows to be measured, for a side whose
+    /// size column is drawn or whose listing is sorted by size, and stops the
+    /// walk of a side that has neither.
+    fn sync_sizes(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            let (panel, sizes) = match side {
+                Side::Left => (&mut self.left, &self.dir_sizes),
+                Side::Right => (&mut self.right, &self.dir_sizes),
+            };
+            if !self.columns.show_size() && !panel.active_pane().sort().by_size() {
+                panel.stop_sizing();
+                continue;
+            }
+            if let Err(e) = panel.send_sizing(sizes) {
+                self.notify(ToastLevel::Error, e, None);
+            }
+        }
+    }
+
+    /// Keeps every total the walks have sent, and hands both active panes what
+    /// is known about their directories.
+    fn collect_sizes(&mut self) {
+        for side in [Side::Left, Side::Right] {
+            let drained = self.panel_mut(side).collect_sizes();
+            if drained.health == Health::Stopped {
+                self.notify(
+                    ToastLevel::Error,
+                    "The background reader has stopped; restart Mula",
+                    None,
+                );
+            }
+            for (dir, total) in drained.msgs.into_iter().flatten() {
+                self.dir_sizes.insert(dir, total);
+            }
+        }
+
+        self.left.active_pane_mut().take_totals(&self.dir_sizes);
+        self.right.active_pane_mut().take_totals(&self.dir_sizes);
+    }
+
     /// Takes the newest listing each side has been sent and hands it to the
     /// pane that asked for it. An older one describes a directory that pane has
     /// already left, and the reader has dropped it.
@@ -1881,6 +1941,13 @@ impl App {
         // Only reads the disk when the job could have changed it, so a run that
         // skipped everything costs nothing.
         if outcome.summary.touched_disk() {
+            for path in &outcome.touched {
+                self.dir_sizes.forget(path);
+            }
+            // A walk still running measured the tree before the job was done
+            // with it, and would put back the totals just forgotten.
+            self.left.restart_sizing();
+            self.right.restart_sizing();
             self.refresh_panes();
         }
     }

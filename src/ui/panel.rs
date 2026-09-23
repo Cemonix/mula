@@ -10,14 +10,21 @@
 //! and the two rules that follow from that are the whole of this module: an
 //! answer belongs to the tab that asked for it, and a tab that loses the
 //! reader has to ask again.
+//!
+//! A second reader measures the directories the active tab shows. Its answers
+//! are not the tab's but `App`'s, which keeps every total for both sides, so
+//! it needs no rule about who asked.
 
-use std::io;
+use std::{collections::HashSet, io, path::Path, sync::Arc};
+
+use rayon::ThreadPool;
 
 use crate::{
     fs::{
         directory::Detail,
         listing::{Listed, Listing},
         reader::{Drained, Reader},
+        sizes::{DirSizes, Sizing},
         worker::Health,
     },
     ui::{
@@ -50,16 +57,80 @@ pub struct Panel {
     /// switching or closing a tab while a read is in flight would otherwise
     /// drop one tab's listing into another tab's pane.
     listing_for: Option<TabId>,
+    /// Measures the directories the active tab shows. A reader of its own:
+    /// a walk takes seconds, and a listing queued behind it would too.
+    sizing: Reader<Sizing>,
+    /// What the running walk was asked for, or `None` when nothing was.
+    measuring: Option<Measuring>,
+}
+
+/// The directories a panel sent to be measured, and where it stood.
+#[derive(Debug)]
+struct Measuring {
+    dir: Arc<Path>,
+    asked: HashSet<Arc<Path>>,
 }
 
 impl Panel {
-    /// A panel of one tab, with its reader running and nothing asked for yet.
-    pub fn new() -> Result<Self, PaneError> {
+    /// A panel of one tab, with its readers running and nothing asked for yet.
+    /// Walks run on `pool`.
+    pub fn new(pool: Arc<ThreadPool>) -> Result<Self, PaneError> {
         Ok(Self {
             tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
             listings: Reader::<Listing>::start(()),
             listing_for: None,
+            sizing: Reader::<Sizing>::start(pool),
+            measuring: None,
         })
+    }
+
+    /// Sends the directories the active tab shows to be measured.
+    ///
+    /// A tab standing somewhere new has all of them measured again, the ones
+    /// `sizes` already knows included, since a total goes stale with any change
+    /// below it. A tab that stays asks for the ones nobody knows and nobody
+    /// has asked about yet; sending replaces the running walk, so those it was
+    /// still on are asked again with them.
+    pub fn send_sizing(&mut self, sizes: &DirSizes) -> io::Result<()> {
+        let pane = self.active_pane();
+        let here = Arc::clone(pane.get_current_dir());
+        let mut dirs = pane.visible_directories();
+
+        if let Some(measuring) = &self.measuring
+            && measuring.dir == here
+        {
+            dirs.retain(|dir| sizes.get(dir).is_none());
+            if dirs.iter().all(|dir| measuring.asked.contains(dir)) {
+                return Ok(());
+            }
+        }
+
+        self.measuring = Some(Measuring {
+            dir: here,
+            asked: dirs.iter().cloned().collect(),
+        });
+        self.sizing.send(Sizing { dirs }).map(|_| ())
+    }
+
+    /// Stops measuring and forgets what was asked, so the next
+    /// [`Panel::send_sizing`] asks for everything missing.
+    pub fn restart_sizing(&mut self) {
+        self.sizing.cancel();
+        if let Some(measuring) = &mut self.measuring {
+            measuring.asked.clear();
+        }
+    }
+
+    /// Stops measuring for a pane that has nothing to show the totals in.
+    pub fn stop_sizing(&mut self) {
+        if self.measuring.take().is_some() {
+            self.sizing.cancel();
+        }
+    }
+
+    /// Takes the totals the running walk has sent.
+    pub fn collect_sizes(&mut self) -> Drained<Vec<(Arc<Path>, u64)>> {
+        self.sizing.drain()
     }
 
     pub fn tabs(&self) -> &TabList {
@@ -145,13 +216,23 @@ mod panel_tests {
 
     use std::{path::Path, sync::Arc};
 
-    use crate::{fs::directory::Directory, ui::tab::ToggleDirection};
+    use rayon::ThreadPoolBuilder;
+
+    use crate::{
+        fs::directory::{DirEntry, DirEntryKind, Directory},
+        ui::tab::ToggleDirection,
+    };
+
+    fn panel() -> Panel {
+        let pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        Panel::new(Arc::new(pool)).unwrap()
+    }
 
     /// A panel of two tabs, each holding a listing and waiting for nothing,
     /// which is where a panel settles once its reads have arrived. The active
     /// tab is the one it started with.
     fn settled_panel() -> Panel {
-        let mut panel = Panel::new().unwrap();
+        let mut panel = panel();
         panel
             .tabs
             .add_tab(Tab::new(String::from("second")).unwrap());
@@ -274,5 +355,87 @@ mod panel_tests {
         // listing it has already asked for, and it would ask on every pass.
         let pane = panel.tabs.tab_mut(only).unwrap().get_pane_mut();
         assert!(pane.take_unsent().is_none());
+    }
+
+    /// Puts the active tab in `path`, holding one directory per name.
+    fn stand_in(panel: &mut Panel, path: &str, names: &[&str]) {
+        let root: Arc<Path> = Arc::from(Path::new(path));
+        let entries = names
+            .iter()
+            .map(|name| DirEntry {
+                path: Arc::from(root.join(name).as_path()),
+                kind: DirEntryKind::Directory,
+                meta: None,
+            })
+            .collect();
+        let pane = panel.active_pane_mut();
+        pane.jump(Arc::clone(&root));
+        pane.take_unsent();
+        pane.listed(Ok(Listed::Directory(Directory::new(
+            root,
+            entries,
+            Detail::NamesOnly,
+        ))))
+        .unwrap();
+    }
+
+    fn asked(panel: &Panel) -> HashSet<String> {
+        panel
+            .measuring
+            .as_ref()
+            .unwrap()
+            .asked
+            .iter()
+            .map(|dir| dir.display().to_string())
+            .collect()
+    }
+
+    fn known(dirs: &[&str]) -> DirSizes {
+        let mut sizes = DirSizes::default();
+        for dir in dirs {
+            sizes.insert(Arc::from(Path::new(dir)), 1);
+        }
+        sizes
+    }
+
+    /// A total goes stale with any change below it, and entering a directory
+    /// is the moment to find out.
+    #[test]
+    fn a_tab_somewhere_new_measures_every_directory_again() {
+        let mut panel = panel();
+        stand_in(&mut panel, "/a", &["x", "y"]);
+
+        panel.send_sizing(&known(&["/a/x"])).unwrap();
+
+        assert_eq!(asked(&panel), HashSet::from(["/a/x".into(), "/a/y".into()]));
+    }
+
+    #[test]
+    fn a_tab_that_stays_asks_only_for_what_nobody_knows() {
+        let mut panel = panel();
+        stand_in(&mut panel, "/a", &["x", "y"]);
+        panel.send_sizing(&DirSizes::default()).unwrap();
+        panel.restart_sizing();
+
+        panel.send_sizing(&known(&["/a/x"])).unwrap();
+
+        assert_eq!(asked(&panel), HashSet::from(["/a/y".into()]));
+    }
+
+    /// Sending replaces the running walk, so asking again for what it is
+    /// already on would start it over on every pass of the loop.
+    #[test]
+    fn a_tab_that_stays_does_not_ask_twice() {
+        let mut panel = panel();
+        stand_in(&mut panel, "/a", &["x", "y"]);
+        panel.send_sizing(&DirSizes::default()).unwrap();
+        let generation = panel.sizing.send(Sizing { dirs: Vec::new() }).unwrap();
+
+        panel.send_sizing(&known(&["/a/x"])).unwrap();
+
+        assert_eq!(
+            panel.sizing.send(Sizing { dirs: Vec::new() }).unwrap(),
+            generation + 1
+        );
     }
 }
