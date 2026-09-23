@@ -500,6 +500,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Turns the order of the listing around",
     },
     Entry {
+        name: "panel.jump",
+        action: Action::Jump,
+        keys: &[KeyBinding::plain(KeyCode::Char('j'))],
+        bar: None,
+        help: "Goes to a typed path, ~ for home, relative to here",
+    },
+    Entry {
         name: "panel.find",
         action: Action::Find,
         keys: &[KeyBinding::plain(KeyCode::Char('f'))],

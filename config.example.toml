@@ -29,6 +29,7 @@ panel.toggle = "Tab"
 panel.parent = "Backspace"
 panel.find = "f"
 panel.filter = "/"
+panel.jump = "j"
 
 entry.open = "Enter"
 entry.rename = "r"

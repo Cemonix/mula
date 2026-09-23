@@ -149,3 +149,35 @@ panel has not done.
 Enter does check, because it was already reading. `v` and `e` do not, because the
 user named both the program and the file, and because Ctrl-C now gets out of
 it — which is what the signal work above buys.
+
+## The directory you quit in
+
+No program can move its parent shell, so `--cwd-file` writes the focused
+panel's directory to a file and a shell function does the `cd` — the shape lf,
+ranger and yazi settled on. The write happens in `main` after the terminal is
+restored, not on the loop: there is nothing left to be ordered against, and
+nothing is written when the run ends in an error, so the function finds an
+empty file and stays put. The bytes are the path as it is on disk with nothing
+after it; a name that is not UTF-8 reaches `cd` whole.
+
+The function ships inside the binary and `--init` prints it, the way zoxide
+and starship hand theirs over: one line in the rc file instead of ten copied
+out of the README, and a function that changes with the release instead of
+going stale in someone's dotfiles. It is named `mula` and calls the binary
+through `command`, so the name people already type gets the behaviour.
+
+The temporary file is the function's, not Mula's. A fixed path would be
+shared by two Mulas running in two terminals, and a run that died before
+writing would leave the last run's directory behind for the next `cd`; a file
+made fresh by `mktemp` for each run has neither problem. An option rather than
+an `init` subcommand, because a bare word on Mula's command line is already a
+directory.
+
+## A typed path is made absolute before it goes anywhere
+
+`j` reads a path relative to the directory the panel stood in when the prompt
+opened, and `.` and `..` are resolved on the text. That keeps the rule above
+standing — everything a pane holds still begins with `/` — and a pane's parent
+entry comes from `Path::parent`, which would read `/a/..` as a child of `/a`.
+Resolving on the text is what `cd` does by default too; the physical answer
+would need a `canonicalize` on the loop.
