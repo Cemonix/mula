@@ -6,6 +6,7 @@ pub(crate) mod listing;
 pub(crate) mod ops;
 pub(crate) mod preview;
 pub(crate) mod reader;
+pub(crate) mod sizes;
 pub(crate) mod worker;
 
 #[cfg(test)]
