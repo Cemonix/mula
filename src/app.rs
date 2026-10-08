@@ -410,7 +410,7 @@ impl App {
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
             columns: Columns::SizeAndTime,
-            previewer: Reader::<Preview>::start(preview_limits),
+            previewer: Reader::<Preview>::start(preview::Config::new(preview_limits)),
             previewing: None,
             preview: None,
             preview_generation: 0,

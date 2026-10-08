@@ -233,6 +233,11 @@ is open again, not broken.
 - A fifo, socket or device is turned away on `symlink_metadata`, never opened.
 - What a file is comes from its first bytes; a file that lies about its format
   falls back to a hex dump, not to an error.
+- The preview is a glance and does not scroll. Reading a file is the pager's
+  (`v`), and colour in the pager is the user's `LESSOPEN`, not Mula's.
+- Highlighting is the reader's: it sends runs in an `Ink` of `fs`'s own, and
+  the widget only maps an ink to a colour. An ink names a palette index, never
+  RGB, so the preview follows the terminal's scheme.
 
 ## ratatui/crossterm gotchas
 

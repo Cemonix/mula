@@ -2,6 +2,7 @@ pub(crate) mod archive;
 pub(crate) mod copy;
 pub(crate) mod directory;
 pub(crate) mod find;
+pub(crate) mod highlight;
 pub(crate) mod job;
 pub(crate) mod listing;
 pub(crate) mod ops;
