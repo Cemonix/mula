@@ -223,6 +223,15 @@ pub fn table<'k>(
     table
 }
 
+/// The name a config gives `action`: the first catalogue entry carrying it, or
+/// `None` when no entry does.
+pub fn catalogue_name(action: &Action) -> Option<&'static str> {
+    BROWSE_ACTIONS
+        .iter()
+        .find(|entry| entry.action == *action)
+        .map(|entry| entry.name)
+}
+
 /// Returns the message the first matching binding carries, or `None` if the key is unbound.
 pub fn resolve<T: Copy>(bindings: &[Binding<T>], event: &KeyEvent) -> Option<T> {
     bindings
@@ -254,7 +263,8 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
 /// What a key does whatever is on screen.
 #[derive(Clone, Copy, Debug)]
 pub enum GlobalMsg {
-    ShowHelp,
+    /// Opens the help overlay, or closes it when it is open.
+    ToggleHelp,
 }
 
 /// The keys that work in every mode, resolved before the mode's own table so
@@ -265,9 +275,9 @@ pub enum GlobalMsg {
 /// text — a prompt and the find overlay would swallow a printable character.
 pub const GLOBAL_KEYS: &[Binding<GlobalMsg>] = &[Binding {
     key: KeyBinding::plain(KeyCode::F(1)),
-    msg: GlobalMsg::ShowHelp,
+    msg: GlobalMsg::ToggleHelp,
     bar: None,
-    help: "Lists every key available right now",
+    help: "Lists every key available right now, or closes the list",
 }];
 
 /// Every action a key can reach in Browse. `table` walks this in order, so it
@@ -626,6 +636,20 @@ mod keys_tests {
         assert_eq!(names, unique, "an action name is used twice");
     }
 
+    /// The help finds an action's name by the action, so two entries carrying
+    /// one action would give the second the first one's name.
+    #[test]
+    fn every_action_is_in_the_catalogue_once() {
+        for entry in BROWSE_ACTIONS {
+            assert_eq!(
+                catalogue_name(&entry.action),
+                Some(entry.name),
+                "{} carries an action named before it",
+                entry.name
+            );
+        }
+    }
+
     /// An action reachable two ways is still one entry in the bar, or the bar
     /// would draw `c Copy  y Copy`.
     #[test]
@@ -760,7 +784,7 @@ mod keys_tests {
 
     #[test]
     fn the_globals_reach_the_help_overlay() {
-        assert!(find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp)).is_some());
+        assert!(find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp)).is_some());
     }
 
     /// The invariant a global needs and `validate` cannot give: `validate`

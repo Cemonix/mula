@@ -49,7 +49,45 @@ It used to be a bare `bool` on the argument that it takes no input of its own.
 That stopped being true when it grew a scroll: it now has an offset, its own
 key table, and keys that mean something different from the ones it is drawing.
 None of that makes it a mode. It is one flag with state, read before `mode` is
-looked at, and every key that it does not bind closes it.
+looked at.
+
+Every key it did not bind used to close it, so any key got the reader out of
+the way. That ended when it learned to search: a list of sixty keys is read by
+looking for one, and the way to look is to type. So the characters go into a
+query now, and getting out is `Esc` — which clears the query first and closes
+on the second press, the same cascade as Browse, because a reader who typed a
+query and wants the whole list back should not have to reopen the overlay for
+it — or F1, the key that opened it.
+
+What a query is matched against is everything a row could be looked up by:
+the help text, the key as `Display` spells it, so `ctrl` finds every Ctrl
+chord, and the action's name in the catalogue, so a user writing a config can
+type `transfer` and find what `transfer.copy` is. Matching is a plain substring
+ignoring case, not the filter's wildcards: the rows are sentences, not names
+with an extension worth anchoring on.
+
+Only Browse actions have a catalogue name, and `Binding<T>` stays as it is. The
+widget is handed a function from a message to its name — `catalogue_name` for
+Browse, nothing for the other tables — and the name is looked up by the action.
+Carrying the name on every `Binding` would have meant a `name: None` in every
+entry of five tables that will never have one. Looking up by action needs one
+catalogue entry per action, which a test over the catalogue holds the same way
+it holds one entry per name; two names for one action would be two config
+lines meaning the same thing anyway.
+
+The name matches but is not drawn. A third column does not fit beside the help
+text on 80 columns, and a row a query found by its name still shows the key and
+what it does, which is what was being looked for.
+
+The box is sized to every row, not to the ones that match, and the key column
+is measured the same way. A box that shrank with each letter would re-centre
+under the reader's eyes while they type; one that holds still only changes what
+is in it. A query matching nothing says so inside the box rather than leaving
+an empty frame.
+
+A change of query puts the scroll back at the top. The offset belonged to a
+list that is no longer the one on screen, and the best match is the first
+row.
 
 The scroll came from the box being sized to the terminal instead of to a
 constant. A fixed height is a guess at how tall the reader's terminal is, and
@@ -159,8 +197,10 @@ has to find if they know nothing else as far from the other keys as the row
 allows, with empty cells between. Leading the row costs the same columns and
 is read first.
 
-The overlay resolves its own keys before the globals, so F1 closes what F1
-opened rather than reopening it.
+The overlay resolves its own keys before the globals, and the globals before
+its query. F1 is a toggle rather than an opener: with help open it closes it,
+since the help table cannot bind F1 itself — no table may take a global key —
+and closing on any unbound key, which is how F1 used to close it, is gone.
 
 `Esc` is the next global anyone will reach for, and it is the one that will
 hurt: `Cancel` in every overlay, and in Browse a cascade — the filter, then the

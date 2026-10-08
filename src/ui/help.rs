@@ -13,17 +13,21 @@ use crate::{
     ui,
 };
 
-/// What a key does while the help overlay is open. Only closing leaves the
-/// overlay; scrolling stays inside it.
+/// What a key does while the help overlay is open. Scrolling stays inside the
+/// overlay; `Cancel` clears the query, or closes the overlay when the query is
+/// already empty.
 #[derive(Clone, Copy, Debug)]
 pub enum HelpMsg {
     Scroll(VerticalDir),
     ScrollPage(VerticalDir),
-    Close,
+    Cancel,
 }
 
-/// The keys the overlay answers to while it is open. Anything else closes it,
-/// so every key still gets the reader out of the way.
+/// The keys the overlay answers to while it is open. They are resolved before
+/// the globals, so the key that opened the overlay closes it again; every
+/// other printable key goes into the query, and Backspace takes one back out.
+/// None of these is a character, which is what leaves every character free to
+/// be typed.
 ///
 /// Every entry carries a `bar` label, unlike the tables of the other overlays.
 /// This is the one overlay that lists somebody else's keys rather than its
@@ -56,25 +60,45 @@ pub const HELP_KEYS: &[Binding<HelpMsg>] = &[
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Esc),
-        msg: HelpMsg::Close,
+        msg: HelpMsg::Cancel,
         bar: Some("Close"),
-        help: "Closes the help",
+        help: "Clears the search, or closes the help when there is none",
     },
 ];
 
-/// How far the list is scrolled, and how many rows the frame that drew it had
-/// room for.
+/// What the list is narrowed to, how far it is scrolled, and how many rows the
+/// frame that drew it had room for.
 ///
 /// The row count is written down by the render because that is where the size
 /// of the terminal is known; a key pressed before the first frame scrolls by a
-/// single line.
+/// single line. Every change to the query puts the scroll back at the top.
 #[derive(Debug, Default)]
 pub struct HelpState {
+    query: String,
     offset: usize,
     rows: usize,
 }
 
 impl HelpState {
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.query.push(c);
+        self.offset = 0;
+    }
+
+    pub fn pop(&mut self) {
+        self.query.pop();
+        self.offset = 0;
+    }
+
+    pub fn clear_query(&mut self) {
+        self.query.clear();
+        self.offset = 0;
+    }
+
     pub fn scroll(&mut self, dir: VerticalDir) {
         self.shift(1, dir);
     }
@@ -99,9 +123,13 @@ impl HelpState {
     }
 }
 
-/// Every key working right now, one per row, as many as the terminal has room
-/// for: the table of the mode underneath, and then the globals, which work
-/// there as much as anywhere else.
+/// Every key working right now that the query matches, one per row, as many as
+/// the terminal has room for: the table of the mode underneath, and then the
+/// globals, which work there as much as anywhere else.
+///
+/// A row matches when the query, ignoring case, is a substring of its help
+/// text, of its key as [`KeyBinding`] spells it, or of the name `names` gives
+/// its message. An empty query matches every row.
 ///
 /// `GlobalMsg` is named outright rather than being a second type parameter.
 /// There is one table of globals and the widget reads no message from it, only
@@ -109,7 +137,19 @@ impl HelpState {
 pub struct Help<'b, T> {
     bindings: &'b [Binding<T>],
     globals: &'b [Binding<GlobalMsg>],
+    names: fn(&T) -> Option<&'static str>,
     state: &'b mut HelpState,
+}
+
+/// One row of the overlay: a key, the catalogue name of what it does where
+/// there is one, and its help text.
+type Row<'b> = (KeyBinding, Option<&'static str>, &'b str);
+
+/// Whether `query`, already lowercased, is a substring of any field of `row`.
+fn matches(query: &str, (key, name, help): &Row) -> bool {
+    help.to_lowercase().contains(query)
+        || key.to_string().to_lowercase().contains(query)
+        || name.is_some_and(|name| name.to_lowercase().contains(query))
 }
 
 impl<'b, T> Help<'b, T> {
@@ -128,28 +168,37 @@ impl<'b, T> Help<'b, T> {
         Self {
             bindings,
             globals,
+            names: |_| None,
             state,
         }
+    }
+
+    /// Gives the overlay the catalogue name of each message, so a query can
+    /// find a row by it. Without it no row has a name.
+    pub fn names(self, names: fn(&T) -> Option<&'static str>) -> Self {
+        Self { names, ..self }
     }
 }
 
 impl<'b, T> Widget for Help<'b, T> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Two tables of different message types, laid down as the pairs the
-        // overlay draws. Everything below measures against these rather than
-        // against either table, so the box is as tall as what goes in it.
-        let rows: Vec<(KeyBinding, &str)> = self
+        // Two tables of different message types, laid down as the rows the
+        // overlay draws. The box is measured against every row and filled with
+        // the matching ones, so it holds still while the query is typed.
+        let rows: Vec<Row> = self
             .bindings
             .iter()
-            .map(|b| (b.key, b.help))
-            .chain(self.globals.iter().map(|b| (b.key, b.help)))
+            .map(|b| (b.key, (self.names)(&b.msg), b.help))
+            .chain(self.globals.iter().map(|b| (b.key, None, b.help)))
             .collect();
-        let total = rows.len();
+        let query = self.state.query.to_lowercase();
+        let matching: Vec<&Row> = rows.iter().filter(|row| matches(&query, row)).collect();
+        let total = matching.len();
 
         let [area] = Layout::horizontal([Constraint::Max(Self::WIDTH)])
             .flex(Flex::Center)
             .areas(area);
-        let [area] = Layout::vertical([Constraint::Max(total as u16 + 2)])
+        let [area] = Layout::vertical([Constraint::Max(rows.len() as u16 + 2)])
             .flex(Flex::Center)
             .vertical_margin(Self::MARGIN)
             .areas(area);
@@ -162,20 +211,31 @@ impl<'b, T> Widget for Help<'b, T> {
         let inner = block.inner(area);
 
         let first = self.state.fit(inner.height as usize, total);
-        let shown = &rows[first..(first + inner.height as usize).min(total)];
+        let shown = &matching[first..(first + inner.height as usize).min(total)];
 
-        let block = block.title_top(Line::from("Help").centered());
+        let search = match self.state.query.as_str() {
+            "" => Line::from(" Type to search "),
+            query => Line::from(vec![" Search: ".into(), query.bold().white(), " ".into()]),
+        };
+        let block = block
+            .title_top(Line::from("Help").centered())
+            .title_bottom(search.left_aligned());
         let block = match ui::scroll_position(first, shown.len(), total) {
-            Some(position) => block.title_bottom(Line::from(position).centered()),
+            Some(position) => block.title_bottom(Line::from(position).right_aligned()),
             None => block,
         };
         block.render(area, buf);
+
+        if shown.is_empty() {
+            Line::from("No key matches".white()).render(inner, buf);
+            return;
+        }
 
         // Measured over every row rather than the ones on screen, so the column
         // holds still while the list scrolls.
         let key_width = rows
             .iter()
-            .map(|(key, _)| key.to_span().width() as u16)
+            .map(|(key, _, _)| key.to_span().width() as u16)
             .max()
             .unwrap_or(0);
 
@@ -188,14 +248,14 @@ impl<'b, T> Widget for Help<'b, T> {
         Text::from_iter(
             shown
                 .iter()
-                .map(|(key, _)| Line::from(key.to_span().bold().white())),
+                .map(|(key, _, _)| Line::from(key.to_span().bold().white())),
         )
         .render(columns[0], buf);
 
         Text::from_iter(
             shown
                 .iter()
-                .map(|(_, help)| Line::from(help.to_span().white())),
+                .map(|(_, _, help)| Line::from(help.to_span().white())),
         )
         .render(columns[1], buf);
     }
@@ -217,16 +277,41 @@ mod help_tests {
         keys::table(BROWSE_ACTIONS, |_| None)
     }
 
-    /// Draws the overlay over an 80x24 terminal and returns its rows as text.
-    fn frame<T>(bindings: &[Binding<T>], state: &mut HelpState) -> Vec<String> {
+    /// Draws the overlay over an 80x24 terminal, with the catalogue names
+    /// given, and returns its rows as text.
+    fn frame(bindings: &[Binding<Action>], state: &mut HelpState) -> Vec<String> {
         let area = Rect::new(0, 0, COLUMNS, ROWS);
         let mut buf = Buffer::empty(area);
 
-        Help::new(bindings, GLOBAL_KEYS, state).render(area, &mut buf);
+        Help::new(bindings, GLOBAL_KEYS, state)
+            .names(keys::catalogue_name)
+            .render(area, &mut buf);
 
         (0..ROWS)
             .map(|y| (0..COLUMNS).map(|x| buf[(x, y)].symbol()).collect())
             .collect()
+    }
+
+    /// Draws a page, scrolls one screen down, and goes on until the offset
+    /// stops moving. Returns every frame drawn, as text.
+    fn every_page(bindings: &[Binding<Action>], state: &mut HelpState) -> String {
+        let mut seen = String::new();
+        let mut offset = usize::MAX;
+
+        while state.offset != offset {
+            offset = state.offset;
+            seen.push_str(&frame(bindings, state).join("\n"));
+            state.scroll_page(VerticalDir::Down);
+        }
+        seen
+    }
+
+    fn searching(query: &str) -> HelpState {
+        let mut state = HelpState::default();
+        for c in query.chars() {
+            state.push(c);
+        }
+        state
     }
 
     #[test]
@@ -248,7 +333,7 @@ mod help_tests {
         for msg in [
             HelpMsg::Scroll(VerticalDir::Up),
             HelpMsg::ScrollPage(VerticalDir::Up),
-            HelpMsg::Close,
+            HelpMsg::Cancel,
         ] {
             assert!(
                 keys::find(HELP_KEYS, |m| std::mem::discriminant(m)
@@ -266,15 +351,7 @@ mod help_tests {
     #[test]
     fn every_key_is_reachable_at_eighty_by_twenty_four() {
         let browse = browse();
-        let mut state = HelpState::default();
-        let mut seen = String::new();
-        let mut offset = usize::MAX;
-
-        while state.offset != offset {
-            offset = state.offset;
-            seen.push_str(&frame(&browse, &mut state).join("\n"));
-            state.scroll_page(VerticalDir::Down);
-        }
+        let seen = every_page(&browse, &mut HelpState::default());
 
         let listed = browse
             .iter()
@@ -325,5 +402,87 @@ mod help_tests {
         frame(&browse, &mut state);
 
         assert_eq!(state.offset, browse.len() + GLOBAL_KEYS.len() - state.rows);
+    }
+
+    #[test]
+    fn an_empty_query_lists_every_row() {
+        let browse = browse();
+        let short = &browse[..5];
+        let mut state = searching("x");
+        state.clear_query();
+
+        let rows = frame(short, &mut state).join("\n");
+
+        let listed = short
+            .iter()
+            .map(|b| b.help)
+            .chain(GLOBAL_KEYS.iter().map(|b| b.help));
+        for help in listed {
+            assert!(rows.contains(help), "{help} is missing from {rows:?}");
+        }
+    }
+
+    /// A query matching nothing leaves no row to fit the scroll against,
+    /// however far it had been scrolled before.
+    #[test]
+    fn a_query_matching_nothing_draws_an_empty_list() {
+        let browse = browse();
+        let mut state = HelpState::default();
+        frame(&browse, &mut state);
+        state.scroll_page(VerticalDir::Down);
+        let query = "\u{2603}\u{2603}\u{2603}";
+        for c in query.chars() {
+            state.push(c);
+        }
+        state.scroll_page(VerticalDir::Down);
+
+        let rows = frame(&browse, &mut state).join("\n");
+
+        assert_eq!(state.offset, 0);
+        assert!(rows.contains("No key matches"), "the frame was {rows:?}");
+        assert!(!rows.contains(" of "), "the frame was {rows:?}");
+    }
+
+    #[test]
+    fn a_change_of_query_scrolls_back_to_the_top() {
+        let browse = browse();
+        let mut state = HelpState::default();
+        frame(&browse, &mut state);
+
+        state.scroll_page(VerticalDir::Down);
+        state.push('e');
+        assert_eq!(state.offset, 0);
+
+        state.scroll_page(VerticalDir::Down);
+        state.pop();
+        assert_eq!(state.offset, 0);
+
+        state.scroll_page(VerticalDir::Down);
+        state.clear_query();
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn a_query_finds_a_row_by_its_key_spelled_in_lower_case() {
+        let browse = browse();
+
+        for binding in &browse {
+            let query = binding.key.to_string().to_lowercase();
+            let seen = every_page(&browse, &mut searching(&query));
+
+            assert!(seen.contains(binding.help), "{query} does not find its row");
+        }
+    }
+
+    #[test]
+    fn a_query_finds_a_row_by_its_catalogue_name_spelled_in_upper_case() {
+        let browse = browse();
+
+        for entry in BROWSE_ACTIONS {
+            let query = entry.name.to_uppercase();
+            let seen = every_page(&browse, &mut searching(&query));
+
+            assert!(seen.contains(entry.help), "{query} does not find its row");
+        }
     }
 }
