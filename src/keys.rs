@@ -381,10 +381,17 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     },
     Entry {
         name: "mark.all",
-        action: Action::MarkAll,
+        action: Action::MarkVisible(MarkOp::Mark),
         keys: &[KeyBinding::plain(KeyCode::Char('a'))],
         bar: None,
         help: "Marks every item the panel is showing",
+    },
+    Entry {
+        name: "mark.invert",
+        action: Action::MarkVisible(MarkOp::Toggle),
+        keys: &[KeyBinding::plain(KeyCode::Char('i'))],
+        bar: None,
+        help: "Unmarks what the panel shows marked, and marks the rest of it",
     },
     Entry {
         name: "panel.clear",

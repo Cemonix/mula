@@ -877,8 +877,10 @@ impl App {
                 self.move_cursor(nav_dir);
                 Ok(())
             }
-            Action::MarkAll => {
-                self.get_focused_tabs_mut().active_tab_mut().mark_visible();
+            Action::MarkVisible(op) => {
+                self.get_focused_tabs_mut()
+                    .active_tab_mut()
+                    .mark_visible(op, |_| true);
                 Ok(())
             }
             // The filter first, then the marks. Two presses reach a clean

@@ -41,6 +41,7 @@ entry.delete-permanent = "Shift+D"
 
 mark.toggle = "Space"
 mark.all = "a"
+mark.invert = "i"
 mark.up = "Shift+Up"
 mark.down = "Shift+Down"
 panel.clear = "Esc"

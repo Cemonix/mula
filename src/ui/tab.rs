@@ -20,6 +20,7 @@ use ratatui::{
 use crate::{
     fs::directory::DirEntryKind,
     ui::{
+        self,
         columns::Columns,
         pane::{Pane, PaneError},
     },
@@ -32,7 +33,7 @@ pub enum ToggleDirection {
     Next,
 }
 
-/// What a mark action does to the item under the cursor.
+/// What a mark action does to each item it reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkOp {
     Toggle,
@@ -177,35 +178,23 @@ impl Tab {
             return Ok(());
         }
 
-        match op {
-            MarkOp::Toggle => {
-                if !self.selected_items.insert(Arc::clone(&selected.path)) {
-                    self.selected_items.remove(&selected.path);
-                }
-            }
-            MarkOp::Mark => {
-                self.selected_items.insert(Arc::clone(&selected.path));
-            }
-            MarkOp::Unmark => {
-                self.selected_items.remove(&selected.path);
-            }
-        }
+        mark(&mut self.selected_items, op, &selected.path);
         Ok(())
     }
 
-    /// Marks every entry the pane is showing, leaving the parent alone the way
-    /// [`Tab::apply_mark`] does.
+    /// Applies `op` to every entry the pane is showing whose name `matching`
+    /// accepts, leaving the parent alone the way [`Tab::apply_mark`] does.
+    /// Marks outside the view, in this directory or any other, stay as they
+    /// are.
     ///
     /// What is on screen, not what the directory holds: a filter narrows the
     /// view, and marking through it would take names the user cannot see.
-    pub fn mark_visible(&mut self) {
-        let visible: Vec<Arc<Path>> = self
-            .pane
-            .visible_entries()
-            .filter(|entry| entry.kind != DirEntryKind::Parent)
-            .map(|entry| Arc::clone(&entry.path))
-            .collect();
-        self.selected_items.extend(visible);
+    pub fn mark_visible(&mut self, op: MarkOp, matching: impl Fn(&str) -> bool) {
+        for entry in self.pane.visible_entries() {
+            if entry.kind != DirEntryKind::Parent && matching(&ui::name_of(&entry.path)) {
+                mark(&mut self.selected_items, op, &entry.path);
+            }
+        }
     }
 
     pub fn deselect_items(&mut self) {
@@ -223,6 +212,23 @@ impl Tab {
     pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, columns: Columns) {
         self.pane
             .render(frame, area, &self.selected_items, focused, columns);
+    }
+}
+
+/// Applies `op` to `path` in `marks`.
+fn mark(marks: &mut HashSet<Arc<Path>>, op: MarkOp, path: &Arc<Path>) {
+    match op {
+        MarkOp::Toggle => {
+            if !marks.insert(Arc::clone(path)) {
+                marks.remove(path);
+            }
+        }
+        MarkOp::Mark => {
+            marks.insert(Arc::clone(path));
+        }
+        MarkOp::Unmark => {
+            marks.remove(path);
+        }
     }
 }
 
@@ -290,9 +296,12 @@ mod tab_list_tests {
 mod tab_tests {
     use super::*;
 
-    use crate::fs::{
-        directory::{Detail, DirEntry, Directory},
-        listing::Listed,
+    use crate::{
+        fs::{
+            directory::{Detail, DirEntry, Directory},
+            listing::Listed,
+        },
+        ui::filter,
     };
 
     /// A tab standing on a listing of `names` under `/a`, prefixed with a
@@ -336,7 +345,7 @@ mod tab_tests {
     fn marking_everything_takes_every_row_on_screen() {
         let mut tab = tab_over(&["a", "b", "c"]);
 
-        tab.mark_visible();
+        tab.mark_visible(MarkOp::Mark, everything);
 
         assert_eq!(marked_names(&tab), ["a", "b", "c"]);
     }
@@ -348,7 +357,7 @@ mod tab_tests {
     fn marking_everything_leaves_the_parent_alone() {
         let mut tab = tab_over(&["a"]);
 
-        tab.mark_visible();
+        tab.mark_visible(MarkOp::Mark, everything);
 
         assert_eq!(marked_names(&tab), ["a"]);
     }
@@ -359,7 +368,7 @@ mod tab_tests {
     fn marking_everything_skips_what_the_view_is_hiding() {
         let mut tab = tab_over(&["a", ".env", "b"]);
 
-        tab.mark_visible();
+        tab.mark_visible(MarkOp::Mark, everything);
 
         assert_eq!(marked_names(&tab), ["a", "b"]);
     }
@@ -368,8 +377,8 @@ mod tab_tests {
     fn marking_everything_twice_marks_each_item_once() {
         let mut tab = tab_over(&["a", "b"]);
 
-        tab.mark_visible();
-        tab.mark_visible();
+        tab.mark_visible(MarkOp::Mark, everything);
+        tab.mark_visible(MarkOp::Mark, everything);
 
         assert_eq!(marked_names(&tab), ["a", "b"]);
     }
@@ -381,8 +390,70 @@ mod tab_tests {
         let mut tab = tab_over(&["a"]);
         tab.mark_paths([PathBuf::from("/elsewhere/x")]);
 
-        tab.mark_visible();
+        tab.mark_visible(MarkOp::Mark, everything);
 
         assert_eq!(marked_names(&tab), ["a", "x"]);
+    }
+
+    fn everything(_: &str) -> bool {
+        true
+    }
+
+    fn pattern(pattern: &'static str) -> impl Fn(&str) -> bool {
+        move |name| filter::matches(pattern, name)
+    }
+
+    #[test]
+    fn a_pattern_marks_only_the_names_it_matches() {
+        let mut tab = tab_over(&["a.jpg", "b.png", "c.JPG"]);
+
+        tab.mark_visible(MarkOp::Mark, pattern("*.jpg"));
+
+        assert_eq!(marked_names(&tab), ["a.jpg", "c.JPG"]);
+    }
+
+    /// The parent's own name is whatever the directory above is called, so a
+    /// pattern can match it; it is still the way out and not an item.
+    #[test]
+    fn a_pattern_never_marks_the_parent() {
+        let mut tab = tab_over(&["a"]);
+
+        tab.mark_visible(MarkOp::Mark, everything);
+        tab.mark_visible(MarkOp::Toggle, everything);
+
+        assert!(marked_names(&tab).is_empty());
+    }
+
+    #[test]
+    fn a_pattern_skips_a_match_the_filter_is_hiding() {
+        let mut tab = tab_over(&["a.jpg", "b.jpg"]);
+        tab.get_pane_mut().push_filter('a');
+
+        tab.mark_visible(MarkOp::Mark, pattern("*.jpg"));
+
+        assert_eq!(marked_names(&tab), ["a.jpg"]);
+    }
+
+    /// Marks are absolute, so a directory left behind keeps its own; unmarking
+    /// by a pattern is about the names on screen.
+    #[test]
+    fn unmarking_by_a_pattern_keeps_the_marks_made_in_another_directory() {
+        let mut tab = tab_over(&["a.jpg", "b.txt"]);
+        tab.mark_paths([PathBuf::from("/elsewhere/x.jpg")]);
+        tab.mark_visible(MarkOp::Mark, everything);
+
+        tab.mark_visible(MarkOp::Unmark, pattern("*.jpg"));
+
+        assert_eq!(marked_names(&tab), ["b.txt", "x.jpg"]);
+    }
+
+    #[test]
+    fn inverting_swaps_the_marked_and_the_unmarked_on_screen() {
+        let mut tab = tab_over(&["a", "b", "c"]);
+        tab.mark_paths([PathBuf::from("/a/b"), PathBuf::from("/elsewhere/x")]);
+
+        tab.mark_visible(MarkOp::Toggle, everything);
+
+        assert_eq!(marked_names(&tab), ["a", "c", "x"]);
     }
 }

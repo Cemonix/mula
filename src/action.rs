@@ -36,7 +36,8 @@ pub enum Action {
         op: MarkOp,
         nav_dir: VerticalDir,
     },
-    MarkAll,
+    /// Applies the op to every item the focused panel is showing.
+    MarkVisible(MarkOp),
     Clear,
     Transfer {
         op: TransferOp,
