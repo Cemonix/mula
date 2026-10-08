@@ -128,6 +128,40 @@ be the one cost with nothing on the other side of it. A tab in the background
 is not asked at all; the pass that brings it forward is the pass that finds its
 listing too thin.
 
+## Free space rides on the listing
+
+A panel shows how much room its volume has left, on its own border rather
+than in the InfoBar: the two panels can stand on two disks. The number is a
+`statvfs` of the directory, and `listing::read` asks for it right behind the
+`read_dir`, so it comes back inside the `Directory` the pane is given.
+
+It needs no reader of its own because it wants to be asked at exactly the
+moments a listing is: entering a directory, a refresh, and the end of a job
+that touched the disk, which already refreshes both panes. A reader of its own
+would need a second generation and a second record of which tab asked, only to
+send the same path at the same instant. And it adds no new way to stall: a
+network mount that hangs `statvfs` hangs the `read_dir` of the same directory,
+and both are on the reading thread.
+
+It is not part of `Directory::read`. The preview and the find walk read
+directories too and draw no free space, and the walk would pay the syscall
+once per directory in the tree.
+
+What is shown is `f_bavail * f_frsize`. `f_bfree` counts the reserve a
+filesystem keeps for root — 5 % on ext4 by default — which a user's copy cannot
+land in. `f_frsize` is the unit the block counts are in; `f_bsize` is the
+preferred I/O size, and on APFS it is 1 MiB against a 4 KiB fragment, which
+would overstate the space 256 times.
+
+A `statvfs` that fails leaves the border without the number. The listing it
+came with is good, and failing it over a figure in the corner would take the
+directory away to report the corner. A tab in the background keeps the number
+its listing was read with, the way it keeps the listing.
+
+On the border it sits on the left, the order label on the right, and it is the
+one that gives way when both do not fit. The label says how the rows being read
+are ordered; the free space only says something about the disk.
+
 ## A job owns a snapshot
 
 A job takes its paths when it is queued and never reads `App` again.
