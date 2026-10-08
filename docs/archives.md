@@ -56,12 +56,13 @@ what was marked — for a transfer the marked files, for an unpack the marked
 archives — and the entries inside are a level below, the way the files inside
 a marked directory are. `Observer::copied` already carries that level:
 it moves the bar and puts the name of the entry being written on screen, while
-the count stays on the batch. So an unpack of three archives is `0 / 3`, the
-bar is filled by how far into the archive files the job has read, and the name
-changes per entry. `Progress` needed no change at all.
+the count stays on the batch. So an unpack of three archives is a batch of
+three, the bar and the sizes beside it follow how far into the archive files
+the job has read, and the name changes per entry. `Progress` needed no change
+at all.
 
 For packing the batch is one archive, however many items go into it, so the
-count is `0 / 1` and the bar carries everything. The weight is what the items
+summary counts one and the bar carries everything. The weight is what the items
 weigh on disk, which `tree_size` already walks for a transfer.
 
 That a compressed archive is measured by position in the *input* stream rather

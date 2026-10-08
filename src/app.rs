@@ -23,7 +23,7 @@ use crate::{
         archive::format::{self, Format},
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
-        job::{JobKind, JobTag, Outcome, Progress, Work},
+        job::{JobKind, JobTag, Measure, Outcome, Progress, Work},
         listing::Kind,
         ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
         preview::{self, Content, Preview},
@@ -45,7 +45,7 @@ use crate::{
             surface::{Placement, Surface, Wanted},
         },
         help::{self, Help, HelpMsg, HelpState},
-        infobar::{InfoBar, ProgressView},
+        infobar::{Counts, InfoBar, ProgressView},
         keybar::Keybar,
         pane::{Entered, Pane, PaneError},
         panel::Panel,
@@ -685,8 +685,13 @@ impl App {
         let progress = self.progress.as_ref().map(|progress| ProgressView {
             ratio: progress.ratio(),
             current: &progress.current,
-            done: progress.items_done,
-            total: progress.items_total,
+            counts: match progress.measure {
+                Measure::Bytes { done, total } => Counts::Bytes { done, total },
+                Measure::Items => Counts::Items {
+                    done: progress.items_done,
+                    total: progress.items_total,
+                },
+            },
         });
         frame.render_widget(
             InfoBar::new()

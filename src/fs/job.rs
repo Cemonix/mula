@@ -113,9 +113,9 @@ pub enum Measure {
 /// main loop keeps the last of a batch and drops the rest.
 #[derive(Clone, Debug)]
 pub struct Progress {
-    /// Items of the batch, which is what the `12 / 340` text counts. Distinct
-    /// from what `measure` counts: a transfer fills its bar with bytes, and the
-    /// two reach their end at different moments.
+    /// Items of the batch. Distinct from what `measure` counts: a transfer
+    /// fills its bar with bytes, and the two reach their end at different
+    /// moments.
     pub items_done: usize,
     pub items_total: usize,
     pub current: String,
