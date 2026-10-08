@@ -58,6 +58,10 @@ pub struct Directory {
     path: Arc<Path>,
     entries: Vec<DirEntry>,
     detail: Detail,
+    /// Bytes the volume holding `path` has left for an unprivileged user, as
+    /// read with the listing. `None` when nobody asked or the volume did not
+    /// say.
+    free: Option<u64>,
 }
 
 impl Directory {
@@ -115,11 +119,21 @@ impl Directory {
             path,
             entries,
             detail,
+            free: None,
         }
+    }
+
+    /// The same listing, saying the volume it is on has `free` bytes left.
+    pub fn with_free(self, free: Option<u64>) -> Self {
+        Self { free, ..self }
     }
 
     pub fn path(&self) -> &Arc<Path> {
         &self.path
+    }
+
+    pub fn free(&self) -> Option<u64> {
+        self.free
     }
 
     /// What this listing was read with, and so which columns it can fill.

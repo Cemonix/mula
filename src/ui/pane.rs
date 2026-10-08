@@ -21,7 +21,13 @@ use crate::{
         listing::{Kind, Listed},
         sizes::DirSizes,
     },
-    ui::{self, columns::Columns, filter::Filter, icon::Icon, sort::Sort},
+    ui::{
+        self,
+        columns::{self, Columns},
+        filter::Filter,
+        icon::Icon,
+        sort::Sort,
+    },
 };
 
 #[derive(Error, Debug)]
@@ -561,6 +567,10 @@ impl Pane {
     /// Draws the directory listing. `focused` colours the border and `columns`
     /// says what each row shows beside its name; both are passed in every frame
     /// rather than stored, so neither can drift from what the caller holds.
+    ///
+    /// The bottom border carries the free space of the listing's volume on the
+    /// left and the order on the right, dropping the free space when the two
+    /// do not fit together.
     pub fn render(
         &mut self,
         frame: &mut Frame,
@@ -577,8 +587,23 @@ impl Pane {
             } else {
                 Self::UNFOCUSED
             });
-        if let Some(label) = self.sort.label() {
-            block = block.title_bottom(Line::from(format!(" {label} ")).right_aligned());
+        let sort = self
+            .sort
+            .label()
+            .map(|label| Line::from(format!(" {label} ")).right_aligned());
+        let free = self
+            .directory
+            .free()
+            .map(|free| Line::from(format!(" {} free ", columns::bytes(free))).left_aligned());
+        // The bottom border between its corners holds the sort label first and
+        // the free space only beside it.
+        let border = usize::from(area.width).saturating_sub(2);
+        let taken = sort.as_ref().map_or(0, Line::width);
+        if let Some(free) = free.filter(|free| free.width() + taken <= border) {
+            block = block.title_bottom(free);
+        }
+        if let Some(sort) = sort {
+            block = block.title_bottom(sort);
         }
 
         let inner_area = block.inner(area);
@@ -972,6 +997,37 @@ mod pane_tests {
         sort_by_size(&mut pane);
 
         assert!(drawn(&mut pane, 40, 4).contains("by size"));
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn a_pane_shows_the_free_space_of_its_volume_on_its_border() {
+        let mut pane = Pane::new(directory_of("/a", &["a"]).with_free(Some(118 * GIB)));
+
+        assert!(drawn(&mut pane, 40, 4).contains(" 118G free "));
+    }
+
+    #[test]
+    fn a_pane_too_narrow_for_the_free_space_leaves_it_out() {
+        let mut pane = Pane::new(directory_of("/a", &["a"]).with_free(Some(118 * GIB)));
+        let width = Span::raw(" 118G free ").width() as u16 + 2;
+
+        assert!(drawn(&mut pane, width, 4).contains("118G free"));
+        assert!(!drawn(&mut pane, width - 1, 4).contains("free"));
+    }
+
+    #[test]
+    fn the_free_space_gives_way_to_the_order_the_pane_is_sorted_in() {
+        let mut pane = Pane::new(sized_directory("/a", &[("a", 1)]).with_free(Some(118 * GIB)));
+        sort_by_size(&mut pane);
+        let width = Span::raw(" 118G free  by size ").width() as u16 + 2;
+
+        let both = drawn(&mut pane, width, 4);
+        assert!(both.contains("118G free") && both.contains("by size"));
+
+        let narrower = drawn(&mut pane, width - 1, 4);
+        assert!(!narrower.contains("free") && narrower.contains("by size"));
     }
 
     fn typed(pane: &mut Pane, text: &str) {
