@@ -84,7 +84,7 @@ mod keybar_tests {
     /// takes it.
     fn help_key() -> Option<KeyBinding> {
         Some(
-            find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
+            find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp))
                 .expect("the globals reach the help overlay")
                 .key,
         )

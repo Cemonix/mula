@@ -401,7 +401,7 @@ impl App {
             mode: Mode::Browse,
             help: None,
             browse_keys,
-            help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp))
+            help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp))
                 .map(|binding| binding.key),
             cancel_key,
             add_favorite_key,
@@ -738,9 +738,10 @@ impl App {
             let area = frame.area();
             let globals = keys::GLOBAL_KEYS;
             match self.mode {
-                Mode::Browse => {
-                    frame.render_widget(Help::new(&self.browse_keys, globals, state), area)
-                }
+                Mode::Browse => frame.render_widget(
+                    Help::new(&self.browse_keys, globals, state).names(keys::catalogue_name),
+                    area,
+                ),
                 Mode::Confirm { .. } => {
                     frame.render_widget(Help::new(Dialog::DIALOG_KEYS, globals, state), area)
                 }
@@ -781,20 +782,37 @@ impl App {
         tracing::info!("{}", key.modifiers);
         tracing::info!("{}", key.code);
 
-        // The overlay answers first, so the key that opened it closes it again
-        // rather than opening what is already open.
-        if let Some(state) = &mut self.help {
-            match keys::resolve(help::HELP_KEYS, &key) {
-                Some(HelpMsg::Scroll(dir)) => state.scroll(dir),
-                Some(HelpMsg::ScrollPage(dir)) => state.scroll_page(dir),
-                Some(HelpMsg::Close) | None => self.help = None,
+        // The overlay's own table answers first, then the globals, and only
+        // then does a character go into its query.
+        if let Some(state) = &mut self.help
+            && let Some(msg) = keys::resolve(help::HELP_KEYS, &key)
+        {
+            match msg {
+                HelpMsg::Scroll(dir) => state.scroll(dir),
+                HelpMsg::ScrollPage(dir) => state.scroll_page(dir),
+                HelpMsg::Cancel if state.query().is_empty() => self.help = None,
+                HelpMsg::Cancel => state.clear_query(),
             }
             return Ok(());
         }
 
         if let Some(msg) = keys::resolve(keys::GLOBAL_KEYS, &key) {
             match msg {
-                GlobalMsg::ShowHelp => self.help = Some(HelpState::default()),
+                GlobalMsg::ToggleHelp => {
+                    self.help = match self.help {
+                        Some(_) => None,
+                        None => Some(HelpState::default()),
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        if let Some(state) = &mut self.help {
+            match key.code {
+                KeyCode::Char(c) => state.push(c),
+                KeyCode::Backspace => state.pop(),
+                _ => (),
             }
             return Ok(());
         }

@@ -263,7 +263,8 @@ pub fn validate<T>(bindings: &[Binding<T>]) -> Result<(), BindingError> {
 /// What a key does whatever is on screen.
 #[derive(Clone, Copy, Debug)]
 pub enum GlobalMsg {
-    ShowHelp,
+    /// Opens the help overlay, or closes it when it is open.
+    ToggleHelp,
 }
 
 /// The keys that work in every mode, resolved before the mode's own table so
@@ -274,9 +275,9 @@ pub enum GlobalMsg {
 /// text — a prompt and the find overlay would swallow a printable character.
 pub const GLOBAL_KEYS: &[Binding<GlobalMsg>] = &[Binding {
     key: KeyBinding::plain(KeyCode::F(1)),
-    msg: GlobalMsg::ShowHelp,
+    msg: GlobalMsg::ToggleHelp,
     bar: None,
-    help: "Lists every key available right now",
+    help: "Lists every key available right now, or closes the list",
 }];
 
 /// Every action a key can reach in Browse. `table` walks this in order, so it
@@ -783,7 +784,7 @@ mod keys_tests {
 
     #[test]
     fn the_globals_reach_the_help_overlay() {
-        assert!(find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ShowHelp)).is_some());
+        assert!(find(GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp)).is_some());
     }
 
     /// The invariant a global needs and `validate` cannot give: `validate`

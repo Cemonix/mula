@@ -13,17 +13,21 @@ use crate::{
     ui,
 };
 
-/// What a key does while the help overlay is open. Only closing leaves the
-/// overlay; scrolling stays inside it.
+/// What a key does while the help overlay is open. Scrolling stays inside the
+/// overlay; `Cancel` clears the query, or closes the overlay when the query is
+/// already empty.
 #[derive(Clone, Copy, Debug)]
 pub enum HelpMsg {
     Scroll(VerticalDir),
     ScrollPage(VerticalDir),
-    Close,
+    Cancel,
 }
 
-/// The keys the overlay answers to while it is open. Anything else closes it,
-/// so every key still gets the reader out of the way.
+/// The keys the overlay answers to while it is open. They are resolved before
+/// the globals, so the key that opened the overlay closes it again; every
+/// other printable key goes into the query, and Backspace takes one back out.
+/// None of these is a character, which is what leaves every character free to
+/// be typed.
 ///
 /// Every entry carries a `bar` label, unlike the tables of the other overlays.
 /// This is the one overlay that lists somebody else's keys rather than its
@@ -56,9 +60,9 @@ pub const HELP_KEYS: &[Binding<HelpMsg>] = &[
     },
     Binding {
         key: KeyBinding::plain(KeyCode::Esc),
-        msg: HelpMsg::Close,
+        msg: HelpMsg::Cancel,
         bar: Some("Close"),
-        help: "Closes the help",
+        help: "Clears the search, or closes the help when there is none",
     },
 ];
 
@@ -329,7 +333,7 @@ mod help_tests {
         for msg in [
             HelpMsg::Scroll(VerticalDir::Up),
             HelpMsg::ScrollPage(VerticalDir::Up),
-            HelpMsg::Close,
+            HelpMsg::Cancel,
         ] {
             assert!(
                 keys::find(HELP_KEYS, |m| std::mem::discriminant(m)
