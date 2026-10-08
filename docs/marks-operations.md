@@ -13,6 +13,40 @@ That is why the InfoBar carries a count, and why the delete confirmation lists
 **names rather than a number** — a bare "delete 5 items" would be asking the
 user to confirm something they cannot see.
 
+## Marking many at once works over the view
+
+`a`, `i` and the pattern keys reach what the panel is showing, never the whole
+listing: a filter or hidden dotfiles narrow the view, and marking through it
+would make marks the user cannot see. The parent is never marked by any of
+them — it is the way out, and its name is the directory above's, which a
+pattern can match.
+
+They also reach only that view. Unmarking by a pattern, or inverting, leaves
+alone the marks made in other directories: those are absolute paths standing
+for work the user did elsewhere, and a pattern typed here is about the names
+here.
+
+All of it is one function, `Tab::mark_visible`, taking a `MarkOp` and a test
+on the name. Mark all is `Mark` with a test that takes everything, invert is
+`Toggle` with the same one, and the pattern keys pass the filter's own
+matching — so `*` and `?` mean what they mean in `/`, and a pattern without
+either matches a name by its middle there as here. A second glob would be a
+second set of rules for the same two characters.
+
+The pattern is applied to the view as it stands when the prompt is confirmed,
+not when it opened. No key moves the panel under an open prompt, but a listing
+can still arrive — a refresh after a job, or a read asked for just before — and
+what arrives is what the user is looking at when they press Enter.
+
+## Keys for marking by pattern
+
+`+` and `-`, which is Total Commander's pair, rather than letters. The first
+letters are taken by things that matter more — `m` moves, `u` unpacks, `p` is
+the preview, `s` sorts, `g` is the top of the list — and the next word for it
+would be a letter nobody guesses. The two are a pair that reads as add and
+take away, and like `,` and `.` they do not pretend to be first letters.
+Invert has its letter free and takes it: `i`.
+
 ## InfoBar versus toast
 
 Two different things, and the line between them is what may go in each:
