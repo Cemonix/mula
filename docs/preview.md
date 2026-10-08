@@ -3,6 +3,17 @@
 Why the preview panel works the way it does. The rules themselves are in
 `CLAUDE.md`.
 
+## A glance, not a viewer
+
+The preview does not scroll, and Mula has no viewer of its own. Reading a file
+is the pager's job, which is what `v` hands it to. Mula is driven from the
+keyboard and its cursor is in the listing; the preview is a look at what that
+cursor stands on, beside it, and moving the cursor is how it changes.
+
+A viewer would need keys of its own, and so a focus of its own — a mode in
+everything but name, doing worse what `less` already does. Colour in the pager
+is the user's to set up, through `LESSOPEN` and `bat`, and not Mula's.
+
 ## A view toggle, never a `Mode`
 
 The preview replaces the panel opposite the cursor. Making it a `Mode` would
@@ -35,6 +46,75 @@ answer, and "this is not really a PNG" is something the bytes already say.
 A fifo, socket or device is turned away on `symlink_metadata` and never
 opened. `File::open` on a fifo blocks until somebody writes to it, which for a
 file manager is never.
+
+## Colour by grammar, chosen by name
+
+Whether a file is text is still answered by its first bytes. Which grammar
+colours it is not something bytes can say, so it is chosen by the file's whole
+name first (`Makefile`, `.bashrc`), then its extension, then its first line,
+which is where a shebang names a script that has no extension. A file none of
+them names is drawn exactly as before highlighting existed: one run in the
+terminal's own colour.
+
+Only the front of a file was read, so the colouring stops where the reading
+did. A line cut at the character cap, or a last line in the middle of a block
+comment, is coloured as far as it goes and no further, and that is fine for a
+glance.
+
+## syntect, not tree-sitter
+
+syntect reads Sublime Text grammars, and ships a set of them compiled into the
+binary; with the `fancy-regex` engine nothing in it is C. Tree-sitter parses
+better, but every language is a grammar written in C, built per target and
+linked in one by one. For tens of lines beside a cursor, regex highlighting is
+the right amount of correctness.
+
+The cost is size: the bundled grammars and the regex engine took the release
+binary from 4.45 MB to 6.60 MB.
+
+## The reader colours, the widget maps
+
+Highlighting is the most expensive thing done to text, so it happens where the
+reading already happens: on the preview reader's thread, never on the loop.
+Five hundred lines of Rust take 30–60 ms in a release build — invisible on a
+thread that is cancelled as soon as the cursor moves, a stutter on the loop.
+The job asks whether it is still wanted before every line, so running through
+a directory of source files does not queue up their colouring.
+
+The grammars are loaded on the reader's first text file and kept for as long
+as the reader lives. Loading the set takes about a millisecond, and syntect
+links each grammar on its first use, which added some 25 ms to the first Rust
+file measured. Small, but starting Mula to browse binaries or directories need
+not pay it, and a session that previews text pays it once. They live in the reader's `Config`, which is what is fixed
+for a reader's life; a `OnceLock` there is what lets the first job fill it in.
+
+Only the first `max_line_chars` characters of a line reach the grammar. A
+minified bundle is one line of tens of kilobytes, and regex highlighting on
+that is where the time would go, for text the panel cannot draw.
+
+A grammar can fail on a line — the regex engine has a backtracking limit. The
+line and every line after it are then drawn plain, since the state carried
+from one line to the next is no longer one the grammar left.
+
+What comes back is lines of runs in Mula's own types, the way a picture comes
+back as a `Bitmap`: `fs` does not know about ratatui. The widget's only work is
+turning an ink into a colour on a `Span`.
+
+## Colours from the terminal's palette
+
+The default theme names the sixteen ANSI colours by their place in the
+palette, not by value, so the preview follows whatever scheme the terminal
+has. An RGB theme is drawn for one background, and on any other can be
+unreadable — a theme made for a dark terminal on a light one, or the
+reverse. Text that no scope colours carries no colour at all and is drawn in
+the terminal's own foreground, which is what keeps plain text looking as it
+did.
+
+syntect has no notion of a palette, so the theme is written in `bat`'s
+encoding for its `ansi` theme: a colour with alpha zero carries the palette
+index in its red channel, and any other alpha is the terminal's foreground.
+The decoding is total, so no colour out of the theme is left without a
+meaning. A configurable theme is later work.
 
 ## Half blocks are the renderer, not a consolation
 
