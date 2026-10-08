@@ -2,7 +2,7 @@
 //! threads in sight: the queue going out, the snapshots coming back, and the
 //! report at the end.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use crate::fs::{
     archive::format::Format,
@@ -105,8 +105,25 @@ impl Work {
 /// Deleting takes no time proportional to size, so it fills by items.
 #[derive(Clone, Copy, Debug)]
 pub enum Measure {
-    Bytes { done: u64, total: u64 },
+    Bytes {
+        done: u64,
+        total: u64,
+        /// Bytes per second over the last few seconds, or `None` until the
+        /// job has run long enough to say.
+        rate: Option<u64>,
+    },
     Items,
+}
+
+impl Measure {
+    /// A job about to move `total` bytes, with none of them moved yet.
+    pub fn bytes(total: u64) -> Self {
+        Measure::Bytes {
+            done: 0,
+            total,
+            rate: None,
+        }
+    }
 }
 
 /// A snapshot of the running job. Only the newest one is worth drawing, so the
@@ -128,7 +145,7 @@ impl Progress {
     /// reads as full rather than dividing by zero.
     pub fn ratio(&self) -> f64 {
         let (done, total) = match self.measure {
-            Measure::Bytes { done, total } => (done, total),
+            Measure::Bytes { done, total, .. } => (done, total),
             Measure::Items => (self.items_done as u64, self.items_total as u64),
         };
 
@@ -141,6 +158,20 @@ impl Progress {
         // Left unclamped that overfills the bar, which underflows the count of
         // cells still to draw.
         (done as f64 / total as f64).clamp(0.0, 1.0)
+    }
+
+    /// How long the bytes still to go take at the current rate, rounded up to
+    /// a whole second. `None` for a job counting items, one with no rate yet,
+    /// and one whose rate is zero.
+    pub fn left(&self) -> Option<Duration> {
+        let Measure::Bytes { done, total, rate } = self.measure else {
+            return None;
+        };
+        let rate = rate.filter(|&rate| rate > 0)?;
+
+        Some(Duration::from_secs(
+            total.saturating_sub(done).div_ceil(rate),
+        ))
     }
 }
 
@@ -195,8 +226,39 @@ mod job_tests {
             items_done: 0,
             items_total: 0,
             current: String::new(),
-            measure: Measure::Bytes { done, total },
+            measure: Measure::Bytes {
+                done,
+                total,
+                rate: None,
+            },
         }
+    }
+
+    fn moving(done: u64, total: u64, rate: u64) -> Progress {
+        Progress {
+            measure: Measure::Bytes {
+                done,
+                total,
+                rate: Some(rate),
+            },
+            ..weighing(done, total)
+        }
+    }
+
+    #[test]
+    fn what_is_left_takes_the_rest_at_the_current_rate() {
+        assert_eq!(moving(100, 1100, 10).left(), Some(Duration::from_secs(100)));
+    }
+
+    #[test]
+    fn a_part_of_a_second_left_counts_as_a_whole_one() {
+        assert_eq!(moving(0, 11, 10).left(), Some(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn nothing_is_left_to_say_without_a_rate() {
+        assert_eq!(weighing(0, 100).left(), None);
+        assert_eq!(moving(0, 100, 0).left(), None);
     }
 
     #[test]

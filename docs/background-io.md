@@ -212,6 +212,53 @@ It sends `Progress` and `Done { summary }`. The main loop refreshes panes and
 raises the toast. Keeping the worker on one side of the channel is what lets a
 job be tested without an `App` at all.
 
+## The worker measures the speed
+
+A byte count only becomes a speed next to the moment it was true, and the
+worker is the one side that has that moment. The main loop drains the channel
+once a pass, keeps the newest `Progress` and throws the rest away, so the time
+it could pair with a count is when it happened to look — off by up to a pass,
+and blind to every count it dropped. So `Reporter` feeds `Rate` the count and
+`Instant::now()` each time it sends, and the rate rides in
+`Measure::Bytes`. The time left is not sent: it follows from the rate and the
+two counts already in the message, so `Progress::left` works it out on the
+main side.
+
+`Rate` keeps the samples of the last five seconds and divides what was gained
+across them by the time they span. Each message's own gap is too short to
+mean anything: one chunk arrives while the next is still in the kernel, and a
+clone lands a whole file between two messages with no time spent on it. Over
+five seconds the clone is still in the number — it did land — but spread
+across the window, and gone from it five seconds later. A moving average
+weighted by recency (an EMA) smooths too, but it never lets a burst go: a
+gigabyte that landed in one sample keeps a share of every number after it,
+and how long that lasts depends on how often messages happen to be sent. A
+window forgets on a clock.
+
+Nothing is drawn until the samples span a second. Before that the window
+holds the start of the job and perhaps a clone or a cached read, and a speed
+worked out from that would be a guess drawn as a fact. A rate of zero — a
+disk that stopped answering — draws `0B/s` and no time left, rather than a
+time that is infinite.
+
+`Rate` takes the instant as an argument and never reads a clock itself, so a
+test hands it a made-up timeline instead of sleeping through one.
+
+Only jobs measured in bytes have a speed. A delete moves no bytes, and its
+items take a time unrelated to their size, so a rate of items per second
+would predict nothing. The rate is an `Option` inside `Measure::Bytes` for
+that reason: an item count has no field to put one in.
+
+What the rate counts is what the bar counts, skipped and collided items
+included — their weight is added when they finish, without a byte being
+written. That is what keeps the time left consistent with the bar: both are
+about what is still to go.
+
+In the InfoBar the speed comes after the sizes, and after the marks and the
+queue too. Those say what the next operation and the ones waiting will act
+on; the speed only says how soon the current one ends, and a row that has
+to drop something drops it next after the cancel hint, which is learnt once.
+
 ## Last wins is the mechanism, not the discipline
 
 `Reader<J: ReadJob>` owns the generation counter, the pair of channels and the
