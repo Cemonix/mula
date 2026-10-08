@@ -25,6 +25,8 @@ pub enum Action {
     ToggleSide,
     MoveCursor(VerticalDir),
     MoveCursorTo(ListEnd),
+    /// Moves the cursor by as many items as the panel last drew.
+    MoveCursorPage(VerticalDir),
     OpenSelected,
     GoToParent,
     /// Opens the prompt for a path to send the focused panel to.

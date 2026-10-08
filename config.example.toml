@@ -22,6 +22,8 @@
 
 cursor.up = "Up"
 cursor.down = "Down"
+cursor.page-up = "Page Up"
+cursor.page-down = "Page Down"
 cursor.first = "g"
 cursor.last = "Shift+G"
 
