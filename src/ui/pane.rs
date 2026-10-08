@@ -15,6 +15,7 @@ use ratatui::{
 use thiserror::Error;
 
 use crate::{
+    action::VerticalDir,
     fs::{
         directory::{Detail, DirEntry, DirEntryKind, Directory},
         listing::{Kind, Listed},
@@ -134,6 +135,9 @@ pub struct Pane {
     /// knows yet.
     totals: HashMap<Arc<Path>, u64>,
     list_state: ListState,
+    /// How many rows the listing had room for the last time it was drawn, and
+    /// so how far a page moves. Nothing before the first frame.
+    rows: usize,
     awaited: Awaited,
 }
 
@@ -170,6 +174,7 @@ impl Pane {
             sort: Sort::default(),
             totals: HashMap::new(),
             list_state: ListState::default(),
+            rows: 0,
             awaited: Awaited::Nothing,
         };
         pane.rebuild_view();
@@ -383,6 +388,20 @@ impl Pane {
         }
     }
 
+    /// Moves the cursor by as many items as the last frame drew rows, stopping
+    /// at either end rather than wrapping; by one item before the first frame.
+    /// Does nothing while nothing is selected.
+    pub fn select_page(&mut self, dir: VerticalDir) {
+        if let Some(idx) = self.list_state.selected() {
+            let by = self.rows.max(1);
+            let idx = match dir {
+                VerticalDir::Up => idx.saturating_sub(by),
+                VerticalDir::Down => idx.saturating_add(by).min(self.view.len() - 1),
+            };
+            self.list_state.select(Some(idx));
+        }
+    }
+
     /// Waits for the listing of the directory holding `path`, with the cursor
     /// landing on `path` itself once it arrives. A path with no parent is its
     /// own directory, which is what the filesystem root is.
@@ -564,6 +583,7 @@ impl Pane {
 
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
+        self.rows = usize::from(inner_area.height);
 
         // What a row has to lay itself out in: the highlight symbol is drawn
         // beside every row, whether the cursor is on it or not.
@@ -1121,6 +1141,54 @@ mod pane_tests {
             pane.selected_entry().unwrap().path.as_ref(),
             Path::new("/2")
         );
+    }
+
+    /// Twelve rows of terminal leave ten for the listing inside the border.
+    #[test]
+    fn a_page_moves_by_the_rows_the_panel_last_drew() {
+        let mut pane = pane(30);
+        drawn(&mut pane, 40, 12);
+
+        pane.select_page(VerticalDir::Down);
+        assert_eq!(pane.list_state.selected(), Some(10));
+
+        pane.select_page(VerticalDir::Up);
+        assert_eq!(pane.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn a_page_stops_at_either_end_rather_than_wrapping() {
+        let mut pane = pane(15);
+        drawn(&mut pane, 40, 12);
+
+        pane.select_page(VerticalDir::Down);
+        pane.select_page(VerticalDir::Down);
+        assert_eq!(pane.list_state.selected(), Some(14));
+        assert!(pane.selected_entry().is_ok());
+
+        pane.select_page(VerticalDir::Up);
+        pane.select_page(VerticalDir::Up);
+        assert_eq!(pane.list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn a_page_before_the_first_frame_moves_by_one_item() {
+        let mut pane = pane(5);
+
+        pane.select_page(VerticalDir::Down);
+
+        assert_eq!(pane.list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn an_empty_listing_has_no_page_to_move_by() {
+        let mut pane = pane(0);
+        drawn(&mut pane, 40, 12);
+
+        pane.select_page(VerticalDir::Down);
+        pane.select_page(VerticalDir::Up);
+
+        assert_eq!(pane.list_state.selected(), None);
     }
 
     #[test]

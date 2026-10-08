@@ -39,6 +39,24 @@ preview now and the key is `p`.
 What is left on a function key is F1, and it is there because it cannot be
 printable — see **Globals** below. Nothing else needs to be.
 
+## A page is what the panel drew
+
+`PageUp` and `PageDown` move the cursor by the number of rows the panel had
+room for in the last frame. That number exists only in `render`, where the
+size of the terminal is known, so the pane writes it down there the way
+`HelpState` does for the help overlay. A key pressed before the first frame
+finds nothing written and moves one item, which is the only honest page size
+when no screen has been measured yet.
+
+A page stops at the ends, where a line wraps. Wrapping a line takes the cursor
+from the last item to the first, which is a place the user can name; wrapping
+a page would land a part of a screen into the other end of the list, somewhere
+nobody aimed. Holding `PageDown` to reach the bottom is also the ordinary use,
+and a wrap would turn the last press into a trip back to the top.
+
+Neither key is in the bar. The arrows and `g`/`Shift+G` are not there either,
+and the bar's 80 columns are for what cannot be guessed.
+
 ## Help is not a `Mode`
 
 Help draws over whatever mode is running and lists *that mode's* keys, so the

@@ -861,6 +861,10 @@ impl App {
                 }
                 Ok(())
             }
+            Action::MoveCursorPage(dir) => {
+                self.get_focused_pane_mut().select_page(dir);
+                Ok(())
+            }
             Action::ToggleMark => self
                 .get_focused_tabs_mut()
                 .active_tab_mut()

@@ -298,6 +298,20 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Moves the cursor one item down",
     },
     Entry {
+        name: "cursor.page-up",
+        action: Action::MoveCursorPage(VerticalDir::Up),
+        keys: &[KeyBinding::plain(KeyCode::PageUp)],
+        bar: None,
+        help: "Moves the cursor one screen up, stopping at the first item",
+    },
+    Entry {
+        name: "cursor.page-down",
+        action: Action::MoveCursorPage(VerticalDir::Down),
+        keys: &[KeyBinding::plain(KeyCode::PageDown)],
+        bar: None,
+        help: "Moves the cursor one screen down, stopping at the last item",
+    },
+    Entry {
         name: "cursor.first",
         action: Action::MoveCursorTo(ListEnd::First),
         keys: &[KeyBinding::plain(KeyCode::Char('g'))],
