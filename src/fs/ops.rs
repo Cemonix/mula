@@ -7,6 +7,8 @@ use std::{
 
 use thiserror::Error;
 
+use crate::fs::copy::copy_file;
+
 /// How a batch of filesystem operations ended. `total` is the size of the
 /// batch, fixed when it starts, so a run that stops early is still reported
 /// against what it set out to do. A batch never fails as a whole: an item that
@@ -539,13 +541,19 @@ impl MutationOp {
     }
 }
 
-fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+/// Fails with `Interrupted` once `watcher` says the transfer is cancelled.
+pub fn halt_if_cancelled(watcher: &dyn Observer) -> io::Result<()> {
     if watcher.cancelled() {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "transfer cancelled",
         ));
     }
+    Ok(())
+}
+
+fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+    halt_if_cancelled(watcher)?;
 
     // symlink_metadata does not follow links, which is what stops a symlink
     // loop from being walked into.
@@ -565,9 +573,7 @@ fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Res
         }
         Ok(())
     } else {
-        let bytes = fs::copy(from, to)?;
-        watcher.copied(from, bytes);
-        Ok(())
+        copy_file(from, to, watcher)
     }
 }
 
