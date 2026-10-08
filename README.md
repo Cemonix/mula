@@ -59,7 +59,7 @@ These are the ones worth knowing first.
 
 | Key | |
 | --- | --- |
-| `F1` | Help — works in every mode, over whatever is on screen |
+| `F1` | Help — works in every mode, over whatever is on screen; type to search it |
 | `Tab` | Focus the other panel |
 | `Enter` | Enter a directory, or open a file with what belongs to it |
 | `Space` | Mark or unmark the item under the cursor |
