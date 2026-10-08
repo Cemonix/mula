@@ -92,8 +92,9 @@ impl<'a> InfoBar<'a> {
     const FILTER_WIDTH: usize = 20;
 
     /// One frame per tick of the main loop. It turns whether or not the bar
-    /// moves, which is the whole point: a single huge file leaves the bar
-    /// still, and only this says the copy is alive rather than wedged.
+    /// moves, which is the whole point: a large file going into an archive,
+    /// or a disk that has stopped answering, leaves the bar still, and only
+    /// this says the job is alive rather than wedged.
     const SPINNER: [&'static str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
     pub fn new() -> Self {
