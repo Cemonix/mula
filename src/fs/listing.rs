@@ -5,6 +5,9 @@
 //! costs nothing to throw away. What arrives is therefore always the answer to
 //! the last question asked, and the pane never has to tell two apart.
 //!
+//! A listing also carries the free space of the volume it was read on, one
+//! `statvfs` behind the `read_dir`.
+//!
 //! One reader instance per panel, not one for the role. `Reader` is last wins,
 //! and `refresh_panes` asks both panels at once — a shared counter would drop
 //! the first answer and leave that panel waiting for a generation that never
@@ -72,16 +75,26 @@ impl ReadJob for Listing {
     }
 }
 
-/// Reads `path` as a directory, and works out what it is instead when it is
-/// not one.
+/// Reads `path` as a directory, with the free space of the volume it is on,
+/// and works out what it is instead when it is not one.
 fn read(path: Arc<Path>, detail: Detail) -> io::Result<Listed> {
     match Directory::read(Arc::clone(&path), detail) {
-        Ok(directory) => Ok(Listed::Directory(directory)),
+        Ok(directory) => Ok(Listed::Directory(
+            directory.with_free(free_space(&path).ok()),
+        )),
         Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
             Ok(Listed::NotADirectory(kind_of(&path)?))
         }
         Err(e) => Err(e),
     }
+}
+
+/// Bytes the volume holding `path` has left for an unprivileged user: the
+/// blocks `statvfs` counts as available, which leave out the reserve kept for
+/// root.
+fn free_space(path: &Path) -> io::Result<u64> {
+    let stat = rustix::fs::statvfs(path)?;
+    Ok(stat.f_bavail.saturating_mul(stat.f_frsize))
 }
 
 /// What `path` is, for a path that is known not to be a directory.
@@ -141,6 +154,17 @@ mod listing_tests {
 
         // The parent leads the listing, so the two files sit behind it.
         assert_eq!(directory.len(), 3);
+    }
+
+    #[test]
+    fn a_listing_comes_back_with_the_free_space_of_its_volume() {
+        let tree = TempTree::new();
+
+        let Listed::Directory(directory) = listed(tree.path()).unwrap() else {
+            panic!("the directory did not come back as a listing");
+        };
+
+        assert!(directory.free().is_some_and(|free| free > 0));
     }
 
     /// Sends `path` and waits for what came back, the way the main loop would.
