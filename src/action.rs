@@ -38,6 +38,9 @@ pub enum Action {
     },
     /// Applies the op to every item the focused panel is showing.
     MarkVisible(MarkOp),
+    /// Opens the prompt for a pattern, to apply the op to the items shown
+    /// whose names match it.
+    MarkMatching(MarkOp),
     Clear,
     Transfer {
         op: TransferOp,

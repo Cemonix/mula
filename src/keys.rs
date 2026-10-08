@@ -394,6 +394,20 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Unmarks what the panel shows marked, and marks the rest of it",
     },
     Entry {
+        name: "mark.matching",
+        action: Action::MarkMatching(MarkOp::Mark),
+        keys: &[KeyBinding::plain(KeyCode::Char('+'))],
+        bar: None,
+        help: "Marks the items shown whose names match a pattern, with * and ?",
+    },
+    Entry {
+        name: "unmark.matching",
+        action: Action::MarkMatching(MarkOp::Unmark),
+        keys: &[KeyBinding::plain(KeyCode::Char('-'))],
+        bar: None,
+        help: "Unmarks the items shown whose names match a pattern",
+    },
+    Entry {
         name: "panel.clear",
         action: Action::Clear,
         keys: &[KeyBinding::plain(KeyCode::Esc)],
