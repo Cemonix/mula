@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -27,14 +29,51 @@ pub enum Counts {
     /// Drawn as `6 / 12`.
     Items { done: usize, total: usize },
     /// Drawn in the sizes the listing uses, as `1.2G / 4.5G`.
-    Bytes { done: u64, total: u64 },
+    Bytes {
+        done: u64,
+        total: u64,
+        /// `None` draws no speed segment at all.
+        speed: Option<Speed>,
+    },
 }
 
 impl Counts {
     fn text(self) -> String {
         match self {
             Counts::Items { done, total } => format!("{done} / {total}"),
-            Counts::Bytes { done, total } => format!("{} / {}", bytes(done), bytes(total)),
+            Counts::Bytes { done, total, .. } => {
+                format!("{} / {}", bytes(done), bytes(total))
+            }
+        }
+    }
+}
+
+/// How fast the bytes are going and how long the rest will take, drawn as
+/// `85M/s · 0:42`.
+#[derive(Clone, Copy, Debug)]
+pub struct Speed {
+    pub per_second: u64,
+    /// `None` draws the speed alone.
+    pub left: Option<Duration>,
+}
+
+impl Speed {
+    fn text(self) -> String {
+        let speed = format!("{}/s", bytes(self.per_second));
+        match self.left {
+            Some(left) => format!("{speed} · {}", Self::clock(left)),
+            None => speed,
+        }
+    }
+
+    /// `m:ss` under an hour, `h:mm:ss` from one up.
+    fn clock(left: Duration) -> String {
+        let seconds = left.as_secs();
+        let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+        if hours > 0 {
+            format!("{hours}:{minutes:02}:{seconds:02}")
+        } else {
+            format!("{minutes}:{seconds:02}")
         }
     }
 }
@@ -180,6 +219,18 @@ impl<'a> InfoBar<'a> {
             ]);
         }
 
+        // Behind the marks and the queue: those are what the next operation
+        // and the ones waiting will act on, the speed only says how soon.
+        if let Some(ProgressView {
+            counts: Counts::Bytes {
+                speed: Some(speed), ..
+            },
+            ..
+        }) = self.progress
+        {
+            segments.push(vec![Span::raw(speed.text())]);
+        }
+
         // Last, so a row too narrow for everything drops the hint before it
         // drops live numbers: the key is learnt once, the counts are not.
         if let (Some(progress), Some(key)) = (self.progress, self.cancel_key)
@@ -282,14 +333,81 @@ mod infobar_tests {
     fn a_job_that_weighs_its_bytes_counts_them_in_sizes() {
         let copying = ProgressView {
             counts: Counts::Bytes {
-                done: 3 * 1024 * 1024,
-                total: 5 * 1024 * 1024 * 1024,
+                done: 3 * MIB,
+                total: 5 * 1024 * MIB,
+                speed: None,
             },
             ..halfway()
         };
 
         let row = render(InfoBar::new().progress(Some(copying)), 80);
         assert!(row.ends_with("file.txt | 3.0M / 5.0G"), "{row}");
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    /// Three of five gibibytes copied at `speed`.
+    fn copying(speed: Option<Speed>) -> ProgressView<'static> {
+        ProgressView {
+            counts: Counts::Bytes {
+                done: 3 * 1024 * MIB,
+                total: 5 * 1024 * MIB,
+                speed,
+            },
+            ..halfway()
+        }
+    }
+
+    fn at_85m(left: Option<Duration>) -> Option<Speed> {
+        Some(Speed {
+            per_second: 85 * MIB,
+            left,
+        })
+    }
+
+    #[test]
+    fn a_job_that_knows_its_speed_draws_it_after_the_sizes() {
+        let progress = copying(at_85m(Some(Duration::from_secs(42))));
+        let row = render(InfoBar::new().progress(Some(progress)), 80);
+        assert!(row.ends_with("3.0G / 5.0G | 85M/s · 0:42"), "{row}");
+    }
+
+    #[test]
+    fn a_speed_with_nothing_to_go_by_is_drawn_alone() {
+        let row = render(InfoBar::new().progress(Some(copying(at_85m(None)))), 80);
+        assert!(row.ends_with("3.0G / 5.0G | 85M/s"), "{row}");
+    }
+
+    #[test]
+    fn an_hour_or_more_left_is_drawn_with_its_hours() {
+        assert_eq!(
+            Speed::clock(Duration::from_secs(3 * 3600 + 5 * 60 + 9)),
+            "3:05:09"
+        );
+        assert_eq!(Speed::clock(Duration::from_secs(59 * 60 + 59)), "59:59");
+    }
+
+    #[test]
+    fn a_narrow_row_drops_the_speed_before_the_sizes() {
+        let progress = copying(at_85m(Some(Duration::from_secs(42))));
+        let wide = render(InfoBar::new().progress(Some(progress)), 80);
+        let sizes_end = wide.find("5.0G").unwrap() + "5.0G".len();
+        // Wide enough for everything up to the sizes and not one cell more.
+        let width = Span::raw(&wide[..sizes_end]).width() as u16;
+
+        let row = render(InfoBar::new().progress(Some(progress)), width);
+        assert!(row.ends_with("3.0G / 5.0G"), "{row}");
+        assert!(!row.contains("/s"), "{row}");
+    }
+
+    #[test]
+    fn the_speed_comes_after_the_marks() {
+        let progress = copying(at_85m(Some(Duration::from_secs(42))));
+        let row = render(InfoBar::new().progress(Some(progress)).marked(3), 80);
+        assert!(
+            row.ends_with(&format!("5.0G | {} | 85M/s · 0:42", marked(3))),
+            "{row}"
+        );
     }
 
     #[test]

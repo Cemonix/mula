@@ -45,7 +45,7 @@ use crate::{
             surface::{Placement, Surface, Wanted},
         },
         help::{self, Help, HelpMsg, HelpState},
-        infobar::{Counts, InfoBar, ProgressView},
+        infobar::{Counts, InfoBar, ProgressView, Speed},
         keybar::Keybar,
         pane::{Entered, Pane, PaneError},
         panel::Panel,
@@ -686,7 +686,14 @@ impl App {
             ratio: progress.ratio(),
             current: &progress.current,
             counts: match progress.measure {
-                Measure::Bytes { done, total, .. } => Counts::Bytes { done, total },
+                Measure::Bytes { done, total, rate } => Counts::Bytes {
+                    done,
+                    total,
+                    speed: rate.map(|per_second| Speed {
+                        per_second,
+                        left: progress.left(),
+                    }),
+                },
                 Measure::Items => Counts::Items {
                     done: progress.items_done,
                     total: progress.items_total,
