@@ -85,16 +85,18 @@ impl ProcessedSummary {
     }
 }
 
-/// Watches a transfer while it runs. The transfer reports every entry it
-/// writes and asks before each one whether it should carry on, which is the
-/// only place a running transfer can be stopped: a single `fs::copy` is one
-/// syscall and cannot be interrupted from outside.
+/// Watches a transfer while it runs. The transfer reports bytes as they land
+/// and asks between them whether it should carry on, which is the only place a
+/// running transfer can be stopped.
 pub trait Observer {
-    /// Called once per file or symlink written, with the bytes it contributed.
-    fn entry_copied(&mut self, path: &Path, bytes: u64);
+    /// Called as the bytes of `path` land, any number of times for one entry:
+    /// a file copied in chunks reports every chunk, a clone or an archive entry
+    /// reports once. What one entry reports adds up to what it weighs, and an
+    /// entry that weighs nothing may report nothing.
+    fn copied(&mut self, path: &Path, bytes: u64);
 
-    /// Checked before every entry. `true` aborts the transfer, which then
-    /// removes what it has already written.
+    /// Checked before every entry and between the chunks of a file. `true`
+    /// aborts the transfer, which then removes what it has already written.
     fn cancelled(&self) -> bool;
 }
 
@@ -553,7 +555,7 @@ fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Res
         copy_symlink(from, to)?;
         // A recreated link writes only its own target string, which the
         // pre-walk did not count either.
-        watcher.entry_copied(from, 0);
+        watcher.copied(from, 0);
         Ok(())
     } else if file_type.is_dir() {
         fs::create_dir(to)?;
@@ -564,7 +566,7 @@ fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Res
         Ok(())
     } else {
         let bytes = fs::copy(from, to)?;
-        watcher.entry_copied(from, bytes);
+        watcher.copied(from, bytes);
         Ok(())
     }
 }
@@ -771,7 +773,7 @@ mod ops_tests {
     }
 
     impl Observer for Watcher {
-        fn entry_copied(&mut self, path: &Path, bytes: u64) {
+        fn copied(&mut self, path: &Path, bytes: u64) {
             self.entries.push((path.to_path_buf(), bytes));
         }
 

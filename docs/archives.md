@@ -54,7 +54,7 @@ to the end, so `Progress` would have needed an item count it did not know.
 That trouble comes from counting the wrong thing. The items of a batch are
 what was marked — for a transfer the marked files, for an unpack the marked
 archives — and the entries inside are a level below, the way the files inside
-a marked directory are. `Observer::entry_copied` already carries that level:
+a marked directory are. `Observer::copied` already carries that level:
 it moves the bar and puts the name of the entry being written on screen, while
 the count stays on the batch. So an unpack of three archives is `0 / 3`, the
 bar is filled by how far into the archive files the job has read, and the name
