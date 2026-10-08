@@ -38,7 +38,7 @@ use crate::{
         columns::Columns,
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
-        filter::{Filter, FilterMsg},
+        filter::{self, Filter, FilterMsg},
         finder::{FindMsg, Finder},
         graphics::{
             capabilities::Capabilities,
@@ -164,12 +164,16 @@ pub struct PendingPack {
 
 /// Where the text of a confirmed `Input` prompt goes: into a filesystem
 /// mutation, into an archive's name, into the title of the tab that was open
-/// for renaming, or into a path for the focused panel to go to.
+/// for renaming, into a pattern to mark by, or into a path for the focused
+/// panel to go to.
 #[derive(Debug, Clone)]
 pub enum InputTarget {
     Mutation(PendingMutation),
     Pack(PendingPack),
     RenameTab,
+    /// Applies the op to what the focused panel shows when the pattern is
+    /// confirmed, not when the prompt opened.
+    MarkMatching(MarkOp),
     /// Holds the directory a relative path is read from: the one the panel
     /// stood in when the prompt opened.
     Jump(Arc<Path>),
@@ -881,8 +885,22 @@ impl App {
                 self.move_cursor(nav_dir);
                 Ok(())
             }
-            Action::MarkAll => {
-                self.get_focused_tabs_mut().active_tab_mut().mark_visible();
+            Action::MarkVisible(op) => {
+                self.get_focused_tabs_mut()
+                    .active_tab_mut()
+                    .mark_visible(op, |_| true);
+                Ok(())
+            }
+            Action::MarkMatching(op) => {
+                let title = match op {
+                    MarkOp::Mark => "Mark matching",
+                    MarkOp::Unmark => "Unmark matching",
+                    MarkOp::Toggle => "Toggle matching",
+                };
+                self.mode = Mode::Input {
+                    prompt: Prompt::new(title),
+                    pending: InputTarget::MarkMatching(op),
+                };
                 Ok(())
             }
             // The filter first, then the marks. Two presses reach a clean
@@ -1186,6 +1204,12 @@ impl App {
                         InputTarget::Pack(pending) => self.queue_pack(pending, text),
                         InputTarget::RenameTab => {
                             self.get_focused_tabs_mut().active_tab_mut().rename(text);
+                            Ok(())
+                        }
+                        InputTarget::MarkMatching(op) => {
+                            self.get_focused_tabs_mut()
+                                .active_tab_mut()
+                                .mark_visible(op, |name| filter::matches(&text, name));
                             Ok(())
                         }
                         InputTarget::Jump(base) => {

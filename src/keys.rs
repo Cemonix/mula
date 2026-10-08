@@ -395,10 +395,31 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
     },
     Entry {
         name: "mark.all",
-        action: Action::MarkAll,
+        action: Action::MarkVisible(MarkOp::Mark),
         keys: &[KeyBinding::plain(KeyCode::Char('a'))],
         bar: None,
         help: "Marks every item the panel is showing",
+    },
+    Entry {
+        name: "mark.invert",
+        action: Action::MarkVisible(MarkOp::Toggle),
+        keys: &[KeyBinding::plain(KeyCode::Char('i'))],
+        bar: None,
+        help: "Unmarks what the panel shows marked, and marks the rest of it",
+    },
+    Entry {
+        name: "mark.matching",
+        action: Action::MarkMatching(MarkOp::Mark),
+        keys: &[KeyBinding::plain(KeyCode::Char('+'))],
+        bar: None,
+        help: "Marks the items shown whose names match a pattern, with * and ?",
+    },
+    Entry {
+        name: "unmark.matching",
+        action: Action::MarkMatching(MarkOp::Unmark),
+        keys: &[KeyBinding::plain(KeyCode::Char('-'))],
+        bar: None,
+        help: "Unmarks the items shown whose names match a pattern",
     },
     Entry {
         name: "panel.clear",
