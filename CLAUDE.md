@@ -221,6 +221,9 @@ is open again, not broken.
   read-only mode.
 - The worker never touches `App`; it sends `Progress`/`Done { summary }` and
   the main loop acts on them.
+- A file is copied by `copy_file`, never `fs::copy`: a clone where the volume
+  gives one, chunks otherwise, reported and cancellable between them. It
+  carries what `fs::copy` carried on each platform, no more and no less.
 
 **Preview**
 - The preview is a view toggle on `App`, never a `Mode`: browse keys and every

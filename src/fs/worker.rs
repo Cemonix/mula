@@ -505,7 +505,7 @@ impl<'a> Reporter<'a> {
 }
 
 impl Observer for Reporter<'_> {
-    fn entry_copied(&mut self, path: &Path, bytes: u64) {
+    fn copied(&mut self, path: &Path, bytes: u64) {
         self.item_bytes += bytes;
         // Inside a marked directory the name worth showing is the file being
         // written, not the directory the batch counts.

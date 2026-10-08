@@ -7,7 +7,10 @@ use ratatui::{
     widgets::Widget,
 };
 
-use crate::{keys::KeyBinding, ui};
+use crate::{
+    keys::KeyBinding,
+    ui::{self, columns::bytes},
+};
 
 /// What the caller has already worked out about the running job. The widget
 /// only lays it out; the ratio is computed where the counters live.
@@ -15,8 +18,25 @@ use crate::{keys::KeyBinding, ui};
 pub struct ProgressView<'a> {
     pub ratio: f64,
     pub current: &'a str,
-    pub done: usize,
-    pub total: usize,
+    pub counts: Counts,
+}
+
+/// What the text beside the bar counts, which is what the bar fills with.
+#[derive(Clone, Copy, Debug)]
+pub enum Counts {
+    /// Drawn as `6 / 12`.
+    Items { done: usize, total: usize },
+    /// Drawn in the sizes the listing uses, as `1.2G / 4.5G`.
+    Bytes { done: u64, total: u64 },
+}
+
+impl Counts {
+    fn text(self) -> String {
+        match self {
+            Counts::Items { done, total } => format!("{done} / {total}"),
+            Counts::Bytes { done, total } => format!("{} / {}", bytes(done), bytes(total)),
+        }
+    }
 }
 
 /// The row above the key bar. Draws the state of the focused tab and of the
@@ -72,8 +92,9 @@ impl<'a> InfoBar<'a> {
     const FILTER_WIDTH: usize = 20;
 
     /// One frame per tick of the main loop. It turns whether or not the bar
-    /// moves, which is the whole point: a single huge file leaves the bar
-    /// still, and only this says the copy is alive rather than wedged.
+    /// moves, which is the whole point: a large file going into an archive,
+    /// or a disk that has stopped answering, leaves the bar still, and only
+    /// this says the job is alive rather than wedged.
     const SPINNER: [&'static str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
     pub fn new() -> Self {
@@ -132,9 +153,7 @@ impl<'a> InfoBar<'a> {
                 ]);
             }
 
-            segments.push(vec![
-                Span::raw(format!("{} / {}", progress.done, progress.total)).bold(),
-            ]);
+            segments.push(vec![Span::raw(progress.counts.text()).bold()]);
         }
 
         // Ahead of the marks: a filter changes what the next operation will
@@ -255,9 +274,22 @@ mod infobar_tests {
         ProgressView {
             ratio: 0.5,
             current: "file.txt",
-            done: 6,
-            total: 12,
+            counts: Counts::Items { done: 6, total: 12 },
         }
+    }
+
+    #[test]
+    fn a_job_that_weighs_its_bytes_counts_them_in_sizes() {
+        let copying = ProgressView {
+            counts: Counts::Bytes {
+                done: 3 * 1024 * 1024,
+                total: 5 * 1024 * 1024 * 1024,
+            },
+            ..halfway()
+        };
+
+        let row = render(InfoBar::new().progress(Some(copying)), 80);
+        assert!(row.ends_with("file.txt | 3.0M / 5.0G"), "{row}");
     }
 
     #[test]

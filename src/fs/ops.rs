@@ -7,6 +7,8 @@ use std::{
 
 use thiserror::Error;
 
+use crate::fs::copy::copy_file;
+
 /// How a batch of filesystem operations ended. `total` is the size of the
 /// batch, fixed when it starts, so a run that stops early is still reported
 /// against what it set out to do. A batch never fails as a whole: an item that
@@ -85,16 +87,18 @@ impl ProcessedSummary {
     }
 }
 
-/// Watches a transfer while it runs. The transfer reports every entry it
-/// writes and asks before each one whether it should carry on, which is the
-/// only place a running transfer can be stopped: a single `fs::copy` is one
-/// syscall and cannot be interrupted from outside.
+/// Watches a transfer while it runs. The transfer reports bytes as they land
+/// and asks between them whether it should carry on, which is the only place a
+/// running transfer can be stopped.
 pub trait Observer {
-    /// Called once per file or symlink written, with the bytes it contributed.
-    fn entry_copied(&mut self, path: &Path, bytes: u64);
+    /// Called as the bytes of `path` land, any number of times for one entry:
+    /// a file copied in chunks reports every chunk, a clone or an archive entry
+    /// reports once. What one entry reports adds up to what it weighs, and an
+    /// entry that weighs nothing may report nothing.
+    fn copied(&mut self, path: &Path, bytes: u64);
 
-    /// Checked before every entry. `true` aborts the transfer, which then
-    /// removes what it has already written.
+    /// Checked before every entry and between the chunks of a file. `true`
+    /// aborts the transfer, which then removes what it has already written.
     fn cancelled(&self) -> bool;
 }
 
@@ -537,13 +541,19 @@ impl MutationOp {
     }
 }
 
-fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+/// Fails with `Interrupted` once `watcher` says the transfer is cancelled.
+pub fn halt_if_cancelled(watcher: &dyn Observer) -> io::Result<()> {
     if watcher.cancelled() {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "transfer cancelled",
         ));
     }
+    Ok(())
+}
+
+fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Result<()> {
+    halt_if_cancelled(watcher)?;
 
     // symlink_metadata does not follow links, which is what stops a symlink
     // loop from being walked into.
@@ -553,7 +563,7 @@ fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Res
         copy_symlink(from, to)?;
         // A recreated link writes only its own target string, which the
         // pre-walk did not count either.
-        watcher.entry_copied(from, 0);
+        watcher.copied(from, 0);
         Ok(())
     } else if file_type.is_dir() {
         fs::create_dir(to)?;
@@ -563,9 +573,7 @@ fn copy_recursive(from: &Path, to: &Path, watcher: &mut dyn Observer) -> io::Res
         }
         Ok(())
     } else {
-        let bytes = fs::copy(from, to)?;
-        watcher.entry_copied(from, bytes);
-        Ok(())
+        copy_file(from, to, watcher)
     }
 }
 
@@ -771,7 +779,7 @@ mod ops_tests {
     }
 
     impl Observer for Watcher {
-        fn entry_copied(&mut self, path: &Path, bytes: u64) {
+        fn copied(&mut self, path: &Path, bytes: u64) {
             self.entries.push((path.to_path_buf(), bytes));
         }
 

@@ -150,7 +150,7 @@ fn walk(
         return Ok(());
     }
 
-    watcher.entry_copied(from, metadata.len());
+    watcher.copied(from, metadata.len());
     Ok(())
 }
 
@@ -257,7 +257,7 @@ mod pack_tests {
     }
 
     impl Observer for Watcher {
-        fn entry_copied(&mut self, path: &Path, _bytes: u64) {
+        fn copied(&mut self, path: &Path, _bytes: u64) {
             self.entries.push(path.to_path_buf());
         }
 

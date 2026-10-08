@@ -9,10 +9,48 @@ Regular files have no non-blocking API. `epoll` and `kqueue` cannot watch
 them, so `tokio::fs` is a thread pool running the same blocking syscalls —
 the async syntax buys nothing a thread does not already give.
 
-Cancelling a copy is an `AtomicBool` checked between entries either way,
-because one `fs::copy` is a single syscall and cannot be interrupted part way.
-That is true under async too, so async would not make cancellation finer
-grained.
+Cancelling a copy is an `AtomicBool` checked between chunks either way,
+because one chunk is a syscall and cannot be interrupted part way. That is
+true under async too, so async would not make cancellation finer grained.
+
+## A file is copied in chunks, after a clone
+
+`fs::copy` was one call per file, so a 4 GB file held the bar still from its
+first byte to its last and a cancel waited for all of it. `copy_file` moves a
+file a mebibyte at a time instead, reports each one to the `Observer` and asks
+it about a cancel before the next — at a few tens of MB/s on a slow stick that
+is still a check every few dozen milliseconds, and the reports are thinned to
+the bar's own rate by `Reporter` anyway.
+
+A loop of ours would have thrown away the best thing `fs::copy` did on macOS.
+It tries `fclonefileat` first, and on one APFS volume that is the whole copy:
+instant, and taking no space until one side changes. So `copy_file` asks for
+the clone first and only a declined one — another volume, a filesystem that
+cannot clone, a name already taken, the same set std falls back on — reaches
+the chunks. A clone is reported whole, at once; it has nothing in between to
+report or to cancel.
+
+The chunks then have to carry what `fs::copy` carried. On macOS that was
+`fcopyfile` with `COPYFILE_ALL`: the data and, with it, the mode, owner and
+ACL, the extended attributes, the flags and the times. The data goes through
+our loop and the rest through `fcopyfile` with `COPYFILE_METADATA` after it, so
+the times written are the source's and not the moment the last chunk landed.
+Done that way round on an HFS-compressed system binary, the copy comes out
+uncompressed with the same bytes — the compression flag is not carried over
+onto data that is not compressed.
+
+On Linux `fs::copy` carried the permission bits and nothing else — no times —
+and so does `copy_file`. Its chunks go through `copy_file_range`, which keeps
+the data in the kernel and lets btrfs or XFS share the blocks the way a clone
+does, range by range, so there is no clone to try separately. Where the
+filesystems decline it, the rest of the file goes through a buffer of ours,
+which picks up at the offset the kernel left.
+
+A cancel part way through a file leaves that file part written, and it goes
+the way any failed item goes: `remove_partial` takes what was being placed —
+the file itself, or the staged name beside an overwrite — and what the batch
+finished before it stands. Nothing about cancelling changed but where it can
+land.
 
 ## One worker, not a pool
 

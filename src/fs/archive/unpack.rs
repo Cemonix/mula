@@ -175,7 +175,7 @@ fn from_zip(archive: &Path, root: &Path, watcher: &mut dyn Observer) -> io::Resu
         };
 
         match written {
-            Ok(()) => watcher.entry_copied(&at, weight),
+            Ok(()) => watcher.copied(&at, weight),
             // A name the archive uses twice. Whichever entry came second is
             // left out rather than put over the first: inside a staging
             // directory the only thing in the way is the run itself.
@@ -230,7 +230,7 @@ fn from_tar<R: Read>(
         // `unpack_in` canonicalises the destination's parent for every entry,
         // so a link written earlier cannot be the way out of `root`.
         match entry.unpack_in(root) {
-            Ok(true) => watcher.entry_copied(&at, 0),
+            Ok(true) => watcher.copied(&at, 0),
             Ok(false) => refused.push(name),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => refused.push(name),
             Err(e) => return Err(e),
@@ -365,9 +365,9 @@ impl<'a> Consumed<'a> {
 }
 
 impl Observer for Consumed<'_> {
-    fn entry_copied(&mut self, path: &Path, _bytes: u64) {
+    fn copied(&mut self, path: &Path, _bytes: u64) {
         let taken = self.read.get();
-        self.watcher.entry_copied(path, taken - self.reported);
+        self.watcher.copied(path, taken - self.reported);
         self.reported = taken;
     }
 
@@ -395,7 +395,7 @@ mod unpack_tests {
     }
 
     impl Observer for Watcher {
-        fn entry_copied(&mut self, path: &Path, _bytes: u64) {
+        fn copied(&mut self, path: &Path, _bytes: u64) {
             self.entries.push(path.to_path_buf());
         }
 
