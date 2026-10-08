@@ -223,6 +223,15 @@ pub fn table<'k>(
     table
 }
 
+/// The name a config gives `action`: the first catalogue entry carrying it, or
+/// `None` when no entry does.
+pub fn catalogue_name(action: &Action) -> Option<&'static str> {
+    BROWSE_ACTIONS
+        .iter()
+        .find(|entry| entry.action == *action)
+        .map(|entry| entry.name)
+}
+
 /// Returns the message the first matching binding carries, or `None` if the key is unbound.
 pub fn resolve<T: Copy>(bindings: &[Binding<T>], event: &KeyEvent) -> Option<T> {
     bindings
@@ -624,6 +633,20 @@ mod keys_tests {
         unique.dedup();
 
         assert_eq!(names, unique, "an action name is used twice");
+    }
+
+    /// The help finds an action's name by the action, so two entries carrying
+    /// one action would give the second the first one's name.
+    #[test]
+    fn every_action_is_in_the_catalogue_once() {
+        for entry in BROWSE_ACTIONS {
+            assert_eq!(
+                catalogue_name(&entry.action),
+                Some(entry.name),
+                "{} carries an action named before it",
+                entry.name
+            );
+        }
     }
 
     /// An action reachable two ways is still one entry in the bar, or the bar

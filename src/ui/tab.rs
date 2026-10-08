@@ -26,14 +26,14 @@ use crate::{
 };
 
 /// Which neighbour of the active tab becomes active, wrapping around the ends.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToggleDirection {
     Previous,
     Next,
 }
 
 /// What a mark action does to the item under the cursor.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MarkOp {
     Toggle,
     Mark,

@@ -5,20 +5,20 @@ use crate::{
 };
 
 /// Which way the cursor steps through a pane listing.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerticalDir {
     Up,
     Down,
 }
 
 /// Which end of a pane listing the cursor lands on, wherever it was before.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListEnd {
     First,
     Last,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Quit,
     CancelJob,

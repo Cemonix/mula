@@ -244,7 +244,7 @@ enum Pairing {
     Collision,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferOp {
     Copy,
     Move,
