@@ -686,7 +686,7 @@ impl App {
             ratio: progress.ratio(),
             current: &progress.current,
             counts: match progress.measure {
-                Measure::Bytes { done, total } => Counts::Bytes { done, total },
+                Measure::Bytes { done, total, .. } => Counts::Bytes { done, total },
                 Measure::Items => Counts::Items {
                     done: progress.items_done,
                     total: progress.items_total,

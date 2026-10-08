@@ -17,6 +17,7 @@ use crate::fs::{
         MutationError, MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp,
         Unfinished, tree_size,
     },
+    rate::Rate,
 };
 
 /// The envelope the queue carries: a piece of work and the tag its outcome has
@@ -181,13 +182,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             // items of wildly different sizes. It is a walk of `metadata`
             // calls, no data, and it warms the cache for the copy that follows.
             let sizes: Vec<u64> = items.iter().map(|item| tree_size(&item.from)).collect();
-            reporter.begin(
-                items.len(),
-                Measure::Bytes {
-                    done: 0,
-                    total: sizes.iter().sum(),
-                },
-            );
+            reporter.begin(items.len(), Measure::bytes(sizes.iter().sum()));
 
             // Read in the same breath as the weighing and before a byte is
             // written, so what the batch writes itself is never something it
@@ -284,7 +279,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             format,
         } => {
             let total = items.iter().map(|item| tree_size(item)).sum();
-            reporter.begin(1, Measure::Bytes { done: 0, total });
+            reporter.begin(1, Measure::bytes(total));
             reporter.start_item(&archive, total);
 
             let mut summary = ProcessedSummary::new(1);
@@ -315,13 +310,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                 .iter()
                 .map(|item| item.metadata().map(|meta| meta.len()).unwrap_or_default())
                 .collect();
-            reporter.begin(
-                items.len(),
-                Measure::Bytes {
-                    done: 0,
-                    total: sizes.iter().sum(),
-                },
-            );
+            reporter.begin(items.len(), Measure::bytes(sizes.iter().sum()));
 
             let mut summary = ProcessedSummary::new(items.len());
             let mut queue = items.into_iter().zip(sizes);
@@ -427,6 +416,8 @@ struct Reporter<'a> {
     base_bytes: u64,
     item_bytes: u64,
     item_size: u64,
+    /// Fed the byte count with every message sent, at the instant it is sent.
+    rate: Rate,
     last_sent: Option<Instant>,
 }
 
@@ -447,6 +438,7 @@ impl<'a> Reporter<'a> {
             base_bytes: 0,
             item_bytes: 0,
             item_size: 0,
+            rate: Rate::new(),
             last_sent: None,
         }
     }
@@ -491,8 +483,10 @@ impl<'a> Reporter<'a> {
         }
         self.last_sent = Some(now);
 
-        if let Measure::Bytes { done, .. } = &mut self.measure {
+        if let Measure::Bytes { done, rate, .. } = &mut self.measure {
             *done = self.base_bytes + self.item_bytes;
+            self.rate.record(now, *done);
+            *rate = self.rate.per_second();
         }
 
         let _ = self.msgs.send(WorkerMsg::Progress(Progress {
