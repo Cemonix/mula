@@ -20,7 +20,7 @@ use crate::{
     fs::{
         archive::contents::{Entry, EntryKind},
         directory::DirEntryKind,
-        preview::{Bitmap, Content, LinkTarget, Refused},
+        preview::{Bitmap, Content, Ink, LinkTarget, Refused, Run},
     },
     ui::{
         self,
@@ -220,14 +220,7 @@ impl<'a> PreviewPane<'a> {
                 let mut drawn: Vec<Line> = lines
                     .iter()
                     .take(rows)
-                    .map(|line| {
-                        Line::from(
-                            line.runs
-                                .iter()
-                                .map(|run| Span::raw(run.text.as_str()))
-                                .collect::<Vec<_>>(),
-                        )
-                    })
+                    .map(|line| Line::from(line.runs.iter().map(run_span).collect::<Vec<_>>()))
                     .collect();
                 if *clipped || lines.len() > drawn.len() {
                     drawn.truncate(rows.saturating_sub(1));
@@ -308,6 +301,39 @@ fn muted(text: &str) -> Line<'_> {
         text,
         Style::new().fg(PreviewPane::MUTED).italic(),
     ))
+}
+
+/// One run of a text line as a span in its ink. A plain run carries no
+/// colour at all, so it is drawn in whatever the terminal's foreground is.
+fn run_span(run: &Run) -> Span<'_> {
+    match run.ink {
+        Ink::Plain => Span::raw(run.text.as_str()),
+        Ink::Palette(index) => Span::styled(run.text.as_str(), Style::new().fg(palette(index))),
+    }
+}
+
+/// A palette index as a ratatui colour: the sixteen ANSI colours by name, the
+/// rest of the 256 by number.
+fn palette(index: u8) -> Color {
+    match index {
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::Gray,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
+        10 => Color::LightGreen,
+        11 => Color::LightYellow,
+        12 => Color::LightBlue,
+        13 => Color::LightMagenta,
+        14 => Color::LightCyan,
+        15 => Color::White,
+        index => Color::Indexed(index),
+    }
 }
 
 /// How many bytes fit on one dump row of this width. A row is a six-digit
@@ -510,6 +536,7 @@ mod preview_pane_tests {
     use crate::fs::{
         archive::contents::Contents,
         directory::{Detail, DirEntry, Directory},
+        highlight::Highlighting,
         preview::TextLine,
     };
 
@@ -567,6 +594,96 @@ mod preview_pane_tests {
         let rows = rows(&pane, 30, 5);
         assert_eq!(rows[1], "first");
         assert_eq!(rows[2], "second");
+    }
+
+    /// The foreground colours of every cell inside the border, without
+    /// repeats.
+    fn inks_drawn(buf: &Buffer) -> Vec<Color> {
+        let area = buf.area;
+        let mut colours: Vec<Color> = Vec::new();
+        for y in 1..area.height - 1 {
+            for x in 1..area.width - 1 {
+                let fg = buf[(x, y)].fg;
+                if !colours.contains(&fg) {
+                    colours.push(fg);
+                }
+            }
+        }
+        colours
+    }
+
+    /// Text painted the way the reader paints it, for the file `name`.
+    fn painted(name: &str, source: &str) -> Content {
+        let highlighting = Highlighting::load();
+        let lines = match highlighting.painter(Path::new(name), "") {
+            Some(mut painter) => source
+                .lines()
+                .map(|line| painter.paint(line, 512).expect("the grammar copes"))
+                .collect(),
+            None => source
+                .lines()
+                .map(|line| TextLine::plain(line.to_string()))
+                .collect(),
+        };
+        Content::Text {
+            lines,
+            clipped: false,
+        }
+    }
+
+    #[test]
+    fn a_known_language_is_drawn_in_more_than_one_colour() {
+        let content = painted("main.rs", "// hello\nfn main() {\n    let n = 42;\n}\n");
+        let path = PathBuf::from("main.rs");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let buf = rendered(&pane, 30, 7);
+        let colours = inks_drawn(&buf);
+        assert!(colours.len() > 1, "colours were {colours:?}");
+        assert!(
+            colours
+                .iter()
+                .all(|colour| !matches!(colour, Color::Rgb(..))),
+            "a colour left the terminal's palette: {colours:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_language_is_drawn_in_the_terminal_foreground() {
+        let content = painted("notes.unknown-format", "fn main() {\n    let n = 42;\n}\n");
+        let path = PathBuf::from("notes.unknown-format");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let buf = rendered(&pane, 30, 6);
+        assert_eq!(inks_drawn(&buf), [Color::Reset]);
+    }
+
+    /// Bytes with a NUL in them are a dump whatever they spell, and a dump is
+    /// drawn in its own three colours and no others.
+    #[test]
+    fn binary_is_never_drawn_in_a_grammar_s_colours() {
+        let content = Content::Binary {
+            bytes: b"fn main() { let n = \"\x00\"; }".to_vec(),
+            clipped: false,
+        };
+        let path = PathBuf::from("main.rs");
+        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+
+        let buf = rendered(&pane, 60, 6);
+        for colour in inks_drawn(&buf) {
+            assert!(
+                [Color::Reset, PreviewPane::MUTED, PreviewPane::HEX].contains(&colour),
+                "a dump drew {colour:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_palette_index_keeps_its_place_in_the_terminal_s_palette() {
+        assert_eq!(palette(1), Color::Red);
+        assert_eq!(palette(8), Color::DarkGray);
+        assert_eq!(palette(15), Color::White);
+        assert_eq!(palette(200), Color::Indexed(200));
     }
 
     #[test]
