@@ -137,6 +137,48 @@ impl Bitmap {
     }
 }
 
+/// The colour a piece of text is drawn in, named by its place in the
+/// terminal's palette rather than by its value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ink {
+    /// The terminal's own foreground.
+    Plain,
+    /// An index into the terminal's palette. The first sixteen are the ANSI
+    /// colours.
+    Palette(u8),
+}
+
+/// A stretch of one line drawn in one colour.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    pub text: String,
+    pub ink: Ink,
+}
+
+/// One line of a text file as the runs it is drawn in, left to right.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextLine {
+    pub runs: Vec<Run>,
+}
+
+impl TextLine {
+    /// A line in the terminal's own colour throughout.
+    pub fn plain(text: String) -> Self {
+        Self {
+            runs: vec![Run {
+                text,
+                ink: Ink::Plain,
+            }],
+        }
+    }
+
+    /// The text of the line with its colours left out.
+    #[cfg(test)]
+    pub fn text(&self) -> String {
+        self.runs.iter().map(|run| run.text.as_str()).collect()
+    }
+}
+
 /// Why there is nothing to show. Kept as a reason rather than as a sentence,
 /// so the wording lives with the widget that draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,7 +209,7 @@ pub enum Content {
         points_to: LinkTarget,
     },
     Text {
-        lines: Vec<String>,
+        lines: Vec<TextLine>,
         /// Set when the file goes on past what was read or kept.
         clipped: bool,
     },
@@ -395,10 +437,10 @@ fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
         &bytes[..]
     };
 
-    let mut lines: Vec<String> = String::from_utf8_lossy(text)
+    let mut lines: Vec<TextLine> = String::from_utf8_lossy(text)
         .lines()
         .take(limits.max_lines)
-        .map(|line| printable(line, limits.max_line_chars))
+        .map(|line| TextLine::plain(printable(line, limits.max_line_chars)))
         .collect();
     // A file that ends without a newline still has that last line; one that is
     // clipped mid-line has a line the file does not end at.
@@ -484,7 +526,8 @@ mod preview_tests {
         let Content::Text { lines, clipped } = read_at(&path, &limits()) else {
             panic!("a text file did not read as text");
         };
-        assert_eq!(lines, ["first", "second"]);
+        let texts: Vec<String> = lines.iter().map(TextLine::text).collect();
+        assert_eq!(texts, ["first", "second"]);
         assert!(!clipped);
     }
 
@@ -556,7 +599,7 @@ mod preview_tests {
         let Content::Text { lines, .. } = read_at(&path, &narrow) else {
             panic!("a wide text file did not read as text");
         };
-        assert_eq!(lines[0], "ababababab");
+        assert_eq!(lines[0].text(), "ababababab");
     }
 
     #[test]

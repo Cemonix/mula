@@ -220,7 +220,14 @@ impl<'a> PreviewPane<'a> {
                 let mut drawn: Vec<Line> = lines
                     .iter()
                     .take(rows)
-                    .map(|line| Line::from(Span::raw(line.as_str())))
+                    .map(|line| {
+                        Line::from(
+                            line.runs
+                                .iter()
+                                .map(|run| Span::raw(run.text.as_str()))
+                                .collect::<Vec<_>>(),
+                        )
+                    })
                     .collect();
                 if *clipped || lines.len() > drawn.len() {
                     drawn.truncate(rows.saturating_sub(1));
@@ -503,6 +510,7 @@ mod preview_pane_tests {
     use crate::fs::{
         archive::contents::Contents,
         directory::{Detail, DirEntry, Directory},
+        preview::TextLine,
     };
 
     /// Renders into a buffer and gives the rows back as strings, without the
@@ -547,7 +555,10 @@ mod preview_pane_tests {
     #[test]
     fn text_is_drawn_line_by_line() {
         let content = Content::Text {
-            lines: vec!["first".into(), "second".into()],
+            lines: vec![
+                TextLine::plain("first".into()),
+                TextLine::plain("second".into()),
+            ],
             clipped: false,
         };
         let path = PathBuf::from("notes.txt");
@@ -561,7 +572,9 @@ mod preview_pane_tests {
     #[test]
     fn a_clipped_file_says_so_on_the_last_row_it_has() {
         let content = Content::Text {
-            lines: (0..20).map(|i| format!("line {i}")).collect(),
+            lines: (0..20)
+                .map(|i| TextLine::plain(format!("line {i}")))
+                .collect(),
             clipped: true,
         };
         let path = PathBuf::from("big.txt");
