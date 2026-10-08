@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use image::{ImageFormat, ImageReader};
@@ -25,6 +25,7 @@ use crate::fs::{
         format,
     },
     directory::{Detail, Directory},
+    highlight::Highlighting,
     reader::{Live, Outbox, ReadJob},
 };
 
@@ -74,6 +75,23 @@ impl Default for Limits {
             max_source_side: 20_000,
             max_bitmap_side: 512,
             max_archive_entries: 500,
+        }
+    }
+}
+
+/// What the preview reader keeps for its whole life: the bounds it was started
+/// with, and the grammars, loaded on the first text file it is asked for.
+pub struct Config {
+    pub limits: Limits,
+    highlighting: OnceLock<Highlighting>,
+}
+
+impl Config {
+    /// A reader's setup with nothing loaded yet.
+    pub fn new(limits: Limits) -> Self {
+        Self {
+            limits,
+            highlighting: OnceLock::new(),
         }
     }
 }
@@ -231,11 +249,11 @@ pub enum Content {
 }
 
 impl ReadJob for Preview {
-    type Config = Limits;
+    type Config = Config;
     type Msg = Content;
 
-    fn run(self, limits: &Limits, live: &Live<'_>, out: &Outbox<'_, Content>) {
-        if let Some(content) = read(&self.path, limits, live) {
+    fn run(self, config: &Config, live: &Live<'_>, out: &Outbox<'_, Content>) {
+        if let Some(content) = read(&self.path, config, live) {
             out.send(content);
         }
     }
@@ -247,7 +265,8 @@ impl ReadJob for Preview {
 /// The kind of the path is settled from its metadata before anything is
 /// opened: a fifo or a device would block `File::open` for as long as nobody
 /// writes to it, and the thread would never come back.
-fn read(path: &Path, limits: &Limits, live: &Live<'_>) -> Option<Content> {
+fn read(path: &Path, config: &Config, live: &Live<'_>) -> Option<Content> {
+    let limits = &config.limits;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(e) => return Some(Content::Unreadable(e.to_string())),
@@ -316,7 +335,7 @@ fn read(path: &Path, limits: &Limits, live: &Live<'_>) -> Option<Content> {
     }
 
     let clipped = metadata.len() > bytes.len() as u64;
-    Some(classify(bytes, clipped, limits))
+    classify(path, bytes, clipped, config, live)
 }
 
 /// The format the first bytes of a file announce, or `None` for anything that
@@ -423,9 +442,21 @@ pub fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Er
 
 /// Shapes bytes that are not an image. A NUL byte in the prefix means binary;
 /// anything else is drawn as text, however little of it is valid UTF-8.
-fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
+///
+/// Text is coloured by the grammar `path` and its first line name, loading the
+/// grammars on the reader's first text file. A line the grammar fails on, and
+/// every line after it, is drawn uncoloured. `None` once the cursor has moved
+/// on, which is asked before every line.
+fn classify(
+    path: &Path,
+    bytes: Vec<u8>,
+    clipped: bool,
+    config: &Config,
+    live: &Live<'_>,
+) -> Option<Content> {
+    let limits = &config.limits;
     if !is_text(&bytes) {
-        return Content::Binary { bytes, clipped };
+        return Some(Content::Binary { bytes, clipped });
     }
 
     // A prefix can end in the middle of a multi-byte character. Trimming it
@@ -437,11 +468,30 @@ fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
         &bytes[..]
     };
 
-    let mut lines: Vec<TextLine> = String::from_utf8_lossy(text)
-        .lines()
-        .take(limits.max_lines)
-        .map(|line| TextLine::plain(printable(line, limits.max_line_chars)))
-        .collect();
+    let text = String::from_utf8_lossy(text);
+    let mut painter = config
+        .highlighting
+        .get_or_init(Highlighting::load)
+        .painter(path, text.lines().next().unwrap_or_default());
+
+    let mut lines = Vec::new();
+    for line in text.lines().take(limits.max_lines) {
+        if live.cancelled() {
+            return None;
+        }
+
+        let painted = match &mut painter {
+            Some(painter) => painter.paint(line, limits.max_line_chars),
+            None => None,
+        };
+        lines.push(match painted {
+            Some(painted) => painted,
+            None => {
+                painter = None;
+                TextLine::plain(printable(line, limits.max_line_chars))
+            }
+        });
+    }
     // A file that ends without a newline still has that last line; one that is
     // clipped mid-line has a line the file does not end at.
     let more = clipped || lines.len() == limits.max_lines;
@@ -449,10 +499,10 @@ fn classify(bytes: Vec<u8>, clipped: bool, limits: &Limits) -> Content {
         lines.pop();
     }
 
-    Content::Text {
+    Some(Content::Text {
         lines,
         clipped: more,
-    }
+    })
 }
 
 /// The length of the longest prefix of `bytes` that does not end part way
@@ -483,7 +533,7 @@ fn whole_chars(bytes: &[u8]) -> usize {
 
 /// Turns one line into something a terminal can draw: tabs become spaces, the
 /// remaining control characters are dropped, and the line is cut to `max_chars`.
-fn printable(line: &str, max_chars: usize) -> String {
+pub(super) fn printable(line: &str, max_chars: usize) -> String {
     let mut out = String::new();
 
     for c in line.chars() {
@@ -514,8 +564,65 @@ mod preview_tests {
 
     /// Reads a path the way the job does, with nothing cancelled.
     fn read_at(path: &Path, limits: &Limits) -> Content {
+        read_with(path, &Config::new(limits.clone()))
+    }
+
+    /// Reads a path through a config the test keeps, so it can look at what
+    /// the read left loaded.
+    fn read_with(path: &Path, config: &Config) -> Content {
         let latest = AtomicU64::new(0);
-        read(path, limits, &Live::at(&latest, 0)).expect("nothing was cancelled")
+        read(path, config, &Live::at(&latest, 0)).expect("nothing was cancelled")
+    }
+
+    #[test]
+    fn a_known_language_comes_back_in_more_than_one_ink() {
+        let tree = TempTree::new();
+        let source = "// greeting\nfn main() {\n    println!(\"hi\");\n}\n";
+        let path = tree.make_file("main.rs", source);
+
+        let Content::Text { lines, .. } = read_at(&path, &limits()) else {
+            panic!("a source file did not read as text");
+        };
+        let texts: Vec<String> = lines.iter().map(TextLine::text).collect();
+        assert_eq!(texts, source.lines().collect::<Vec<_>>());
+
+        let mut inks: Vec<Ink> = lines
+            .iter()
+            .flat_map(|line| &line.runs)
+            .map(|run| run.ink)
+            .collect();
+        inks.sort_by_key(|ink| match ink {
+            Ink::Plain => None,
+            Ink::Palette(index) => Some(*index),
+        });
+        inks.dedup();
+        assert!(inks.len() > 1, "inks were {inks:?}");
+    }
+
+    #[test]
+    fn an_unknown_language_comes_back_plain() {
+        let tree = TempTree::new();
+        let path = tree.make_file("notes.unknown-format", "first\nsecond\n");
+
+        let Content::Text { lines, .. } = read_at(&path, &limits()) else {
+            panic!("a text file did not read as text");
+        };
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.runs.len() == 1 && line.runs[0].ink == Ink::Plain),
+            "lines were {lines:?}"
+        );
+    }
+
+    #[test]
+    fn binary_content_never_loads_the_grammars() {
+        let tree = TempTree::new();
+        let path = tree.make_file("data.rs", "fn\u{0}main");
+        let config = Config::new(limits());
+
+        assert!(matches!(read_with(&path, &config), Content::Binary { .. }));
+        assert!(config.highlighting.get().is_none());
     }
 
     #[test]
@@ -677,7 +784,7 @@ mod preview_tests {
         // The counter has moved on, which is what a newer request leaves
         // behind for a job that is already running.
         let latest = AtomicU64::new(2);
-        assert!(read(&path, &limits(), &Live::at(&latest, 1)).is_none());
+        assert!(read(&path, &Config::new(limits()), &Live::at(&latest, 1)).is_none());
     }
 
     #[test]
