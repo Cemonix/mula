@@ -57,32 +57,38 @@ impl Filter {
         self.text.is_empty()
     }
 
-    /// Whether `name` matches the filter, ignoring case.
-    ///
-    /// The filter is a pattern over the whole name, where `*` stands for any
-    /// run of characters and `?` for exactly one. A pattern holding neither is
-    /// read as `*pattern*`, so three letters go on finding a name by its
-    /// middle — which is the whole reason to type three letters — while
-    /// `*.log` means the extension and not merely those characters somewhere.
-    ///
-    /// One rule rather than two: the plain case is the wildcard case with the
-    /// stars left implied.
+    /// Whether `name` matches the filter, by the rule of [`matches`].
     pub fn matches(&self, name: &str) -> bool {
-        if self.text.is_empty() {
-            return true;
-        }
-
-        let pattern = self.text.to_lowercase();
-        let pattern = match pattern.contains(['*', '?']) {
-            true => pattern,
-            false => format!("*{pattern}*"),
-        };
-
-        matches_pattern(
-            &pattern.chars().collect::<Vec<char>>(),
-            &name.to_lowercase().chars().collect::<Vec<char>>(),
-        )
+        matches(&self.text, name)
     }
+}
+
+/// Whether `name` matches `pattern`, ignoring case. An empty pattern matches
+/// every name.
+///
+/// The pattern is over the whole name, where `*` stands for any run of
+/// characters and `?` for exactly one. A pattern holding neither is read as
+/// `*pattern*`, so three letters go on finding a name by its middle — which is
+/// the whole reason to type three letters — while `*.log` means the extension
+/// and not merely those characters somewhere.
+///
+/// One rule rather than two: the plain case is the wildcard case with the
+/// stars left implied.
+pub fn matches(pattern: &str, name: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+
+    let pattern = pattern.to_lowercase();
+    let pattern = match pattern.contains(['*', '?']) {
+        true => pattern,
+        false => format!("*{pattern}*"),
+    };
+
+    matches_pattern(
+        &pattern.chars().collect::<Vec<char>>(),
+        &name.to_lowercase().chars().collect::<Vec<char>>(),
+    )
 }
 
 /// Matches `name` against `pattern` from end to end.
