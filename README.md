@@ -64,6 +64,8 @@ These are the ones worth knowing first.
 | `Enter` | Enter a directory, or open a file with what belongs to it |
 | `Space` | Mark or unmark the item under the cursor |
 | `a` | Mark everything the panel is showing |
+| `i` | Invert the marks of what the panel is showing |
+| `+` / `-` | Mark / unmark the items shown whose names match a pattern, like `*.jpg` |
 | `g` / `Shift+G` | Jump to the first / last item |
 | `r` | Rename |
 | `v` / `e` | Open in `$PAGER` / `$EDITOR` |
@@ -92,8 +94,9 @@ These are the ones worth knowing first.
 - **Tabs in each panel**, each with its own directory, cursor and marks, and a
   name you can change so a long path is one word.
 - **Marks, then an operation.** `Space` marks, `Shift+Up`/`Down` mark and move
-  in one keystroke, `a` marks everything shown. Marks survive leaving the
-  directory they were made in.
+  in one keystroke, `a` marks everything shown, `i` inverts it, and `+` / `-`
+  mark and unmark by a pattern. Marks survive leaving the directory they were
+  made in.
 - **Deleting means the trash.** `d` names every item before it goes; `Shift+D`
   deletes for good. A trash that cannot be reached is a failed delete, never a
   silent fall back to permanent deletion.
