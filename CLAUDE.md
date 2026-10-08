@@ -221,6 +221,10 @@ is open again, not broken.
   read-only mode.
 - The worker never touches `App`; it sends `Progress`/`Done { summary }` and
   the main loop acts on them.
+- The speed is measured where the bytes land: the worker pairs each count it
+  sends with its instant, over a window of seconds, and sends the rate in
+  `Measure::Bytes`. Nothing is drawn until the window has a second in it.
+  `Rate` is handed its instants, never reads a clock.
 - A file is copied by `copy_file`, never `fs::copy`: a clone where the volume
   gives one, chunks otherwise, reported and cancellable between them. It
   carries what `fs::copy` carried on each platform, no more and no less.
