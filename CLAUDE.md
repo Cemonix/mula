@@ -187,6 +187,15 @@ is open again, not broken.
   at once on every pane, for that setting alone.
 - `Setting` is one enum matched exhaustively for its name, help, values and
   section, and the file, the parser and the overlay all read it.
+- A key is bound by pressing it, never by typing its name. While the overlay
+  waits, every key but `Esc` is the answer; F1 stays global. A key that is
+  global, or whose name does not read back as itself, is refused.
+- A key moves, it is never shared, and never in silence: taking one from
+  another action asks first and names the holder, and any action the move
+  leaves with no key. The question is a state of the overlay, not a second
+  overlay.
+- Every change to the keys rebuilds the Browse table from the config, and
+  everything read out of it with it.
 
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once
