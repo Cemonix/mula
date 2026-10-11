@@ -2355,6 +2355,7 @@ impl App {
             JobKind::Pack => self.notify_summary("packed", &outcome.summary, reason),
             JobKind::Unpack => self.notify_summary("unpacked", &outcome.summary, reason),
             JobKind::Rename => self.notify_summary("renamed", &outcome.summary, reason),
+            JobKind::Link => self.notify_summary("linked", &outcome.summary, reason),
             // A single mutation has nothing worth counting: it either happened,
             // or the error itself is the whole report.
             JobKind::Mutate => {

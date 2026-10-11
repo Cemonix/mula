@@ -15,7 +15,7 @@ use crate::fs::{
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
     ops::{
         MutationError, MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp,
-        Unfinished, tree_size,
+        Unfinished, make_link, tree_size,
     },
     rate::Rate,
     rename::rename_all,
@@ -357,6 +357,31 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             failed = renamed.failed;
             reason = renamed.reason;
             renamed.summary
+        }
+
+        Work::Link { items } => {
+            reporter.begin(items.len(), Measure::Items);
+
+            let mut summary = ProcessedSummary::new(items.len());
+            for item in items {
+                if reporter.cancelled() {
+                    break;
+                }
+                reporter.start_item(&item.from, 0);
+
+                match make_link(&item.from, &item.to) {
+                    Ok(()) => summary.process(),
+                    Err(e) => {
+                        tracing::error!(path = ?item.to, error = %e, "link failed");
+                        reason = Some(e.to_string());
+                        summary.fail();
+                        failed.push(item.from);
+                    }
+                }
+
+                reporter.finish_item();
+            }
+            summary
         }
 
         Work::Mutate(op) => {
@@ -792,6 +817,54 @@ mod worker_tests {
             "the second item overwrote what the batch had just written"
         );
         assert_eq!(finished[0].collided.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_job_points_a_link_at_every_item() {
+        let t = TempTree::new();
+        let items = vec![t.make_file("src/a.txt", "a"), t.make_dir("src/sub")];
+        let to_dir = t.make_dir("dest");
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Link {
+                items: into_dir(items.clone(), &to_dir),
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert_eq!(finished[0].summary.processed(), 2);
+        assert_eq!(fs::read_link(t.at("dest/a.txt")).unwrap(), items[0]);
+        assert_eq!(fs::read_link(t.at("dest/sub")).unwrap(), items[1]);
+    }
+
+    /// What stands at the name is left alone, a link that points nowhere
+    /// included, and the item comes back to be marked again.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_onto_a_taken_name_fails_and_replaces_nothing() {
+        let t = TempTree::new();
+        let item = t.make_file("src/a.txt", "a");
+        let to_dir = t.make_dir("dest");
+        t.make_file("dest/a.txt", "in the way");
+        let dangling = t.make_file("src/b.txt", "b");
+        std::os::unix::fs::symlink(t.at("nowhere"), t.at("dest/b.txt")).unwrap();
+
+        let mut worker = Worker::start();
+        worker
+            .queue(Work::Link {
+                items: into_dir(vec![item.clone(), dangling.clone()], &to_dir),
+            })
+            .unwrap();
+        let finished = settle(&mut worker);
+
+        assert_eq!(finished[0].failed, vec![item, dangling]);
+        assert_eq!(
+            fs::read_to_string(t.at("dest/a.txt")).unwrap(),
+            "in the way"
+        );
+        assert_eq!(fs::read_link(t.at("dest/b.txt")).unwrap(), t.at("nowhere"));
     }
 
     #[test]
