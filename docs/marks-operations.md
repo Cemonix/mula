@@ -162,6 +162,32 @@ Without it a batch that flattens quietly eats its own output: `A/x.txt` and
 `A/sub/x.txt` both land on `dest/x.txt`, and "overwrite" would leave one file
 with no telling which.
 
+## A link is made the way a copy is
+
+`l` takes the marks and makes a symlink to each of them in the other panel,
+under the item's own name. That is the shape of `c`, with no prompt: a prompt
+would have to carry two things, the link's name and what it points at, and one
+typed name cannot serve several marks. The marks already say what to point at,
+and the other panel already says where. Total Commander does it the same way.
+
+The link holds the absolute path the mark holds. Nothing has to be worked out
+for it, and it keeps pointing at the same thing wherever the link itself is
+moved later. A relative link would be the reverse trade, and computing one
+against a destination that may sit under a symlink of its own is a question
+this does not need to answer.
+
+A name that is taken fails its item instead of raising the collision question.
+A transfer asks because every answer keeps the user's data somewhere.
+Replacing a file with a link would throw the file away for a pointer, and the
+one answer that would not — keep both — leaves a numbered link nobody asked
+for. So the item fails, says why, and its mark comes back. `symlink(2)` itself
+refuses a taken name, a link pointing nowhere included, so there is no gap
+between looking and creating for anything to step into.
+
+Only unix makes links. Windows wants to know up front whether the target is a
+file or a directory (`symlink_file`, `symlink_dir`), which a swapped `cfg`
+would not give it.
+
 ## Directories merge, they never replace
 
 Names are unique within a directory, so at each name there is exactly one pair
