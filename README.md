@@ -86,7 +86,7 @@ These are the ones worth knowing first.
 | `b` / `Shift+B` | Favorites: go to one / add the directory this panel is in |
 | `t` / `w` / `Shift+T` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
-| `Shift+C` | Settings, saved as they change |
+| `Shift+C` | Settings and key bindings, saved as they change |
 | `q` | Quit |
 
 ## What it does
@@ -142,8 +142,11 @@ subsystem.
 ## Configuration
 
 `Shift+C` opens the settings: the columns, the order and the dotfiles a panel
-opens with. A change shows at once and is saved straight away to
-`~/.config/mula/config.toml` (or `$XDG_CONFIG_HOME/mula/config.toml`).
+opens with, and the browse keys. To rebind an action, put the cursor on it,
+press `Enter`, then press the new key. If another action already has that key,
+Mula asks before taking it away. `r` puts a row back to its default. A change
+shows at once and is saved straight away to `~/.config/mula/config.toml` (or
+`$XDG_CONFIG_HOME/mula/config.toml`).
 
 Mula owns that file and writes the whole of it on every change. It lists every
 setting and every browse key, each under a comment, with the default on a
@@ -163,12 +166,11 @@ sort = "size"
 transfer.copy = ["c", "y"]
 ```
 
-The browse keys can't be rebound in the app yet, so for now you change them in
-the file. Each action takes one key, a list of keys, or `[]` for none. Key names
-are the ones F1 prints. Values you write by hand are kept the next time Mula
-writes the file, but your comments and formatting are not. If the file is a
-symlink, say from a dotfiles repository, Mula writes through the link and leaves
-the link alone.
+You can also edit the file by hand. Each action takes one key, a list of keys,
+or `[]` for none, and key names are the ones F1 prints. Values you write by hand
+are kept the next time Mula writes the file, but your comments and formatting
+are not. If the file is a symlink, say from a dotfiles repository, Mula writes
+through the link and leaves the link alone.
 
 If Mula can't use the file, because it is broken or holds something Mula doesn't
 know, you lose your settings and keys for that run but never the file: Mula
@@ -197,8 +199,6 @@ the arrows.
   but Enter on an archive does not open it as a directory. Doing that means
   entries that are not local paths — the same thing a remote panel needs, so
   the two wait for one another.
-- **Rebinding keys in the app.** The settings overlay doesn't do keys yet, so
-  for now they are changed in the config file.
 
 ## Contributing
 

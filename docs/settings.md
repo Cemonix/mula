@@ -138,3 +138,49 @@ through values never resizes it under the user's eyes.
 goes by is the one the file goes by, config, and `Shift+C` was free. Reaching
 for copy and landing on it opens an overlay that `Esc` closes, which is the
 direction of mistake that costs nothing.
+
+## Keys are bound by pressing them
+
+Under the settings the overlay lists every Browse action by its catalogue
+name — the name the file uses, and the one F1 finds it by — with the keys it
+answers to. `Enter` on an action waits for a key, and the key pressed is the
+answer. Nothing is typed: a key name typed into a field is a spelling the user
+has to know, and a key pressed is the key itself.
+
+While it waits, every key but `Esc` is the answer. `Esc` has to stay the way
+out, so it cannot be given to an action this way — the one action that has it
+by default, clearing the filter and the marks, gets it back with `r`. F1 is
+not an answer either: it is resolved before any mode sees a key, so pressing
+it opens the help over the question, which is what F1 does everywhere. A key
+the terminal keeps for itself never reaches Mula at all, and the question says
+so — WezTerm's `Ctrl+W` is the case that will be met, and from inside Mula it
+looks like a key that did nothing.
+
+A captured key is the binding the event would match, with the modifiers
+`matches` compares and no others, so a terminal adding bits of its own does
+not make a binding nothing can press again. It is refused when it works in
+every mode, and when its name does not read back as itself: a key the file
+cannot spell would make the next start refuse the file whole.
+
+The answer replaces the action's keys. An action reachable two ways is rare
+enough that the second way is the file's to give.
+
+## A key moves, it is not shared
+
+Two actions cannot answer to one key, so a key another action holds is taken
+from it — but never in silence. The overlay asks first, naming the key and the
+action holding it, and says so when the move would leave that action with no
+key at all: an unreachable action is the one consequence that is hard to
+notice afterwards. `Enter` takes the key, `Esc` leaves every action as it was.
+
+The question is a state of the overlay, not a dialog over it. It takes the
+bottom of the box and the key table, and the list stays where it was; there is
+no second overlay to stack, and nothing to land on when it closes but the list
+it was asked from.
+
+`r` puts an action's own keys back, and the same question stands between it
+and a default key some other action has been given since.
+
+Every change rebuilds the Browse table from the config, so the bar, the help
+and the keys the info bar quotes change with it, before the overlay is even
+closed.
