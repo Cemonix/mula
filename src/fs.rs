@@ -9,6 +9,7 @@ pub(crate) mod ops;
 pub(crate) mod preview;
 pub(crate) mod rate;
 pub(crate) mod reader;
+pub(crate) mod rename;
 pub(crate) mod sizes;
 pub(crate) mod worker;
 
