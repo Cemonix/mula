@@ -136,6 +136,9 @@ is open again, not broken.
 - A link is made like a transfer: each mark gets one in the other panel
   under its own name, holding the mark's absolute path. A taken name fails the
   item and is never asked about.
+- A comparison is a job on the queue, never a reader of its own: asked for
+  right after a copy, it reads the copy once it is whole. It takes two marks,
+  or with none the two cursors, and leaves the marks standing.
 - Nothing is asked when nothing is at stake: a merge with no clashing leaf runs
   in silence.
 - A bulk rename changes names, never directories: a line holding `/` is
