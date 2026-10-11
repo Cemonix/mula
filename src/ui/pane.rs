@@ -1604,7 +1604,11 @@ mod pane_tests {
         let area = Rect::new(0, 0, width, 1);
         let mut buf = Buffer::empty(area);
 
-        let look = Look { columns, icons };
+        let look = Look {
+            columns,
+            icons,
+            ..Look::default()
+        };
         Pane::row(entry, None, false, look, usize::from(width)).render(area, &mut buf);
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
     }

@@ -40,7 +40,7 @@ use crate::{
     settings::{Section, Setting, Settings, Step},
     ui::{
         self,
-        columns::{Columns, Look},
+        columns::{Columns, Look, PermissionsColumn},
         config::{ConfigMsg, ConfigRow, ConfigTab, ConfigView, Question},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
@@ -674,6 +674,7 @@ impl App {
         let icons = self.config.settings().icons;
         let look = Look {
             columns: self.columns,
+            permissions: PermissionsColumn::default(),
             icons,
         };
         match self.opposite {
