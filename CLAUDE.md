@@ -219,6 +219,8 @@ is open again, not broken.
   element of `argv`.
 - Paths handed to another program are absolute. **Holds while** listings grow
   from `env::current_dir()`; a relative one could reach a program as an option.
+- The clipboard is the terminal's: OSC 52, written by the loop between frames,
+  never a clipboard program. All that can be said is that it was sent.
 - Mula ignores SIGINT/SIGQUIT while another program owns the terminal, and
   `pre_exec` puts both back to their default in that program.
 
