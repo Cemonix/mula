@@ -29,6 +29,7 @@ cursor.last = "Shift+G"
 
 panel.toggle = "Tab"
 panel.swap = "o"
+panel.mirror = "Shift+O"
 panel.parent = "Backspace"
 panel.find = "f"
 panel.filter = "/"

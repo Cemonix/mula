@@ -340,6 +340,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Puts this panel on the other side and the other one here",
     },
     Entry {
+        name: "panel.mirror",
+        action: Action::MirrorPanel,
+        keys: &[KeyBinding::plain(KeyCode::Char('O')).shift()],
+        bar: None,
+        help: "Sends the other panel to the directory this one is in",
+    },
+    Entry {
         name: "entry.open",
         action: Action::OpenSelected,
         keys: &[KeyBinding::plain(KeyCode::Enter)],

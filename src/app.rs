@@ -872,6 +872,12 @@ impl App {
                 self.focused_side = self.focused_side.toggle();
                 Ok(())
             }
+            Action::MirrorPanel => {
+                let (from, to) = self.both_sides();
+                let here = Arc::clone(from.get_pane().get_current_dir());
+                to.get_pane_mut().jump(here);
+                Ok(())
+            }
             Action::MoveCursor(nav_dir) => {
                 self.move_cursor(nav_dir);
                 Ok(())
