@@ -18,6 +18,7 @@ use crate::fs::{
         Unfinished, tree_size,
     },
     rate::Rate,
+    rename::rename_all,
 };
 
 /// The envelope the queue carries: a piece of work and the tag its outcome has
@@ -347,6 +348,15 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
                 reporter.finish_item();
             }
             summary
+        }
+
+        Work::Rename { items } => {
+            reporter.begin(items.len(), Measure::Items);
+
+            let renamed = rename_all(items);
+            failed = renamed.failed;
+            reason = renamed.reason;
+            renamed.summary
         }
 
         Work::Mutate(op) => {

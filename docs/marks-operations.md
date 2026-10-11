@@ -262,3 +262,65 @@ The follow-up takes its own snapshot when it starts. That is what makes
 "overwrite" reach a file the first batch put in the way: by then it is a file
 that was already there, and the rule about not eating a batch's own output does
 not reach across jobs.
+
+## Bulk rename changes names, never directories
+
+`Shift+R` hands the names of the marked items to `$EDITOR`, one per line, the
+way `git rebase -i` hands over its list. A line holding `/` is refused.
+
+A rename that could also move would be a second `m` that never asks about a
+collision. And marks are absolute: the common ancestor of marks from two
+directories is usually `~` or `/`, so lines carrying paths relative to it would
+bury the names the user came to edit. Yazi does it that way, and it is the part
+of its design not taken.
+
+What it costs: two marked files of one name in two directories are told apart
+only by their place in the file. The lines are ordered by directory and then
+by name, so they at least sit with their neighbours. Headers naming the
+directory, as comment lines, were considered and dropped — a file whose name
+begins with `#` could then not be renamed at all.
+
+## The edit is checked whole before anything moves
+
+Lines are paired with items by position, so a deleted line in the middle and an
+added one at the end would shift every name below it without anything looking
+wrong. Yazi trims the extra lines silently and lets exactly that through. Here
+a different count of lines, an empty line, `.` or `..`, and two items ending
+under one name all turn the batch away before a job exists, with a toast and
+the marks still standing. Blank lines at the end are passed over: editors add
+them, and they cannot shift anything.
+
+A target that exists and is not part of the batch turns it away too, but that
+check is the job's: it needs the disk, and it has to see the disk as it is when
+the job runs, not as it was when the editor closed.
+
+An editor that exits with a failure drops the edit, which is what `:cq` is for
+in a commit message.
+
+## Two steps rather than an order
+
+A chain (`1 → 2`, `2 → 3`) works in reverse order, and a cycle (`a ↔ b`) works
+in no order at all. Sorting the chains and breaking the cycles with a spare name
+is what it takes to rename each item once; setting every source aside under a
+hidden name first and only then giving it its new one takes neither, at the
+cost of a second `rename` per item — which is nothing next to the editor the
+user just closed.
+
+It also covers the change of case on a filesystem that ignores case. `a.txt` →
+`A.txt` finds the target "taken" by the file itself; whether a taken target is
+in the way is decided by device and inode, and an inode that is one of the
+batch's own sources is not in the way.
+
+A source that cannot be set aside stops the batch, and everything set aside so
+far goes back, so the first step is all or nothing. The second step is per
+item: one that fails goes back to its old name, or stays under the hidden one
+when its old name has been taken by another item of the batch meanwhile. It is
+marked again either way, where it actually is.
+
+## The confirmation waits like a collision does
+
+The rename is confirmed in the TUI, as a dialog opening on `No`, rather than
+in the bare terminal the way yazi asks `(y/N)`. Collisions and the rename share
+a pass: the editor returns at the end of one, after `ask_pending` may already
+have put a collision question up. So the rename waits on `App` as `renaming`,
+beside `asking`, and is asked after it.

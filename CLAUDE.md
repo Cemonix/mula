@@ -135,6 +135,11 @@ is open again, not broken.
   behind "overwrite".
 - Nothing is asked when nothing is at stake: a merge with no clashing leaf runs
   in silence.
+- A bulk rename changes names, never directories: a line holding `/` is
+  refused. What the editor gave back is checked whole before a job exists, and
+  anything that would shift, empty or merge a name turns the batch away with
+  the marks still standing. The job sets every source aside before naming
+  any, so it needs no order.
 
 **Archives**
 - The items of a batch are what was marked, never the entries inside them: an
@@ -189,12 +194,14 @@ is open again, not broken.
   holds is thinner than what it draws, never when it is thicker.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
   have no non-blocking API; SSH panes are sockets and do.
-- The favorites file is the one `fs::` write on the loop: it has nothing to be
-  ordered against, and the queue it would sit in carries 4 GB copies. It is
-  written whole at every change and the list is put back when the write fails,
-  so the screen never claims a save that did not happen. A file that could not
-  be read closes writing for the run rather than replacing it.
-  **Holds while** the list stays small and local.
+- The favorites file and the names file of a bulk rename are the only `fs::`
+  writes on the loop: neither has anything to be ordered against, and the
+  queue they would sit in carries 4 GB copies. The favorites file is written
+  whole at every change and the list is put back when the write fails, so the
+  screen never claims a save that did not happen. A file that could not be
+  read closes writing for the run rather than replacing it. The names file
+  lives only while the editor holds the terminal.
+  **Holds while** the list stays small and both files are local.
 - One worker for mutations, no pool. **Holds while** a batch stays on one
   device. One `Reader` instance per answer that can be outstanding on its own,
   each with its own generation — the two panels are two of those, not one

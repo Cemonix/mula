@@ -206,6 +206,21 @@ be *read* at startup closes writing for the run — the user's own list is
 still in it, and rewriting it from an empty list would be the one way this
 feature could take something away.
 
+## So is the names file of a bulk rename
+
+The second exception, for the same reasons and one more. The file is written
+when the key is pressed and read back and removed when the editor returns, all
+on the loop. Behind the worker, the editor would open only once a running copy
+had finished. Nothing is ordered against it either: it lives under the
+system temp directory, and nothing but Mula and the editor ever touches it.
+
+The one more: the loop is not running while the file matters. Between the
+write and the read the editor holds the terminal and Mula waits for it, so
+there is no frame for a slow write to hold up.
+
+**Holds while** the temp directory is local, as it is wherever `$TMPDIR`
+has not been pointed somewhere else.
+
 ## The worker never touches `App`
 
 It sends `Progress` and `Done { summary }`. The main loop refreshes panes and
