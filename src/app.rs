@@ -40,7 +40,7 @@ use crate::{
     settings::{Section, Setting, Settings, Step},
     ui::{
         self,
-        columns::Columns,
+        columns::{Columns, Look},
         config::{ConfigMsg, ConfigRow, ConfigTab, ConfigView, Question},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
@@ -672,24 +672,19 @@ impl App {
         .split(main_layout[0]);
 
         let icons = self.config.settings().icons;
+        let look = Look {
+            columns: self.columns,
+            icons,
+        };
         match self.opposite {
             Opposite::Listing => {
                 let focused = self.focused_side;
-                let columns = self.columns;
-                self.left.tabs_mut().render(
-                    frame,
-                    layout[0],
-                    focused == Side::Left,
-                    columns,
-                    icons,
-                );
-                self.right.tabs_mut().render(
-                    frame,
-                    layout[1],
-                    focused == Side::Right,
-                    columns,
-                    icons,
-                );
+                self.left
+                    .tabs_mut()
+                    .render(frame, layout[0], focused == Side::Left, look);
+                self.right
+                    .tabs_mut()
+                    .render(frame, layout[1], focused == Side::Right, look);
             }
             // The preview sits opposite the cursor, so it follows a change of
             // side without anything having to be told about it. The other
@@ -707,19 +702,14 @@ impl App {
                 // here: fitting a bitmap to an area is the same arithmetic
                 // whichever of the two backends ends up drawing it.
                 let mut area = None;
-                let columns = self.columns;
                 match self.focused_side {
                     Side::Left => {
-                        self.left
-                            .tabs_mut()
-                            .render(frame, layout[0], true, columns, icons);
+                        self.left.tabs_mut().render(frame, layout[0], true, look);
                         frame.render_stateful_widget(&preview, layout[1], &mut area);
                     }
                     Side::Right => {
                         frame.render_stateful_widget(&preview, layout[0], &mut area);
-                        self.right
-                            .tabs_mut()
-                            .render(frame, layout[1], true, columns, icons);
+                        self.right.tabs_mut().render(frame, layout[1], true, look);
                     }
                 }
 

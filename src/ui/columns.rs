@@ -15,7 +15,10 @@ use ratatui::{
     text::Span,
 };
 
-use crate::fs::directory::{Detail, DirEntry, DirEntryKind};
+use crate::{
+    fs::directory::{Detail, DirEntry, DirEntryKind},
+    ui::icon::Icons,
+};
 
 /// Stands in the size column of the parent, which is never measured.
 const NO_SIZE: &str = "\u{2014}";
@@ -101,6 +104,27 @@ impl Columns {
             Columns::Name => false,
             Columns::Size | Columns::SizeAndTime => true,
         }
+    }
+}
+
+/// Everything a row draws besides its name, handed down from `App` every frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub columns: Columns,
+    pub icons: Icons,
+}
+
+impl Look {
+    /// Columns taken to the right of the name, the gaps in front of each cell
+    /// included.
+    pub fn width(self) -> usize {
+        self.columns.width()
+    }
+
+    /// The cells of `entry` to the right of its name, together exactly
+    /// [`Look::width`] wide. `total` is what a directory measured to.
+    pub fn cells(self, entry: &DirEntry, total: Option<u64>) -> Vec<Span<'static>> {
+        self.columns.cells(entry, total)
     }
 }
 

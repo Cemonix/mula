@@ -22,8 +22,7 @@ use crate::{
     settings::Settings,
     ui::{
         self,
-        columns::Columns,
-        icon::Icons,
+        columns::Look,
         pane::{Pane, PaneError},
     },
 };
@@ -124,14 +123,7 @@ impl TabList {
 
     /// Draws the tab strip and the active tab below it. `focused` says whether
     /// the cursor is on this side and only reaches the pane border.
-    pub fn render(
-        &mut self,
-        frame: &mut Frame,
-        layout: Rect,
-        focused: bool,
-        columns: Columns,
-        icons: Icons,
-    ) {
+    pub fn render(&mut self, frame: &mut Frame, layout: Rect, focused: bool, look: Look) {
         let tabs_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -147,7 +139,7 @@ impl TabList {
         frame.render_widget(tabs, tabs_area[0]);
 
         self.active_tab_mut()
-            .render(frame, tabs_area[1], focused, columns, icons);
+            .render(frame, tabs_area[1], focused, look);
     }
 }
 
@@ -286,16 +278,9 @@ impl Tab {
             .extend(paths.into_iter().map(Arc::<Path>::from));
     }
 
-    pub fn render(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        focused: bool,
-        columns: Columns,
-        icons: Icons,
-    ) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, look: Look) {
         self.pane
-            .render(frame, area, &self.selected_items, focused, columns, icons);
+            .render(frame, area, &self.selected_items, focused, look);
     }
 }
 
