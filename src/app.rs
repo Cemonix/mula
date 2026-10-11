@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    env, io,
+    env, io, mem,
     path::{Component, Path, PathBuf},
     process::Child,
     sync::Arc,
@@ -158,7 +158,6 @@ impl PendingMutation {
 pub struct PendingPack {
     items: Vec<PathBuf>,
     into: PathBuf,
-    side: Side,
     tab: TabId,
 }
 
@@ -227,7 +226,6 @@ pub enum ConfirmTarget {
 pub struct Unanswered {
     op: TransferOp,
     items: Vec<Transfer>,
-    side: Side,
     tab: TabId,
 }
 
@@ -259,7 +257,6 @@ struct Opening {
 #[derive(Debug)]
 struct QueuedMarks {
     tag: JobTag,
-    side: Side,
     tab: TabId,
 }
 
@@ -519,6 +516,15 @@ impl App {
             Side::Left => &mut self.left,
             Side::Right => &mut self.right,
         }
+    }
+
+    /// The tab `id` names, in whichever panel holds it, or `None` once that
+    /// tab is gone.
+    fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.left
+            .tabs_mut()
+            .tab_mut(id)
+            .or_else(|| self.right.tabs_mut().tab_mut(id))
     }
 
     pub fn get_focused_tabs(&self) -> &TabList {
@@ -861,6 +867,17 @@ impl App {
                 self.focused_side = self.focused_side.toggle();
                 Ok(())
             }
+            Action::SwapPanels => {
+                mem::swap(&mut self.left, &mut self.right);
+                self.focused_side = self.focused_side.toggle();
+                Ok(())
+            }
+            Action::MirrorPanel => {
+                let (from, to) = self.both_sides();
+                let here = Arc::clone(from.get_pane().get_current_dir());
+                to.get_pane_mut().jump(here);
+                Ok(())
+            }
             Action::MoveCursor(nav_dir) => {
                 self.move_cursor(nav_dir);
                 Ok(())
@@ -1013,13 +1030,9 @@ impl App {
                 // batch before it wrote counts as something that was already
                 // there — which is how an answer of "overwrite" reaches the
                 // file that batch put in the way.
-                Some(policy) => self.queue_batch(
-                    unanswered.op,
-                    unanswered.items,
-                    policy,
-                    unanswered.side,
-                    unanswered.tab,
-                ),
+                Some(policy) => {
+                    self.queue_batch(unanswered.op, unanswered.items, policy, unanswered.tab)
+                }
                 None => Ok(()),
             },
             ConfirmTarget::Delete(_) | ConfirmTarget::Quit => Ok(()),
@@ -1425,13 +1438,12 @@ impl App {
     }
 
     fn mutate(&mut self, mutation: PendingMutation, name: String) -> Result<(), AppError> {
-        let side = self.focused_side;
         let tab = self.get_focused_tabs().active_tab().id();
         // Renames and creations are instant, but they still go through the
         // queue: a rename of a directory a queued copy writes into has to
         // happen after that copy, not while it runs.
         let tag = self.worker.queue(Work::Mutate(mutation.op(name)))?;
-        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }
 
@@ -1441,7 +1453,6 @@ impl App {
     /// directory they all came from, and with `.zip` after it. Typing another
     /// suffix over it is what asks for another format.
     fn prompt_pack(&mut self) -> Result<(), AppError> {
-        let side = self.focused_side;
         let (from, to) = self.both_sides();
         let into = to.get_pane().get_current_dir().to_path_buf();
         let items: Vec<PathBuf> = from
@@ -1464,12 +1475,7 @@ impl App {
         prompt.set_text(format!("{suggested}.zip"));
         self.mode = Mode::Input {
             prompt,
-            pending: InputTarget::Pack(PendingPack {
-                items,
-                into,
-                side,
-                tab,
-            }),
+            pending: InputTarget::Pack(PendingPack { items, into, tab }),
         };
         Ok(())
     }
@@ -1488,13 +1494,8 @@ impl App {
             return Ok(());
         };
 
-        let PendingPack {
-            items,
-            into,
-            side,
-            tab,
-        } = pending;
-        if let Some(tab) = self.panel_mut(side).tabs_mut().tab_mut(tab) {
+        let PendingPack { items, into, tab } = pending;
+        if let Some(tab) = self.tab_mut(tab) {
             tab.deselect_items();
         }
 
@@ -1503,7 +1504,7 @@ impl App {
             archive: into.join(name),
             format,
         })?;
-        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }
 
@@ -1514,7 +1515,6 @@ impl App {
     /// and takes a numbered name when that one is taken, so there is no
     /// collision for a question to be about.
     fn queue_unpack(&mut self) -> Result<(), AppError> {
-        let side = self.focused_side;
         let (from, to) = self.both_sides();
         let into = to.get_pane().get_current_dir().to_path_buf();
         let items: Vec<PathBuf> = from
@@ -1531,7 +1531,7 @@ impl App {
         }
 
         let tag = self.worker.queue(Work::Unpack { items, into })?;
-        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }
 
@@ -1553,7 +1553,6 @@ impl App {
     /// paths are copied out here and never read again, so the batch is settled
     /// the moment the key is pressed.
     fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
-        let side = self.focused_side;
         let (items, tab) = {
             let (from, to) = self.both_sides();
 
@@ -1588,7 +1587,7 @@ impl App {
 
         // The first pass of a batch carries no answer: nothing has been asked
         // yet, and a collision it meets is what raises the question.
-        self.queue_batch(op, items, OnCollision::Refuse, side, tab)
+        self.queue_batch(op, items, OnCollision::Refuse, tab)
     }
 
     /// Hands one transfer batch to the worker under `policy`, and remembers
@@ -1598,16 +1597,14 @@ impl App {
         op: TransferOp,
         items: Vec<Transfer>,
         policy: OnCollision,
-        side: Side,
         tab: TabId,
     ) -> Result<(), AppError> {
         let tag = self.worker.queue(Work::Transfer { op, items, policy })?;
-        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }
 
     fn queue_delete(&mut self, mode: DeleteMode) -> Result<(), AppError> {
-        let side = self.focused_side;
         let (items, tab) = {
             let tab = self.get_focused_tabs_mut().active_tab_mut();
             let items: Vec<PathBuf> = tab
@@ -1626,7 +1623,7 @@ impl App {
         }
 
         let tag = self.worker.queue(Work::Delete { items, mode })?;
-        self.queued_marks.push(QueuedMarks { tag, side, tab });
+        self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }
 
@@ -1943,11 +1940,9 @@ impl App {
 
         if let Some(queued) = &queued
             && !outcome.failed.is_empty()
+            && let Some(tab) = self.tab_mut(queued.tab)
         {
-            let tabs = self.panel_mut(queued.side).tabs_mut();
-            if let Some(tab) = tabs.tab_mut(queued.tab) {
-                tab.mark_paths(outcome.failed);
-            }
+            tab.mark_paths(outcome.failed);
         }
 
         // Collisions are not failures and are never marked again: what they
@@ -1959,7 +1954,6 @@ impl App {
             self.asking = Some(Unanswered {
                 op,
                 items: outcome.collided,
-                side: queued.side,
                 tab: queued.tab,
             });
         }

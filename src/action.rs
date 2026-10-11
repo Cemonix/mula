@@ -23,6 +23,12 @@ pub enum Action {
     Quit,
     CancelJob,
     ToggleSide,
+    /// Trades the two panels' places, tabs, marks and all. The focus moves
+    /// with the panel it was on.
+    SwapPanels,
+    /// Sends the other panel to the directory the focused one is in. The
+    /// focus stays where it is.
+    MirrorPanel,
     MoveCursor(VerticalDir),
     MoveCursorTo(ListEnd),
     /// Moves the cursor by as many items as the panel last drew.

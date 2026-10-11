@@ -61,6 +61,7 @@ These are the ones worth knowing first.
 | --- | --- |
 | `F1` | Help — works in every mode, over whatever is on screen; type to search it |
 | `Tab` | Focus the other panel |
+| `o` / `Shift+O` | Swap the two panels / send the other panel where this one is |
 | `Enter` | Enter a directory, or open a file with what belongs to it |
 | `Space` | Mark or unmark the item under the cursor |
 | `a` | Mark everything the panel is showing |
