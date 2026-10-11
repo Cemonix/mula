@@ -25,10 +25,11 @@ const NO_SIZE: &str = "\u{2014}";
 const MEASURING: &str = "\u{2026}";
 
 /// What each row of a listing shows besides its name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Columns {
     Name,
     Size,
+    #[default]
     SizeAndTime,
 }
 

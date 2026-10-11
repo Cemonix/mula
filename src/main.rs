@@ -28,6 +28,7 @@ mod favorites;
 mod fs;
 mod keys;
 mod open;
+mod settings;
 mod ui;
 
 const USAGE: &str = "\
