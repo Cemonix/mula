@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    env, io,
+    env, io, mem,
     path::{Component, Path, PathBuf},
     process::Child,
     sync::Arc,
@@ -864,6 +864,11 @@ impl App {
                 Ok(())
             }
             Action::ToggleSide => {
+                self.focused_side = self.focused_side.toggle();
+                Ok(())
+            }
+            Action::SwapPanels => {
+                mem::swap(&mut self.left, &mut self.right);
                 self.focused_side = self.focused_side.toggle();
                 Ok(())
             }
