@@ -27,7 +27,7 @@ use crate::{
         job::{JobKind, JobTag, Measure, Outcome, Progress, Work},
         listing::Kind,
         ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
-        preview::{self, Content, Preview},
+        preview::{self, Content, Highlight, Preview},
         reader::Reader,
         rename,
         sizes::DirSizes,
@@ -2280,6 +2280,7 @@ impl App {
             Some(path) => {
                 if let Err(e) = self.previewer.send(Preview {
                     path: Arc::clone(path),
+                    highlight: Highlight::default(),
                 }) {
                     self.notify(ToastLevel::Error, e, None);
                 }

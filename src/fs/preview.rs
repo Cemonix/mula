@@ -34,6 +34,16 @@ use crate::fs::{
 #[derive(Debug)]
 pub struct Preview {
     pub path: Arc<Path>,
+    pub highlight: Highlight,
+}
+
+/// Whether text is coloured by its grammar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Highlight {
+    #[default]
+    Syntax,
+    /// Every line in the terminal's own foreground, with no grammar loaded.
+    Off,
 }
 
 /// The bounds a preview keeps to. They describe the reader rather than one
@@ -253,7 +263,7 @@ impl ReadJob for Preview {
     type Msg = Content;
 
     fn run(self, config: &Config, live: &Live<'_>, out: &Outbox<'_, Content>) {
-        if let Some(content) = read(&self.path, config, live) {
+        if let Some(content) = read(&self.path, self.highlight, config, live) {
             out.send(content);
         }
     }
@@ -265,7 +275,7 @@ impl ReadJob for Preview {
 /// The kind of the path is settled from its metadata before anything is
 /// opened: a fifo or a device would block `File::open` for as long as nobody
 /// writes to it, and the thread would never come back.
-fn read(path: &Path, config: &Config, live: &Live<'_>) -> Option<Content> {
+fn read(path: &Path, highlight: Highlight, config: &Config, live: &Live<'_>) -> Option<Content> {
     let limits = &config.limits;
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -335,7 +345,7 @@ fn read(path: &Path, config: &Config, live: &Live<'_>) -> Option<Content> {
     }
 
     let clipped = metadata.len() > bytes.len() as u64;
-    classify(path, bytes, clipped, config, live)
+    classify(path, bytes, clipped, highlight, config, live)
 }
 
 /// The format the first bytes of a file announce, or `None` for anything that
@@ -443,14 +453,15 @@ pub fn read_prefix(path: &Path, max_bytes: usize) -> Result<Vec<u8>, std::io::Er
 /// Shapes bytes that are not an image. A NUL byte in the prefix means binary;
 /// anything else is drawn as text, however little of it is valid UTF-8.
 ///
-/// Text is coloured by the grammar `path` and its first line name, loading the
-/// grammars on the reader's first text file. A line the grammar fails on, and
+/// With `highlight` on, text is coloured by the grammar `path` and its first
+/// line name, loading the grammars on the reader's first text file. A line the grammar fails on, and
 /// every line after it, is drawn uncoloured. `None` once the cursor has moved
 /// on, which is asked before every line.
 fn classify(
     path: &Path,
     bytes: Vec<u8>,
     clipped: bool,
+    highlight: Highlight,
     config: &Config,
     live: &Live<'_>,
 ) -> Option<Content> {
@@ -469,10 +480,13 @@ fn classify(
     };
 
     let text = String::from_utf8_lossy(text);
-    let mut painter = config
-        .highlighting
-        .get_or_init(Highlighting::load)
-        .painter(path, text.lines().next().unwrap_or_default());
+    let mut painter = match highlight {
+        Highlight::Syntax => config
+            .highlighting
+            .get_or_init(Highlighting::load)
+            .painter(path, text.lines().next().unwrap_or_default()),
+        Highlight::Off => None,
+    };
 
     let mut lines = Vec::new();
     for line in text.lines().take(limits.max_lines) {
@@ -571,7 +585,7 @@ mod preview_tests {
     /// the read left loaded.
     fn read_with(path: &Path, config: &Config) -> Content {
         let latest = AtomicU64::new(0);
-        read(path, config, &Live::at(&latest, 0)).expect("nothing was cancelled")
+        read(path, Highlight::Syntax, config, &Live::at(&latest, 0)).expect("nothing was cancelled")
     }
 
     #[test]
@@ -613,6 +627,22 @@ mod preview_tests {
                 .all(|line| line.runs.len() == 1 && line.runs[0].ink == Ink::Plain),
             "lines were {lines:?}"
         );
+    }
+
+    #[test]
+    fn with_highlighting_off_a_known_language_comes_back_plain_and_loads_nothing() {
+        let tree = TempTree::new();
+        let path = tree.make_file("main.rs", "fn main() {}\n");
+        let config = Config::new(limits());
+        let latest = AtomicU64::new(0);
+
+        let Some(Content::Text { lines, .. }) =
+            read(&path, Highlight::Off, &config, &Live::at(&latest, 0))
+        else {
+            panic!("a source file did not read as text");
+        };
+        assert_eq!(lines, [TextLine::plain(String::from("fn main() {}"))]);
+        assert!(config.highlighting.get().is_none());
     }
 
     #[test]
@@ -784,7 +814,15 @@ mod preview_tests {
         // The counter has moved on, which is what a newer request leaves
         // behind for a job that is already running.
         let latest = AtomicU64::new(2);
-        assert!(read(&path, &Config::new(limits()), &Live::at(&latest, 1)).is_none());
+        assert!(
+            read(
+                &path,
+                Highlight::Syntax,
+                &Config::new(limits()),
+                &Live::at(&latest, 1)
+            )
+            .is_none()
+        );
     }
 
     #[test]
