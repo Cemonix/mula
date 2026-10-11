@@ -49,6 +49,15 @@ impl KeyBinding {
         }
     }
 
+    /// The binding `event` would match: its code, and the modifiers
+    /// [`KeyBinding::matches`] compares.
+    pub fn from_event(event: &KeyEvent) -> Self {
+        Self {
+            code: event.code,
+            mods: event.modifiers.intersection(KeyBinding::RELEVANT),
+        }
+    }
+
     pub fn matches(&self, event: &KeyEvent) -> bool {
         self.code == event.code && self.mods == event.modifiers.intersection(KeyBinding::RELEVANT)
     }
@@ -801,8 +810,24 @@ mod keys_tests {
         round_trip(Finder::FIND_KEYS);
         round_trip(FavoritesView::FAVORITE_KEYS);
         round_trip(ConfigView::CONFIG_KEYS);
+        round_trip(ConfigView::CAPTURE_KEYS);
+        round_trip(ConfigView::CLASH_KEYS);
         round_trip(Filter::FILTER_KEYS);
         round_trip(help::HELP_KEYS);
+    }
+
+    #[test]
+    fn a_captured_key_matches_the_event_it_came_from() {
+        for event in [
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::ALT.union(KeyModifiers::SUPER)),
+        ] {
+            let key = KeyBinding::from_event(&event);
+
+            assert!(key.matches(&event), "{key}");
+            assert!(!key.mods.contains(KeyModifiers::SUPER), "{key}");
+        }
     }
 
     #[test]
@@ -868,6 +893,8 @@ mod keys_tests {
             ("finder", bound(Finder::FIND_KEYS)),
             ("favorites", bound(FavoritesView::FAVORITE_KEYS)),
             ("config", bound(ConfigView::CONFIG_KEYS)),
+            ("config capture", bound(ConfigView::CAPTURE_KEYS)),
+            ("config clash", bound(ConfigView::CLASH_KEYS)),
             ("filter", bound(Filter::FILTER_KEYS)),
             ("help", bound(help::HELP_KEYS)),
         ] {

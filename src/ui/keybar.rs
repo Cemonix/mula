@@ -129,6 +129,14 @@ mod keybar_tests {
                 row_width(FavoritesView::FAVORITE_KEYS, help_key()),
             ),
             ("config", row_width(ConfigView::CONFIG_KEYS, help_key())),
+            (
+                "config capture",
+                row_width(ConfigView::CAPTURE_KEYS, help_key()),
+            ),
+            (
+                "config clash",
+                row_width(ConfigView::CLASH_KEYS, help_key()),
+            ),
             ("filter", row_width(Filter::FILTER_KEYS, help_key())),
             ("help", row_width(help::HELP_KEYS, None)),
         ] {

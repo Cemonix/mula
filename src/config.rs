@@ -13,7 +13,7 @@ use toml::Value;
 
 use crate::{
     action::Action,
-    keys::{self, BROWSE_ACTIONS, Binding, BindingError, GLOBAL_KEYS, KeyBinding},
+    keys::{self, BROWSE_ACTIONS, Binding, BindingError, Entry, GLOBAL_KEYS, KeyBinding},
     settings::{Section, Setting, Settings},
 };
 
@@ -78,6 +78,8 @@ pub enum ConfigError {
     Clash { source: BindingError },
     #[error("keys.browse.{name} takes {key}, which works in every mode and never reaches Browse")]
     ShadowsGlobal { name: String, key: KeyBinding },
+    #[error("{key} has no name the config file could read back, so it cannot be bound")]
+    Unspellable { key: KeyBinding },
     #[error("{} could not be written: {source}", path.display())]
     Unwritable { path: PathBuf, source: io::Error },
     #[error("there is no home directory to keep the settings in")]
@@ -365,6 +367,14 @@ fn write_whole(path: &Path, text: &str) -> Result<(), ConfigError> {
     written.map_err(unwritable(&target))
 }
 
+/// A key one action is being given that another action already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Clash {
+    pub key: KeyBinding,
+    /// The catalogue name of the action holding it.
+    pub holder: &'static str,
+}
+
 /// Why a config is written nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Closed {
@@ -440,6 +450,82 @@ impl Config {
     /// The Browse key table the config asks for.
     pub fn browse_table(&self) -> Vec<Binding<Action>> {
         browse_table(&self.contents.keys)
+    }
+
+    /// The keys `entry` answers to: the config's, or the catalogue's own when
+    /// the config gives it none.
+    pub fn keys_of(&self, entry: &Entry) -> &[KeyBinding] {
+        self.contents
+            .keys
+            .get(entry.name)
+            .map_or(entry.keys, Vec::as_slice)
+    }
+
+    /// Every key of `keys` that an action other than `action` holds, and the
+    /// action holding it.
+    pub fn clashes(&self, action: &str, keys: &[KeyBinding]) -> Vec<Clash> {
+        BROWSE_ACTIONS
+            .iter()
+            .filter(|entry| entry.name != action)
+            .flat_map(|entry| {
+                self.keys_of(entry)
+                    .iter()
+                    .filter(|key| keys.contains(key))
+                    .map(|key| Clash {
+                        key: *key,
+                        holder: entry.name,
+                    })
+            })
+            .collect()
+    }
+
+    /// Gives the action called `action` exactly `keys`, takes each of them
+    /// from whatever other action holds it, and writes the file out.
+    ///
+    /// A key that works in every mode, or one whose name does not read back
+    /// as itself, is refused. Nothing changes when a key is refused or the
+    /// write fails.
+    pub fn rebind(&mut self, action: &str, keys: Vec<KeyBinding>) -> Result<(), ConfigError> {
+        if !BROWSE_ACTIONS.iter().any(|entry| entry.name == action) {
+            return Err(ConfigError::UnknownAction {
+                name: action.to_string(),
+            });
+        }
+        for key in &keys {
+            if GLOBAL_KEYS.iter().any(|global| global.key == *key) {
+                return Err(ConfigError::ShadowsGlobal {
+                    name: action.to_string(),
+                    key: *key,
+                });
+            }
+            if key.to_string().parse::<KeyBinding>().ok() != Some(*key) {
+                return Err(ConfigError::Unspellable { key: *key });
+            }
+        }
+
+        let mut bound = BTreeMap::new();
+        for entry in BROWSE_ACTIONS {
+            let held: Vec<KeyBinding> = match entry.name == action {
+                true => keys.clone(),
+                false => self
+                    .keys_of(entry)
+                    .iter()
+                    .copied()
+                    .filter(|key| !keys.contains(key))
+                    .collect(),
+            };
+            if held != entry.keys {
+                bound.insert(entry.name.to_string(), held);
+            }
+        }
+        keys::validate(&browse_table(&bound)).map_err(|source| ConfigError::Clash { source })?;
+
+        let previous = std::mem::replace(&mut self.contents.keys, bound);
+        if let Err(e) = self.save() {
+            self.contents.keys = previous;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Takes `settings` and writes the file out. When the write fails the
@@ -901,5 +987,112 @@ mod config_tests {
         assert_eq!(config.settings(), Settings::default());
         config.set(changed().settings).unwrap();
         assert!(tree.at("mula/config.toml").is_file());
+    }
+
+    fn entry(name: &str) -> &'static Entry {
+        BROWSE_ACTIONS
+            .iter()
+            .find(|entry| entry.name == name)
+            .expect("the catalogue holds it")
+    }
+
+    fn plain(c: char) -> KeyBinding {
+        KeyBinding::plain(KeyCode::Char(c))
+    }
+
+    #[test]
+    fn a_rebound_action_is_written_and_read_back() {
+        let tree = TempTree::new();
+        let mut config = config_in(&tree, Contents::default());
+
+        config.rebind("transfer.copy", vec![plain('y')]).unwrap();
+
+        let (read, complaint) = Config::read(tree.at("mula/config.toml"));
+        assert!(complaint.is_none());
+        assert_eq!(read.keys_of(entry("transfer.copy")), [plain('y')]);
+        assert!(copies(&read.browse_table(), KeyCode::Char('y')));
+    }
+
+    /// The key moves: the action that held it is left without it rather than
+    /// two actions answering to one key.
+    #[test]
+    fn a_key_given_to_one_action_is_taken_from_the_other() {
+        let tree = TempTree::new();
+        let mut config = config_in(&tree, Contents::default());
+        let copy_key = entry("transfer.copy").keys[0];
+
+        assert_eq!(
+            config.clashes("entry.delete", &[copy_key]),
+            [Clash {
+                key: copy_key,
+                holder: "transfer.copy"
+            }]
+        );
+        config.rebind("entry.delete", vec![copy_key]).unwrap();
+
+        assert!(config.keys_of(entry("transfer.copy")).is_empty());
+        assert_eq!(config.keys_of(entry("entry.delete")), [copy_key]);
+        assert!(config.clashes("entry.delete", &[copy_key]).is_empty());
+    }
+
+    /// Going back to the default keys leaves nothing for the file to say about
+    /// the action.
+    #[test]
+    fn an_action_given_its_own_keys_back_is_no_longer_in_the_file() {
+        let tree = TempTree::new();
+        let mut config = config_in(&tree, changed());
+        let copy = entry("transfer.copy");
+
+        config.rebind(copy.name, copy.keys.to_vec()).unwrap();
+
+        assert!(config.contents.keys.is_empty());
+        let text = fs::read_to_string(tree.at("mula/config.toml")).unwrap();
+        assert!(!text.contains("\ntransfer.copy = "), "{text}");
+    }
+
+    #[test]
+    fn a_global_key_is_refused_and_nothing_changes() {
+        let tree = TempTree::new();
+        let mut config = config_in(&tree, Contents::default());
+
+        let error = config
+            .rebind("transfer.copy", vec![GLOBAL_KEYS[0].key])
+            .unwrap_err();
+
+        assert!(
+            matches!(error, ConfigError::ShadowsGlobal { .. }),
+            "{error}"
+        );
+        assert!(config.contents.keys.is_empty());
+        assert!(!tree.at("mula/config.toml").exists());
+    }
+
+    /// A key whose name does not read back would make the file one the next
+    /// start refuses whole.
+    #[test]
+    fn a_key_the_file_cannot_spell_is_refused() {
+        let tree = TempTree::new();
+        let mut config = config_in(&tree, Contents::default());
+
+        let error = config
+            .rebind("transfer.copy", vec![KeyBinding::plain(KeyCode::Null)])
+            .unwrap_err();
+
+        assert!(matches!(error, ConfigError::Unspellable { .. }), "{error}");
+        assert!(config.contents.keys.is_empty());
+    }
+
+    #[test]
+    fn a_rebinding_that_cannot_be_written_changes_nothing() {
+        let mut config = Config {
+            contents: Contents::default(),
+            file: Err(Closed::Unread),
+        };
+
+        assert!(config.rebind("transfer.copy", vec![plain('y')]).is_err());
+        assert_eq!(
+            config.keys_of(entry("transfer.copy")),
+            entry("transfer.copy").keys
+        );
     }
 }

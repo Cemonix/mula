@@ -191,6 +191,16 @@ impl Setting {
         }
     }
 
+    /// Puts this setting back to its default.
+    pub fn reset(self, settings: &mut Settings) {
+        let defaults = Settings::default();
+        match self {
+            Setting::Columns => settings.columns = defaults.columns,
+            Setting::Sort => settings.sort = defaults.sort,
+            Setting::DotFiles => settings.dot_files = defaults.dot_files,
+        }
+    }
+
     /// Moves this setting one choice along.
     pub fn step(self, settings: &mut Settings, step: Step) {
         match self {
@@ -278,6 +288,23 @@ mod settings_tests {
     fn every_section_a_setting_is_in_is_listed() {
         for setting in Setting::ALL {
             assert!(Section::ALL.contains(&setting.section()), "{setting:?}");
+        }
+    }
+
+    /// Resetting one setting leaves every other where it was.
+    #[test]
+    fn a_reset_puts_back_that_setting_alone() {
+        for setting in Setting::ALL {
+            let mut moved = Settings::default();
+            for other in Setting::ALL {
+                other.step(&mut moved, Step::Next);
+            }
+            let mut expected = moved;
+            setting.select(&mut expected, setting.value(&Settings::default()));
+
+            setting.reset(&mut moved);
+
+            assert_eq!(moved, expected, "{setting:?}");
         }
     }
 

@@ -32,13 +32,13 @@ use crate::{
         sizes::DirSizes,
         worker::{Health, Worker},
     },
-    keys::{self, Binding, GlobalMsg, KeyBinding},
+    keys::{self, Binding, Entry, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
-    settings::{Setting, Step},
+    settings::{Setting, Settings, Step},
     ui::{
         self,
         columns::Columns,
-        config::{ConfigMsg, ConfigRow, ConfigView},
+        config::{ConfigMsg, ConfigRow, ConfigView, Question},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
         filter::{self, Filter, FilterMsg},
@@ -122,6 +122,30 @@ pub enum Mode {
     /// listing narrow — so it is a mode only in the sense that the keys go
     /// somewhere else.
     Filter,
+}
+
+/// What a row of the config overlay stands for: the settings first, then every
+/// Browse action in catalogue order.
+#[derive(Clone, Copy)]
+enum ConfigItem {
+    Setting(Setting),
+    Action(&'static Entry),
+}
+
+impl ConfigItem {
+    fn count() -> usize {
+        Setting::ALL.len() + keys::BROWSE_ACTIONS.len()
+    }
+
+    /// The row at `index`, or `None` past the last one.
+    fn at(index: usize) -> Option<Self> {
+        match Setting::ALL.get(index) {
+            Some(setting) => Some(Self::Setting(*setting)),
+            None => keys::BROWSE_ACTIONS
+                .get(index - Setting::ALL.len())
+                .map(Self::Action),
+        }
+    }
 }
 
 /// A filesystem mutation that still needs the name being typed.
@@ -406,12 +430,7 @@ impl App {
         // manager. The defaults stand and the complaint becomes a toast, which
         // needs the `App` that is still being built here.
         let (config, complaint) = Config::load();
-        let browse_keys = config.browse_table();
         let settings = config.settings();
-        let cancel_key =
-            keys::find(&browse_keys, |a| matches!(a, Action::CancelJob)).map(|binding| binding.key);
-        let add_favorite_key = keys::find(&browse_keys, |a| matches!(a, Action::AddFavorite))
-            .map(|binding| binding.key);
 
         // A favorites file that cannot be read costs the user the list for
         // this run and never the file: nothing is written back until it has
@@ -433,12 +452,12 @@ impl App {
             toasts: VecDeque::new(),
             mode: Mode::Browse,
             help: None,
-            browse_keys,
+            browse_keys: Vec::new(),
             config,
             help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp))
                 .map(|binding| binding.key),
-            cancel_key,
-            add_favorite_key,
+            cancel_key: None,
+            add_favorite_key: None,
             favorites,
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
@@ -459,6 +478,8 @@ impl App {
             tick: 0,
             exit: false,
         };
+
+        app.take_keys();
 
         if let Some(e) = complaint {
             app.notify(ToastLevel::Error, e, None);
@@ -688,10 +709,27 @@ impl App {
                 .map(|setting| ConfigRow {
                     section: setting.section().title(),
                     title: setting.title(),
-                    value: setting.value(&settings),
-                    choices: setting.choices(),
+                    value: setting.value(&settings).to_string(),
+                    choices: setting.choices().into_iter().map(String::from).collect(),
                     help: setting.help(),
                 })
+                .chain(keys::BROWSE_ACTIONS.iter().map(|entry| {
+                    let value = match self.config.keys_of(entry) {
+                        [] => String::from("none"),
+                        bound => bound
+                            .iter()
+                            .map(KeyBinding::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    };
+                    ConfigRow {
+                        section: "Keys",
+                        title: entry.name,
+                        choices: vec![value.clone()],
+                        value,
+                        help: entry.help,
+                    }
+                }))
                 .collect();
             let area = frame.area();
             view.render(&rows, area, frame.buffer_mut());
@@ -800,10 +838,9 @@ impl App {
                     Keybar::new(FavoritesView::FAVORITE_KEYS).help_key(self.help_key),
                     keys_area,
                 ),
-                Mode::Config { .. } => frame.render_widget(
-                    Keybar::new(ConfigView::CONFIG_KEYS).help_key(self.help_key),
-                    keys_area,
-                ),
+                Mode::Config { ref view } => {
+                    frame.render_widget(Keybar::new(view.keys()).help_key(self.help_key), keys_area)
+                }
                 Mode::Filter => frame.render_widget(
                     Keybar::new(Filter::FILTER_KEYS).help_key(self.help_key),
                     keys_area,
@@ -834,8 +871,8 @@ impl App {
                         area,
                     );
                 }
-                Mode::Config { .. } => {
-                    frame.render_widget(Help::new(ConfigView::CONFIG_KEYS, globals, state), area);
+                Mode::Config { ref view } => {
+                    frame.render_widget(Help::new(view.keys(), globals, state), area);
                 }
                 Mode::Filter => {
                     frame.render_widget(Help::new(Filter::FILTER_KEYS, globals, state), area);
@@ -1485,29 +1522,114 @@ impl App {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent) {
-        let Some(msg) = keys::resolve(ConfigView::CONFIG_KEYS, &key) else {
-            return;
-        };
         let Mode::Config { view } = &mut self.mode else {
             return;
         };
+        let msg = keys::resolve(view.keys(), &key);
 
-        match msg {
-            ConfigMsg::MoveSelection(dir) => view.move_selection(dir, Setting::ALL.len()),
-            ConfigMsg::Step(step) => {
-                let setting = Setting::ALL[view.selected()];
-                self.change_setting(setting, step);
+        // Waiting for a key, every key but the one that cancels is the answer.
+        if let Question::Capturing { action } = *view.question() {
+            match msg {
+                Some(_) => view.ask(Question::None),
+                None => self.offer_keys(action, vec![KeyBinding::from_event(&key)]),
             }
-            ConfigMsg::Close => self.mode = Mode::Browse,
+            return;
+        }
+
+        let Some(msg) = msg else {
+            return;
+        };
+        let item = ConfigItem::at(view.selected());
+        match (msg, item) {
+            (ConfigMsg::MoveSelection(dir), _) => view.move_selection(dir, ConfigItem::count()),
+            (ConfigMsg::MovePage(dir), _) => view.move_page(dir, ConfigItem::count()),
+            (ConfigMsg::Step(step), Some(ConfigItem::Setting(setting))) => {
+                self.change_setting(setting, |settings| setting.step(settings, step));
+            }
+            (ConfigMsg::Change, Some(ConfigItem::Setting(setting))) => {
+                self.change_setting(setting, |settings| setting.step(settings, Step::Next));
+            }
+            (ConfigMsg::Change, Some(ConfigItem::Action(entry))) => {
+                view.ask(Question::Capturing { action: entry.name });
+            }
+            (ConfigMsg::Reset, Some(ConfigItem::Setting(setting))) => {
+                self.change_setting(setting, |settings| setting.reset(settings));
+            }
+            (ConfigMsg::Reset, Some(ConfigItem::Action(entry))) => {
+                self.offer_keys(entry.name, entry.keys.to_vec());
+            }
+            (ConfigMsg::Take, _) => {
+                if let Question::Clashing { action, keys, .. } = view.take_question() {
+                    self.rebind(action, keys);
+                }
+            }
+            (ConfigMsg::Back, _) => view.ask(Question::None),
+            (ConfigMsg::Close, _) => self.mode = Mode::Browse,
+            (ConfigMsg::Step(_) | ConfigMsg::Change | ConfigMsg::Reset, _) => (),
         }
     }
 
-    /// Moves `setting` one choice along, saves it, and shows it on screen at
+    /// Gives `keys` to `action` at once when no other action holds any of
+    /// them, and otherwise asks first, naming each holder and every one the
+    /// move would leave with no key.
+    fn offer_keys(&mut self, action: &'static str, keys: Vec<KeyBinding>) {
+        let clashes = self.config.clashes(action, &keys);
+        if clashes.is_empty() {
+            self.rebind(action, keys);
+            return;
+        }
+
+        let mut orphans: Vec<&'static str> = Vec::new();
+        for clash in &clashes {
+            let emptied = keys::BROWSE_ACTIONS
+                .iter()
+                .find(|entry| entry.name == clash.holder)
+                .map(|entry| self.config.keys_of(entry))
+                .is_some_and(|held| held.iter().all(|key| keys.contains(key)));
+            if emptied && !orphans.contains(&clash.holder) {
+                orphans.push(clash.holder);
+            }
+        }
+
+        if let Mode::Config { view } = &mut self.mode {
+            view.ask(Question::Clashing {
+                action,
+                keys,
+                clashes,
+                orphans,
+            });
+        }
+    }
+
+    /// Gives `keys` to `action`, saves the config, and builds the Browse
+    /// table again so the bar and the help show it at once. A failure leaves
+    /// every key as it was and says so in a toast.
+    fn rebind(&mut self, action: &'static str, keys: Vec<KeyBinding>) {
+        let rebound = self.config.rebind(action, keys);
+        if let Mode::Config { view } = &mut self.mode {
+            view.ask(Question::None);
+        }
+        match rebound {
+            Ok(()) => self.take_keys(),
+            Err(e) => self.notify(ToastLevel::Error, e, None),
+        }
+    }
+
+    /// Builds the Browse table from the config, and the keys read out of it.
+    fn take_keys(&mut self) {
+        self.browse_keys = self.config.browse_table();
+        self.cancel_key = keys::find(&self.browse_keys, |a| matches!(a, Action::CancelJob))
+            .map(|binding| binding.key);
+        self.add_favorite_key = keys::find(&self.browse_keys, |a| matches!(a, Action::AddFavorite))
+            .map(|binding| binding.key);
+    }
+
+    /// Changes `setting` with `change`, saves it, and shows it on screen at
     /// once. A save that fails leaves the setting and the screen as they were
     /// and says so in a toast.
-    fn change_setting(&mut self, setting: Setting, step: Step) {
+    fn change_setting(&mut self, setting: Setting, change: impl FnOnce(&mut Settings)) {
         let mut settings = self.config.settings();
-        setting.step(&mut settings, step);
+        change(&mut settings);
         if let Err(e) = self.config.set(settings) {
             self.notify(ToastLevel::Error, e, None);
             return;
