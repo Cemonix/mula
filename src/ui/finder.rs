@@ -14,7 +14,7 @@ use crate::{
     fs::{directory::DirEntry, find::Ended},
     keys::{Binding, KeyBinding},
     ui::{
-        icon::Icon,
+        icon::{Icon, Icons},
         text_input::{HorizontalDir, TextInput},
     },
 };
@@ -44,6 +44,8 @@ pub struct Finder {
     list_state: ListState,
     /// How the walk ended, or `None` while one is still running.
     ended: Option<Ended>,
+    /// What stands in front of each hit.
+    icons: Icons,
 }
 
 impl Finder {
@@ -91,9 +93,10 @@ impl Finder {
 
     const CURSOR_BG: Color = Color::Rgb(0x33, 0x3c, 0x4d);
 
-    pub fn new(root: Arc<Path>) -> Self {
+    pub fn new(root: Arc<Path>, icons: Icons) -> Self {
         Self {
             root,
+            icons,
             input: TextInput::new(),
             hits: Vec::new(),
             list_state: ListState::default(),
@@ -251,9 +254,9 @@ impl Widget for &mut Finder {
             .hits
             .iter()
             .map(|hit| {
-                let icon = Icon::icon_for(hit);
+                let icon = self.icons.of(hit).map(Icon::span).unwrap_or_default();
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
+                    icon,
                     Span::styled(self.label(hit), Style::new().fg(Color::White)),
                 ]))
             })
@@ -281,7 +284,7 @@ mod finder_tests {
     use crate::keys::validate;
 
     fn finder(hits: &[&str]) -> Finder {
-        let mut finder = Finder::new(Arc::from(Path::new("/root")));
+        let mut finder = Finder::new(Arc::from(Path::new("/root")), Icons::default());
         finder.insert('a');
         finder.extend(hits.iter().map(|name| DirEntry {
             path: Arc::from(PathBuf::from("/root").join(name).as_path()),
@@ -346,7 +349,7 @@ mod finder_tests {
     /// cursor being absent while there is nothing to put it on.
     #[test]
     fn moving_through_no_hits_at_all_does_nothing() {
-        let mut finder = Finder::new(Arc::from(Path::new("/root")));
+        let mut finder = Finder::new(Arc::from(Path::new("/root")), Icons::default());
 
         finder.move_selection(VerticalDir::Down);
         finder.move_selection(VerticalDir::Up);
@@ -412,7 +415,7 @@ mod finder_tests {
 
     #[test]
     fn the_typing_cursor_sits_after_the_query() {
-        let mut finder = Finder::new(Arc::from(Path::new("/root")));
+        let mut finder = Finder::new(Arc::from(Path::new("/root")), Icons::default());
         finder.insert('a');
         finder.insert('b');
         let area = Rect::new(0, 0, Finder::WIDTH, Finder::HEIGHT);

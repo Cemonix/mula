@@ -24,7 +24,8 @@ mula ~/Music    # both panels open there instead
 Needs Rust 1.88 or later, Linux or macOS, and a
 [Nerd Font](https://www.nerdfonts.com/) for the file icons, the **Mono**
 variant, since the others draw a glyph wider than one cell. Without one the
-icons are empty boxes and nothing else breaks.
+icons are empty boxes and nothing else breaks; `Shift+C` switches them to emoji
+or turns them off.
 
 From a clone, `cargo install --locked --path .` does the same thing, and
 `cargo build --release` leaves the binary in `target/` instead.
@@ -144,7 +145,7 @@ subsystem.
 ## Configuration
 
 `Shift+C` opens the settings: the columns, the order and the dotfiles a panel
-opens with, and the browse keys. To rebind an action, put the cursor on it,
+opens with, the icons, and the browse keys. To rebind an action, put the cursor on it,
 press `Enter`, then press the new key. If another action already has that key,
 Mula asks before taking it away. `r` puts a row back to its default. A change
 shows at once and is saved straight away to `~/.config/mula/config.toml` (or

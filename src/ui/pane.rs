@@ -26,7 +26,7 @@ use crate::{
         self,
         columns::{self, Columns},
         filter::Filter,
-        icon::Icon,
+        icon::{Icon, Icons},
         sort::{Sort, SortKey},
     },
 };
@@ -609,6 +609,7 @@ impl Pane {
         selected_items: &HashSet<Arc<Path>>,
         focused: bool,
         columns: Columns,
+        icons: Icons,
     ) {
         let title = Line::from(self.directory.path().to_string_lossy().to_string().bold());
         let mut block = Block::bordered()
@@ -654,7 +655,7 @@ impl Pane {
             let entry = &entries[index];
             let marked = selected_items.contains(&entry.path);
             let total = self.totals.get(&entry.path).copied();
-            let item = ListItem::new(Self::row(entry, total, marked, columns, row_width));
+            let item = ListItem::new(Self::row(entry, total, marked, columns, icons, row_width));
             if marked {
                 item.style(Style::new().bg(Self::MARKED_BG))
             } else {
@@ -684,13 +685,13 @@ impl Pane {
         total: Option<u64>,
         marked: bool,
         columns: Columns,
+        icons: Icons,
         row_width: usize,
     ) -> Line<'static> {
         // Every row, the parent included, is labelled by the last component of
         // its path.
         let label = ui::name_of(&entry.path);
-        let icon = Icon::icon_for(entry);
-        let icon = Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color));
+        let icon = icons.of(entry).map(Icon::span).unwrap_or_default();
 
         // A pane too narrow to hold the columns leaves the name none at all
         // rather than borrowing any back from them.
@@ -948,7 +949,16 @@ mod pane_tests {
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 4)).unwrap();
 
         terminal
-            .draw(|frame| pane.render(frame, frame.area(), &HashSet::new(), true, Columns::Name))
+            .draw(|frame| {
+                pane.render(
+                    frame,
+                    frame.area(),
+                    &HashSet::new(),
+                    true,
+                    Columns::Name,
+                    Icons::default(),
+                )
+            })
             .unwrap();
 
         let rows: String = terminal
@@ -969,7 +979,16 @@ mod pane_tests {
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
 
         terminal
-            .draw(|frame| pane.render(frame, frame.area(), &HashSet::new(), true, Columns::Name))
+            .draw(|frame| {
+                pane.render(
+                    frame,
+                    frame.area(),
+                    &HashSet::new(),
+                    true,
+                    Columns::Name,
+                    Icons::default(),
+                )
+            })
             .unwrap();
 
         terminal
@@ -1572,11 +1591,37 @@ mod pane_tests {
     /// room a row is given, and reads the cells back. Alignment is the whole
     /// point of the columns and cannot be seen anywhere else.
     fn drawn_row(entry: &DirEntry, columns: Columns, width: u16) -> String {
+        drawn_row_with(entry, columns, Icons::default(), width)
+    }
+
+    /// The same, with `icons` in front of the name.
+    fn drawn_row_with(entry: &DirEntry, columns: Columns, icons: Icons, width: u16) -> String {
         let area = Rect::new(0, 0, width, 1);
         let mut buf = Buffer::empty(area);
 
-        Pane::row(entry, None, false, columns, usize::from(width)).render(area, &mut buf);
+        Pane::row(entry, None, false, columns, icons, usize::from(width)).render(area, &mut buf);
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
+    }
+
+    /// Whatever stands in front of the name is measured, so the columns end
+    /// at the right edge with any of them.
+    #[test]
+    fn every_choice_of_icons_keeps_the_size_at_the_right_edge() {
+        for icons in [Icons::NerdFont, Icons::Emoji, Icons::Off] {
+            let row = drawn_row_with(&file("one.txt", 2048), Columns::Size, icons, 30);
+
+            assert!(row.ends_with(" 2.0K"), "{icons:?}: the row was {row:?}");
+        }
+    }
+
+    #[test]
+    fn with_icons_off_the_name_follows_the_mark() {
+        let row = drawn_row_with(&file("one.txt", 2048), Columns::Name, Icons::Off, 30);
+
+        assert!(
+            row.starts_with(&format!("{}one.txt", Pane::MARK_BLANK)),
+            "the row was {row:?}"
+        );
     }
 
     fn file(name: &str, size: u64) -> DirEntry {

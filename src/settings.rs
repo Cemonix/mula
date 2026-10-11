@@ -1,4 +1,4 @@
-use crate::ui::{columns::Columns, pane::DotFiles, sort::SortKey};
+use crate::ui::{columns::Columns, icon::Icons, pane::DotFiles, sort::SortKey};
 
 /// One value out of a fixed set, spelled the way the config file writes it.
 pub trait Choice: Copy + Eq + 'static {
@@ -49,6 +49,18 @@ impl Choice for DotFiles {
     }
 }
 
+impl Choice for Icons {
+    const ALL: &'static [Self] = &[Icons::NerdFont, Icons::Emoji, Icons::Off];
+
+    fn name(self) -> &'static str {
+        match self {
+            Icons::NerdFont => "nerd-font",
+            Icons::Emoji => "emoji",
+            Icons::Off => "off",
+        }
+    }
+}
+
 /// Which way a setting is stepped through its choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -86,28 +98,32 @@ pub struct Settings {
     pub columns: Columns,
     pub sort: SortKey,
     pub dot_files: DotFiles,
+    pub icons: Icons,
 }
 
 /// A table of the config file, and a heading of the settings overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Listing,
+    Appearance,
 }
 
 impl Section {
     /// Every section, in the order the file and the overlay list them.
-    pub const ALL: &[Section] = &[Section::Listing];
+    pub const ALL: &[Section] = &[Section::Listing, Section::Appearance];
 
     /// The table the section is written under.
     pub fn name(self) -> &'static str {
         match self {
             Section::Listing => "listing",
+            Section::Appearance => "appearance",
         }
     }
 
     pub fn title(self) -> &'static str {
         match self {
             Section::Listing => "Listing",
+            Section::Appearance => "Appearance",
         }
     }
 }
@@ -119,15 +135,22 @@ pub enum Setting {
     Columns,
     Sort,
     DotFiles,
+    Icons,
 }
 
 impl Setting {
     /// Every setting, in the order the file and the overlay list them.
-    pub const ALL: &[Setting] = &[Setting::Columns, Setting::Sort, Setting::DotFiles];
+    pub const ALL: &[Setting] = &[
+        Setting::Columns,
+        Setting::Sort,
+        Setting::DotFiles,
+        Setting::Icons,
+    ];
 
     pub fn section(self) -> Section {
         match self {
             Setting::Columns | Setting::Sort | Setting::DotFiles => Section::Listing,
+            Setting::Icons => Section::Appearance,
         }
     }
 
@@ -137,6 +160,7 @@ impl Setting {
             Setting::Columns => "columns",
             Setting::Sort => "sort",
             Setting::DotFiles => "dotfiles",
+            Setting::Icons => "icons",
         }
     }
 
@@ -146,6 +170,7 @@ impl Setting {
             Setting::Columns => "Columns",
             Setting::Sort => "Sort by",
             Setting::DotFiles => "Dotfiles",
+            Setting::Icons => "Icons",
         }
     }
 
@@ -156,6 +181,7 @@ impl Setting {
             Setting::Columns => "What each row shows besides its name",
             Setting::Sort => "What a panel is sorted by when it opens",
             Setting::DotFiles => "Whether a panel lists names beginning with a dot when it opens",
+            Setting::Icons => "The glyph in front of each name; nerd-font takes a Nerd Font",
         }
     }
 
@@ -165,6 +191,7 @@ impl Setting {
             Setting::Columns => names::<Columns>(),
             Setting::Sort => names::<SortKey>(),
             Setting::DotFiles => names::<DotFiles>(),
+            Setting::Icons => names::<Icons>(),
         }
     }
 
@@ -174,6 +201,7 @@ impl Setting {
             Setting::Columns => settings.columns.name(),
             Setting::Sort => settings.sort.name(),
             Setting::DotFiles => settings.dot_files.name(),
+            Setting::Icons => settings.icons.name(),
         }
     }
 
@@ -188,6 +216,7 @@ impl Setting {
             Setting::Columns => put(&mut settings.columns, name),
             Setting::Sort => put(&mut settings.sort, name),
             Setting::DotFiles => put(&mut settings.dot_files, name),
+            Setting::Icons => put(&mut settings.icons, name),
         }
     }
 
@@ -198,6 +227,7 @@ impl Setting {
             Setting::Columns => settings.columns = defaults.columns,
             Setting::Sort => settings.sort = defaults.sort,
             Setting::DotFiles => settings.dot_files = defaults.dot_files,
+            Setting::Icons => settings.icons = defaults.icons,
         }
     }
 
@@ -207,6 +237,7 @@ impl Setting {
             Setting::Columns => settings.columns = stepped(settings.columns, step),
             Setting::Sort => settings.sort = stepped(settings.sort, step),
             Setting::DotFiles => settings.dot_files = stepped(settings.dot_files, step),
+            Setting::Icons => settings.icons = stepped(settings.icons, step),
         }
     }
 }
@@ -276,12 +307,15 @@ mod settings_tests {
     #[test]
     fn every_setting_is_listed() {
         let listed = |setting: Setting| match setting {
-            Setting::Columns | Setting::Sort | Setting::DotFiles => Setting::ALL.contains(&setting),
+            Setting::Columns | Setting::Sort | Setting::DotFiles | Setting::Icons => {
+                Setting::ALL.contains(&setting)
+            }
         };
 
         assert!(listed(Setting::Columns));
         assert!(listed(Setting::Sort));
         assert!(listed(Setting::DotFiles));
+        assert!(listed(Setting::Icons));
     }
 
     #[test]
