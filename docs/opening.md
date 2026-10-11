@@ -181,3 +181,26 @@ standing — everything a pane holds still begins with `/` — and a pane's pare
 entry comes from `Path::parent`, which would read `/a/..` as a child of `/a`.
 Resolving on the text is what `cd` does by default too; the physical answer
 would need a `canonicalize` on the loop.
+
+## The clipboard is the terminal's
+
+`y` puts paths on the system clipboard with OSC 52, an escape sequence asking
+the terminal to do it. No `pbcopy`, `wl-copy` or `xclip` is started. Which of
+those exists differs from system to system and from session to session, and
+none of them reaches the clipboard of the machine in front of the user when
+Mula runs over SSH. The terminal is that machine.
+
+What it costs: the terminal has to allow it. WezTerm, kitty and iTerm2 do, and
+tmux passes it on with `set-clipboard on`. The terminal also never answers, so
+the toast says the paths were sent, never that they arrived.
+
+The paths are absolute, one to a line: the marks of the focused tab in path
+order, or with nothing marked the entry under the cursor. The marks stay,
+since copying a path does nothing to the files.
+
+The sequence is written by the loop between frames, the way a program is
+handed the terminal there: the action only puts the text down, so nothing is
+written into the middle of a frame.
+
+The key is `y`. Copy's own letter belongs to copying files, and yank is the
+word vim and yazi users already have for putting something on the clipboard.
