@@ -593,10 +593,9 @@ mod config_tests {
     fn changed() -> Contents {
         let mut contents = Contents::default();
         contents.settings.sort = SortKey::Size;
-        contents.keys.insert(
-            "transfer.copy".to_string(),
-            vec![KeyBinding::plain(KeyCode::Char('y'))],
-        );
+        contents
+            .keys
+            .insert("transfer.copy".to_string(), vec![free_key()]);
         contents
     }
 
@@ -622,12 +621,12 @@ mod config_tests {
         let table = built(
             r#"
             [keys.browse]
-            "transfer.copy" = ["y"]
+            "transfer.copy" = ["F7"]
             "#,
         )
         .unwrap();
 
-        assert!(copies(&table, KeyCode::Char('y')));
+        assert!(copies(&table, KeyCode::F(7)));
         assert!(!copies(&table, default_copy_key()));
     }
 
@@ -635,21 +634,21 @@ mod config_tests {
     /// mean the same action, or the config turns on where the quotes went.
     #[test]
     fn a_dotted_name_and_a_quoted_one_are_one_action() {
-        let quoted = built("[keys.browse]\n\"transfer.copy\" = [\"y\"]").unwrap();
-        let dotted = built("[keys.browse]\ntransfer.copy = [\"y\"]").unwrap();
-        let sectioned = built("[keys.browse.transfer]\ncopy = [\"y\"]").unwrap();
+        let quoted = built("[keys.browse]\n\"transfer.copy\" = [\"F7\"]").unwrap();
+        let dotted = built("[keys.browse]\ntransfer.copy = [\"F7\"]").unwrap();
+        let sectioned = built("[keys.browse.transfer]\ncopy = [\"F7\"]").unwrap();
 
         for table in [quoted, dotted, sectioned] {
-            assert!(copies(&table, KeyCode::Char('y')));
+            assert!(copies(&table, KeyCode::F(7)));
             assert!(!copies(&table, default_copy_key()));
         }
     }
 
     #[test]
     fn one_key_may_be_given_without_a_list() {
-        let table = built("[keys.browse]\n\"transfer.copy\" = \"y\"").unwrap();
+        let table = built("[keys.browse]\n\"transfer.copy\" = \"F7\"").unwrap();
 
-        assert!(copies(&table, KeyCode::Char('y')));
+        assert!(copies(&table, KeyCode::F(7)));
     }
 
     #[test]
@@ -670,15 +669,15 @@ mod config_tests {
 
     #[test]
     fn an_action_may_be_reachable_more_than_one_way() {
-        let table = built("[keys.browse]\n\"transfer.copy\" = [\"F5\", \"y\"]").unwrap();
+        let table = built("[keys.browse]\n\"transfer.copy\" = [\"F5\", \"F7\"]").unwrap();
 
         assert!(copies(&table, KeyCode::F(5)));
-        assert!(copies(&table, KeyCode::Char('y')));
+        assert!(copies(&table, KeyCode::F(7)));
     }
 
     #[test]
     fn a_misspelled_action_names_itself() {
-        let error = built("[keys.browse]\n\"transfer.kopie\" = [\"y\"]").unwrap_err();
+        let error = built("[keys.browse]\n\"transfer.kopie\" = [\"F7\"]").unwrap_err();
 
         assert!(
             matches!(&error, ConfigError::UnknownAction { name } if name == "transfer.kopie"),
@@ -996,8 +995,10 @@ mod config_tests {
             .expect("the catalogue holds it")
     }
 
-    fn plain(c: char) -> KeyBinding {
-        KeyBinding::plain(KeyCode::Char(c))
+    /// A key no action has by default: function keys are for what cannot be
+    /// printable, and only F1 is taken.
+    fn free_key() -> KeyBinding {
+        KeyBinding::plain(KeyCode::F(7))
     }
 
     #[test]
@@ -1005,12 +1006,12 @@ mod config_tests {
         let tree = TempTree::new();
         let mut config = config_in(&tree, Contents::default());
 
-        config.rebind("transfer.copy", vec![plain('y')]).unwrap();
+        config.rebind("transfer.copy", vec![free_key()]).unwrap();
 
         let (read, complaint) = Config::read(tree.at("mula/config.toml"));
         assert!(complaint.is_none());
-        assert_eq!(read.keys_of(entry("transfer.copy")), [plain('y')]);
-        assert!(copies(&read.browse_table(), KeyCode::Char('y')));
+        assert_eq!(read.keys_of(entry("transfer.copy")), [free_key()]);
+        assert!(copies(&read.browse_table(), KeyCode::F(7)));
     }
 
     /// The key moves: the action that held it is left without it rather than
@@ -1089,7 +1090,7 @@ mod config_tests {
             file: Err(Closed::Unread),
         };
 
-        assert!(config.rebind("transfer.copy", vec![plain('y')]).is_err());
+        assert!(config.rebind("transfer.copy", vec![free_key()]).is_err());
         assert_eq!(
             config.keys_of(entry("transfer.copy")),
             entry("transfer.copy").keys
