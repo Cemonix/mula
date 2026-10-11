@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use ratatui::style::Color;
+use ratatui::{
+    style::{Color, Style},
+    text::Span,
+};
 
 use crate::fs::{
     archive::contents::{self, EntryKind},
@@ -11,6 +14,50 @@ use crate::fs::{
 // `devicons` crate (https://github.com/alexpasmantier/rust-devicons), version
 // 0.6.13, which is licensed under the Apache License 2.0. The tables here are a
 // curated subset with several colours replaced.
+
+/// Which glyphs stand in front of a name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Icons {
+    /// One for every kind of entry, and for the names and extensions in the
+    /// tables below. Needs a Nerd Font.
+    #[default]
+    NerdFont,
+    /// One for every kind of entry, out of the emoji a terminal's fonts carry
+    /// anyway.
+    Emoji,
+    /// None, and no room kept for one.
+    Off,
+}
+
+impl Icons {
+    /// The icon in front of `entry`, or `None` with icons off.
+    pub fn of(self, entry: &DirEntry) -> Option<Icon> {
+        match self {
+            Icons::NerdFont => Some(Icon::icon_for(entry)),
+            Icons::Emoji => Some(match entry.kind {
+                DirEntryKind::Parent => EMOJI_PARENT,
+                DirEntryKind::Directory => EMOJI_DIRECTORY,
+                DirEntryKind::Symlink => EMOJI_SYMLINK,
+                DirEntryKind::File => EMOJI_FILE,
+            }),
+            Icons::Off => None,
+        }
+    }
+
+    /// The icon in front of a name inside an archive, or `None` with icons
+    /// off.
+    pub fn of_archive_entry(self, entry: &contents::Entry) -> Option<Icon> {
+        match self {
+            Icons::NerdFont => Some(Icon::for_archive_entry(entry)),
+            Icons::Emoji => Some(match entry.kind {
+                EntryKind::Directory => EMOJI_DIRECTORY,
+                EntryKind::Symlink => EMOJI_SYMLINK,
+                EntryKind::File => EMOJI_FILE,
+            }),
+            Icons::Off => None,
+        }
+    }
+}
 
 /// A glyph and the colour it is drawn in. `Color` is stored ready to use, so
 /// the tables below need no parsing at runtime.
@@ -28,9 +75,24 @@ impl Icon {
         }
     }
 
-    /// The icon for an entry. Consults, in order: the entry kind, the exact file
-    /// name, then the extension, and falls back to `DEFAULT_FILE` when none match.
-    pub fn icon_for(entry: &DirEntry) -> Icon {
+    /// An emoji, drawn in its own colours. The foreground is the terminal's,
+    /// for a font that draws it in one.
+    const fn emoji(glyph: char) -> Self {
+        Self {
+            glyph,
+            color: Color::Reset,
+        }
+    }
+
+    /// The glyph and the space behind it, in the icon's colour.
+    pub fn span(self) -> Span<'static> {
+        Span::styled(format!("{} ", self.glyph), Style::new().fg(self.color))
+    }
+
+    /// The Nerd Font icon for an entry. Consults, in order: the entry kind, the
+    /// exact file name, then the extension, and falls back to `DEFAULT_FILE`
+    /// when none match.
+    fn icon_for(entry: &DirEntry) -> Icon {
         match entry.kind {
             DirEntryKind::Parent => PARENT,
             DirEntryKind::Directory => DIRECTORY,
@@ -45,10 +107,10 @@ impl Icon {
         }
     }
 
-    /// The icon for a name inside an archive, where there is no `DirEntry` to
-    /// ask. The kind decides first and the name after it, the same order
-    /// [`Icon::icon_for`] takes.
-    pub fn for_archive_entry(entry: &contents::Entry) -> Icon {
+    /// The Nerd Font icon for a name inside an archive, where there is no
+    /// `DirEntry` to ask. The kind decides first and the name after it, the
+    /// same order [`Icon::icon_for`] takes.
+    fn for_archive_entry(entry: &contents::Entry) -> Icon {
         match entry.kind {
             EntryKind::Directory => DIRECTORY,
             EntryKind::Symlink => SYMLINK,
@@ -233,6 +295,14 @@ const SYMLINK: Icon = Icon::new('\u{f0c1}', 0x56, 0xb6, 0xc2);
 /// Drawn for a file that matched neither table.
 const DEFAULT_FILE: Icon = Icon::new('\u{f15b}', 0x9a, 0xa5, 0xb1);
 
+/// The emoji, one for every kind of entry. Each is drawn as an emoji without a
+/// variation selector, so a terminal gives it the two columns `Span::width`
+/// measures.
+const EMOJI_DIRECTORY: Icon = Icon::emoji('\u{1f4c1}');
+const EMOJI_PARENT: Icon = Icon::emoji('\u{1f53c}');
+const EMOJI_SYMLINK: Icon = Icon::emoji('\u{1f517}');
+const EMOJI_FILE: Icon = Icon::emoji('\u{1f4c4}');
+
 #[cfg(test)]
 mod icon_tests {
     use std::sync::Arc;
@@ -303,6 +373,27 @@ mod icon_tests {
             Icon::icon_for(&file("/p/archive.tar.gz")),
             Icon::icon_for(&file("/p/archive.gz"))
         );
+    }
+
+    #[test]
+    fn icons_off_give_no_icon_for_any_kind() {
+        for kind in [
+            DirEntryKind::Parent,
+            DirEntryKind::Directory,
+            DirEntryKind::Symlink,
+            DirEntryKind::File,
+        ] {
+            assert_eq!(Icons::Off.of(&entry("/p/x", kind)), None);
+        }
+    }
+
+    /// An emoji a terminal draws one column wide while `Span::width` counts
+    /// two would put every column of the row behind it somewhere else.
+    #[test]
+    fn every_emoji_is_two_columns_wide() {
+        for icon in [EMOJI_DIRECTORY, EMOJI_PARENT, EMOJI_SYMLINK, EMOJI_FILE] {
+            assert_eq!(Span::raw(icon.glyph.to_string()).width(), 2, "{icon:?}");
+        }
     }
 
     #[test]

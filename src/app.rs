@@ -49,6 +49,7 @@ use crate::{
             surface::{Placement, Surface, Wanted},
         },
         help::{self, Help, HelpMsg, HelpState},
+        icon::Icons,
         infobar::{Counts, InfoBar, ProgressView, Speed},
         keybar::Keybar,
         pane::{Entered, Pane, PaneError},
@@ -655,16 +656,25 @@ impl App {
         )
         .split(main_layout[0]);
 
+        let icons = Icons::default();
         match self.opposite {
             Opposite::Listing => {
                 let focused = self.focused_side;
                 let columns = self.columns;
-                self.left
-                    .tabs_mut()
-                    .render(frame, layout[0], focused == Side::Left, columns);
-                self.right
-                    .tabs_mut()
-                    .render(frame, layout[1], focused == Side::Right, columns);
+                self.left.tabs_mut().render(
+                    frame,
+                    layout[0],
+                    focused == Side::Left,
+                    columns,
+                    icons,
+                );
+                self.right.tabs_mut().render(
+                    frame,
+                    layout[1],
+                    focused == Side::Right,
+                    columns,
+                    icons,
+                );
             }
             // The preview sits opposite the cursor, so it follows a change of
             // side without anything having to be told about it. The other
@@ -675,6 +685,7 @@ impl App {
                     self.previewing.as_deref(),
                     self.preview.as_ref(),
                     self.surface.graphics(),
+                    icons,
                 );
                 // Where the panel wants a picture the terminal draws itself.
                 // It comes back from the widget rather than being worked out
@@ -684,14 +695,16 @@ impl App {
                 let columns = self.columns;
                 match self.focused_side {
                     Side::Left => {
-                        self.left.tabs_mut().render(frame, layout[0], true, columns);
+                        self.left
+                            .tabs_mut()
+                            .render(frame, layout[0], true, columns, icons);
                         frame.render_stateful_widget(&preview, layout[1], &mut area);
                     }
                     Side::Right => {
                         frame.render_stateful_widget(&preview, layout[0], &mut area);
                         self.right
                             .tabs_mut()
-                            .render(frame, layout[1], true, columns);
+                            .render(frame, layout[1], true, columns, icons);
                     }
                 }
 
@@ -1466,7 +1479,7 @@ impl App {
     fn open_finder(&mut self) -> Result<(), AppError> {
         let root = Arc::clone(self.get_focused_pane().get_current_dir());
         self.mode = Mode::Find {
-            finder: Finder::new(root),
+            finder: Finder::new(root, Icons::default()),
         };
         Ok(())
     }

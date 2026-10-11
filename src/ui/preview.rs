@@ -26,7 +26,7 @@ use crate::{
         self,
         columns::bytes,
         graphics::capabilities::{CellSize, Graphics},
-        icon::Icon,
+        icon::{Icon, Icons},
         name_of,
         pane::Pane,
     },
@@ -56,9 +56,12 @@ const ARCHIVE_SIZE_WIDTH: usize = 7;
 /// One row of an archive: what the entry is, what it is called, and how big it
 /// unpacks to, with the size against the right edge. A directory is drawn
 /// without a size, the way the listing columns draw one.
-fn archive_line(entry: &Entry, width: u16) -> Line<'static> {
-    let icon = Icon::for_archive_entry(entry);
-    let room = (width as usize).saturating_sub(2 + ARCHIVE_SIZE_WIDTH);
+fn archive_line(entry: &Entry, width: u16, icons: Icons) -> Line<'static> {
+    let icon = icons
+        .of_archive_entry(entry)
+        .map(Icon::span)
+        .unwrap_or_default();
+    let room = (width as usize).saturating_sub(icon.width() + ARCHIVE_SIZE_WIDTH);
     let name = ui::clip(&entry.name, room);
     let size = match entry.kind {
         EntryKind::Directory => String::new(),
@@ -66,7 +69,7 @@ fn archive_line(entry: &Entry, width: u16) -> Line<'static> {
     };
 
     Line::from(vec![
-        Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
+        icon,
         Span::raw(format!("{name:<room$}")),
         Span::raw(format!("{size:>ARCHIVE_SIZE_WIDTH$}")).fg(Color::DarkGray),
     ])
@@ -93,6 +96,8 @@ pub struct PreviewPane<'a> {
     /// How the terminal draws pictures of its own, or `None` where half blocks
     /// are all there is.
     graphics: Option<Graphics>,
+    /// What stands in front of each name of a listing or an archive.
+    icons: Icons,
 }
 
 /// What the panel has to put in its area, in the two shapes it comes in. Kept
@@ -112,16 +117,19 @@ impl<'a> PreviewPane<'a> {
 
     /// `path` names what is being looked at and `content` is the answer, which
     /// is `None` for as long as the read is still running. `graphics` decides
-    /// which of the two backends a picture goes to.
+    /// which of the two backends a picture goes to, and `icons` what stands
+    /// in front of a name.
     pub fn new(
         path: Option<&'a Path>,
         content: Option<&'a Content>,
         graphics: Option<Graphics>,
+        icons: Icons,
     ) -> Self {
         Self {
             path,
             content,
             graphics,
+            icons,
         }
     }
 
@@ -167,11 +175,8 @@ impl<'a> PreviewPane<'a> {
                     .iter()
                     .take(rows)
                     .map(|entry| {
-                        let icon = Icon::icon_for(entry);
-                        Line::from(vec![
-                            Span::styled(format!("{} ", icon.glyph), Style::new().fg(icon.color)),
-                            Span::raw(name_of(&entry.path)),
-                        ])
+                        let icon = self.icons.of(entry).map(Icon::span).unwrap_or_default();
+                        Line::from(vec![icon, Span::raw(name_of(&entry.path))])
                     })
                     .collect();
                 if entries.len() > lines.len() {
@@ -193,7 +198,7 @@ impl<'a> PreviewPane<'a> {
                     .entries
                     .iter()
                     .take(rows)
-                    .map(|entry| archive_line(entry, area.width))
+                    .map(|entry| archive_line(entry, area.width, self.icons))
                     .collect();
                 if contents.clipped || contents.entries.len() > lines.len() {
                     lines.pop();
@@ -574,7 +579,7 @@ mod preview_pane_tests {
     #[test]
     fn the_title_is_the_name_of_what_is_under_the_cursor() {
         let path = PathBuf::from("/home/user/notes.txt");
-        let pane = PreviewPane::new(Some(&path), None, None);
+        let pane = PreviewPane::new(Some(&path), None, None, Icons::default());
 
         assert!(rows(&pane, 30, 4)[0].contains("notes.txt"));
     }
@@ -589,7 +594,7 @@ mod preview_pane_tests {
             clipped: false,
         };
         let path = PathBuf::from("notes.txt");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 30, 5);
         assert_eq!(rows[1], "first");
@@ -635,7 +640,7 @@ mod preview_pane_tests {
     fn a_known_language_is_drawn_in_more_than_one_colour() {
         let content = painted("main.rs", "// hello\nfn main() {\n    let n = 42;\n}\n");
         let path = PathBuf::from("main.rs");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let buf = rendered(&pane, 30, 7);
         let colours = inks_drawn(&buf);
@@ -652,7 +657,7 @@ mod preview_pane_tests {
     fn an_unknown_language_is_drawn_in_the_terminal_foreground() {
         let content = painted("notes.unknown-format", "fn main() {\n    let n = 42;\n}\n");
         let path = PathBuf::from("notes.unknown-format");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let buf = rendered(&pane, 30, 6);
         assert_eq!(inks_drawn(&buf), [Color::Reset]);
@@ -667,7 +672,7 @@ mod preview_pane_tests {
             clipped: false,
         };
         let path = PathBuf::from("main.rs");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let buf = rendered(&pane, 60, 6);
         for colour in inks_drawn(&buf) {
@@ -695,7 +700,7 @@ mod preview_pane_tests {
             clipped: true,
         };
         let path = PathBuf::from("big.txt");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         // Four rows of border and body, so only two lines of the file fit.
         let rows = rows(&pane, 30, 4);
@@ -710,7 +715,7 @@ mod preview_pane_tests {
             clipped: false,
         };
         let path = PathBuf::from("data.bin");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 40, 4);
         assert!(rows[1].starts_with("000000"), "the row was {:?}", rows[1]);
@@ -746,7 +751,7 @@ mod preview_pane_tests {
             clipped: false,
         });
         let path = PathBuf::from("notes.zip");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].contains("notes/"), "the row was {:?}", rows[1]);
@@ -777,7 +782,7 @@ mod preview_pane_tests {
             clipped: true,
         });
         let path = PathBuf::from("big.tar.gz");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].starts_with("…"), "the row was {:?}", rows[1]);
@@ -803,7 +808,7 @@ mod preview_pane_tests {
         );
         let content = Content::Directory(listing);
         let path = PathBuf::from("/home");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].contains("inside.txt"), "the row was {:?}", rows[1]);
@@ -820,7 +825,7 @@ mod preview_pane_tests {
             points_to: LinkTarget::File,
         };
         let path = PathBuf::from("hosts");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let rows = rows(&pane, 30, 5);
         assert!(rows[1].contains("/etc/hosts"));
@@ -829,7 +834,7 @@ mod preview_pane_tests {
 
     #[test]
     fn nothing_under_the_cursor_draws_an_empty_panel() {
-        let pane = PreviewPane::new(None, None, None);
+        let pane = PreviewPane::new(None, None, None, Icons::default());
 
         let rows = rows(&pane, 30, 4);
         assert!(rows[1].contains(words::NOTHING_SELECTED));
@@ -842,7 +847,7 @@ mod preview_pane_tests {
         // One column, two rows: exactly the two halves of one cell.
         let content = Content::Image(bitmap(1, 2, &[RED, BLUE]));
         let path = PathBuf::from("flag.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         // One cell of body inside a border on every side.
         let buf = rendered(&pane, 3, 3);
@@ -859,7 +864,7 @@ mod preview_pane_tests {
         const GREEN: [u8; 4] = [0, 255, 0, 255];
         let content = Content::Image(bitmap(1, 2, &[CLEAR, GREEN]));
         let path = PathBuf::from("logo.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let buf = rendered(&pane, 3, 3);
         let cell = &buf[(1, 1)];
@@ -890,7 +895,7 @@ mod preview_pane_tests {
         // picture is one half-pixel high, so the second row is outside it.
         let content = Content::Image(bitmap(4, 1, &[RED, RED, RED, RED]));
         let path = PathBuf::from("stripe.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let buf = rendered(&pane, 8, 4);
 
@@ -960,7 +965,12 @@ mod preview_pane_tests {
         const RED: [u8; 4] = [255, 0, 0, 255];
         let content = Content::Image(bitmap(2, 2, &[RED, RED, RED, RED]));
         let path = PathBuf::from("photo.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content), Some(graphics()));
+        let pane = PreviewPane::new(
+            Some(&path),
+            Some(&content),
+            Some(graphics()),
+            Icons::default(),
+        );
 
         let area = Rect::new(0, 0, 12, 8);
         let mut buf = Buffer::empty(area);
@@ -985,7 +995,7 @@ mod preview_pane_tests {
         const RED: [u8; 4] = [255, 0, 0, 255];
         let content = Content::Image(bitmap(2, 2, &[RED, RED, RED, RED]));
         let path = PathBuf::from("photo.png");
-        let pane = PreviewPane::new(Some(&path), Some(&content), None);
+        let pane = PreviewPane::new(Some(&path), Some(&content), None, Icons::default());
 
         let area = Rect::new(0, 0, 12, 8);
         let mut buf = Buffer::empty(area);
