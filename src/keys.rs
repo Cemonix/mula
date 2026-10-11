@@ -505,6 +505,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Makes a symlink to each marked item in the other panel",
     },
     Entry {
+        name: "entry.compare",
+        action: Action::Compare,
+        keys: &[KeyBinding::plain(KeyCode::Char('='))],
+        bar: None,
+        help: "Compares the two marked files, or the two under the cursors",
+    },
+    Entry {
         name: "archive.pack",
         action: Action::Pack,
         keys: &[KeyBinding::plain(KeyCode::Char('z'))],

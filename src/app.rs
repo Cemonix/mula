@@ -21,6 +21,7 @@ use crate::{
     favorites::{Added, Favorites},
     fs::{
         archive::format::{self, Format},
+        compare::Comparison,
         directory::{self, DirEntryKind},
         find::{Found, Limits, Search},
         job::{JobKind, JobTag, Measure, Outcome, Progress, Work},
@@ -1085,6 +1086,7 @@ impl App {
             }
             Action::Transfer { op } => self.queue_transfer(op),
             Action::Link => self.queue_link(),
+            Action::Compare => self.queue_compare(),
             Action::Pack => self.prompt_pack(),
             Action::Unpack => self.queue_unpack(),
             Action::Delete(mode) => self.confirm_delete(mode),
@@ -1958,6 +1960,45 @@ impl App {
         Ok(())
     }
 
+    /// Puts two files on the worker's queue to be compared: the two marks of
+    /// the focused tab, or with nothing marked the entries under both cursors,
+    /// the focused one first. The marks are left standing.
+    ///
+    /// The queue rather than a reader of its own, so a comparison asked for
+    /// right after a copy reads the copy once it is whole.
+    fn queue_compare(&mut self) -> Result<(), AppError> {
+        let mut marked: Vec<PathBuf> = self
+            .get_focused_tabs()
+            .active_tab()
+            .get_selected_items()
+            .iter()
+            .map(|item| item.to_path_buf())
+            .collect();
+        marked.sort();
+
+        let (first, second) = match marked.as_slice() {
+            [] => {
+                let other = self.panel(self.focused_side.toggle()).active_pane();
+                (
+                    self.get_focused_pane().selected_entry()?.path.to_path_buf(),
+                    other.selected_entry()?.path.to_path_buf(),
+                )
+            }
+            [first, second] => (first.clone(), second.clone()),
+            _ => {
+                self.notify(
+                    ToastLevel::Warning,
+                    "Mark two files to compare, or none for the two under the cursors",
+                    None,
+                );
+                return Ok(());
+            }
+        };
+
+        self.worker.queue(Work::Compare { first, second })?;
+        Ok(())
+    }
+
     /// Hands the worker a symlink to every mark of the focused tab, each to be
     /// made in the other panel under the item's own name and pointing at its
     /// absolute path.
@@ -2377,6 +2418,12 @@ impl App {
             JobKind::Unpack => self.notify_summary("unpacked", &outcome.summary, reason),
             JobKind::Rename => self.notify_summary("renamed", &outcome.summary, reason),
             JobKind::Link => self.notify_summary("linked", &outcome.summary, reason),
+            JobKind::Compare => match (outcome.compared, reason) {
+                (Some(found), _) => self.notify_compared(found),
+                (None, Some(reason)) => self.notify(ToastLevel::Error, reason, None),
+                // Cancelled, which the key already said.
+                (None, None) => (),
+            },
             // A single mutation has nothing worth counting: it either happened,
             // or the error itself is the whole report.
             JobKind::Mutate => {
@@ -2387,8 +2434,9 @@ impl App {
         }
 
         // Only reads the disk when the job could have changed it, so a run that
-        // skipped everything costs nothing.
-        if outcome.summary.touched_disk() {
+        // skipped everything, and a job that names nothing it touches, costs
+        // nothing.
+        if outcome.summary.touched_disk() && !outcome.touched.is_empty() {
             for path in &outcome.touched {
                 self.dir_sizes.forget(path);
             }
@@ -2438,6 +2486,20 @@ impl App {
             many => format!("{} entries were left out", many.len()),
         };
         self.notify(ToastLevel::Warning, message, None);
+    }
+
+    /// Says what a comparison found. An offset counts from zero, the way the
+    /// hex dump of the preview does, and is given in hex too, the way the dump
+    /// writes it.
+    fn notify_compared(&mut self, found: Comparison) {
+        let message = match found {
+            Comparison::Identical => String::from("Identical"),
+            Comparison::SizesDiffer { first, second } => {
+                format!("Sizes differ: {first} and {second} bytes")
+            }
+            Comparison::DifferAt(offset) => format!("Differ at offset {offset} ({offset:#x})"),
+        };
+        self.notify(ToastLevel::Info, message, None);
     }
 
     fn notify_summary(&mut self, verb: &str, summary: &ProcessedSummary, reason: Option<&str>) {

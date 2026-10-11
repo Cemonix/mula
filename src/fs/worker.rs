@@ -12,6 +12,7 @@ use std::{
 
 use crate::fs::{
     archive::{pack::pack, unpack::unpack},
+    compare::compare,
     job::{JobTag, Measure, Outcome, Progress, Work, WorkerMsg},
     ops::{
         MutationError, MutationOp, Observer, Policy, ProcessedSummary, Transfer, TransferOp,
@@ -176,6 +177,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
     let mut kept = Vec::new();
     let mut left_out = Vec::new();
     let mut reason = None;
+    let mut compared = None;
 
     let summary = match job.work {
         Work::Transfer { op, items, policy } => {
@@ -384,6 +386,30 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
             summary
         }
 
+        // One item, weighed by the first file: what moves the bar is how far
+        // into both files the job has read.
+        Work::Compare { first, second } => {
+            let total = first.metadata().map(|meta| meta.len()).unwrap_or_default();
+            reporter.begin(1, Measure::bytes(total));
+            reporter.start_item(&first, total);
+
+            let mut summary = ProcessedSummary::new(1);
+            match compare(&first, &second, reporter) {
+                Ok(found) => {
+                    summary.process();
+                    compared = Some(found);
+                }
+                Err(_) if reporter.cancelled() => (),
+                Err(e) => {
+                    tracing::error!(?first, ?second, error = %e, "comparison failed");
+                    reason = Some(e.to_string());
+                    summary.fail();
+                }
+            }
+            reporter.finish_item();
+            summary
+        }
+
         Work::Mutate(op) => {
             reporter.begin(1, Measure::Items);
 
@@ -411,6 +437,7 @@ fn execute(job: Job, reporter: &mut Reporter) -> Outcome {
         left_out,
         reason,
         touched,
+        compared,
     }
 }
 
@@ -553,7 +580,9 @@ mod worker_tests {
     use crate::fs::ops::{DeleteMode, OnCollision};
     use std::{fs, path::PathBuf};
 
-    use crate::fs::{archive::format::Format, job::JobKind, temp_tree::TempTree};
+    use crate::fs::{
+        archive::format::Format, compare::Comparison, job::JobKind, temp_tree::TempTree,
+    };
 
     /// Drains until every queued job has reported, the way the main loop does,
     /// and gives up rather than hanging if the worker never answers.
@@ -865,6 +894,22 @@ mod worker_tests {
             "in the way"
         );
         assert_eq!(fs::read_link(t.at("dest/b.txt")).unwrap(), t.at("nowhere"));
+    }
+
+    /// A comparison changes nothing, so it names nothing a listing would have
+    /// to be read again for.
+    #[test]
+    fn a_compare_job_brings_its_answer_back_and_touches_nothing() {
+        let t = TempTree::new();
+        let first = t.make_file("a.txt", "same");
+        let second = t.make_file("b.txt", "same");
+
+        let mut worker = Worker::start();
+        worker.queue(Work::Compare { first, second }).unwrap();
+        let finished = settle(&mut worker);
+
+        assert_eq!(finished[0].compared, Some(Comparison::Identical));
+        assert!(finished[0].touched.is_empty());
     }
 
     #[test]
