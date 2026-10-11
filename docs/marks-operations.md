@@ -188,6 +188,37 @@ Only unix makes links. Windows wants to know up front whether the target is a
 file or a directory (`symlink_file`, `symlink_dir`), which a swapped `cfg`
 would not give it.
 
+## A comparison waits its turn on the queue
+
+`=` reads two files side by side and says whether they hold the same bytes:
+"Identical", the sizes when those already differ, or the offset of the first
+byte that does not match. The question it answers is "is this copy really the
+same?", so it has to be askable the moment the copy is queued. A comparison is
+a job on the worker for that reason, not a reader of its own: queued behind
+the copy, it reads the copy once it is whole. A reader would race the copy and
+compare half a file. It also gets a progress bar and `x` with no work of its
+own, which two large files need.
+
+The two files are the two marks, or with nothing marked, the entries under
+both cursors. Two marks is the shape the rest of the batch keys have, and the
+cursors cover the common case of a file and its copy facing each other across
+the panels. Any other number of marks is turned away with a toast: one mark
+plus a cursor would be a third rule to remember. The marks stay where they
+were. Nothing was done to them, and comparing is often the step before a copy
+or a delete of the same items.
+
+The answer is a toast, not the info bar. It is an event the user asked for,
+and once it has been read there is nothing left on `App` to draw it from. An
+offset counts from zero and is given in hex as well, so it can be found in the
+preview's hex dump.
+
+Sizes are compared first, from the metadata, and the bytes only when the sizes
+match. Both have to be regular files once links are followed: a directory is
+refused, and so is a fifo, before it is opened, since opening one waits for a
+writer that may never come. Where two files differ line by line is for a
+diff program to show, the way reading one is the pager's: Mula does not draw a
+diff itself.
+
 ## Directories merge, they never replace
 
 Names are unique within a directory, so at each name there is exactly one pair
