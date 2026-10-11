@@ -1084,6 +1084,7 @@ impl App {
                 Ok(())
             }
             Action::Transfer { op } => self.queue_transfer(op),
+            Action::Link => self.queue_link(),
             Action::Pack => self.prompt_pack(),
             Action::Unpack => self.queue_unpack(),
             Action::Delete(mode) => self.confirm_delete(mode),
@@ -1953,6 +1954,22 @@ impl App {
         tab: TabId,
     ) -> Result<(), AppError> {
         let tag = self.worker.queue(Work::Transfer { op, items, policy })?;
+        self.queued_marks.push(QueuedMarks { tag, tab });
+        Ok(())
+    }
+
+    /// Hands the worker a symlink to every mark of the focused tab, each to be
+    /// made in the other panel under the item's own name and pointing at its
+    /// absolute path.
+    fn queue_link(&mut self) -> Result<(), AppError> {
+        let (items, tab) = self.take_marks_across();
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
+        }
+
+        let tag = self.worker.queue(Work::Link { items })?;
         self.queued_marks.push(QueuedMarks { tag, tab });
         Ok(())
     }

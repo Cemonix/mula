@@ -498,6 +498,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Moves marked items into the other panel",
     },
     Entry {
+        name: "transfer.link",
+        action: Action::Link,
+        keys: &[KeyBinding::plain(KeyCode::Char('l'))],
+        bar: None,
+        help: "Makes a symlink to each marked item in the other panel",
+    },
+    Entry {
         name: "archive.pack",
         action: Action::Pack,
         keys: &[KeyBinding::plain(KeyCode::Char('z'))],
