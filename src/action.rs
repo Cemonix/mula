@@ -56,6 +56,9 @@ pub enum Action {
     /// Makes a symlink to every marked item in the other panel, under the
     /// item's own name. Nothing is asked: a name already taken fails its item.
     Link,
+    /// Puts the path under the cursor, or with marks every marked one, on the
+    /// system clipboard. The marks are left standing.
+    CopyPath,
     /// Compares two files byte by byte: the two marked, or with nothing
     /// marked the two under the cursors. The answer comes as a toast.
     Compare,

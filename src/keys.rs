@@ -505,6 +505,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Makes a symlink to each marked item in the other panel",
     },
     Entry {
+        name: "entry.copy-path",
+        action: Action::CopyPath,
+        keys: &[KeyBinding::plain(KeyCode::Char('y'))],
+        bar: None,
+        help: "Puts the marked paths, or the cursor's, on the clipboard",
+    },
+    Entry {
         name: "entry.compare",
         action: Action::Compare,
         keys: &[KeyBinding::plain(KeyCode::Char('='))],

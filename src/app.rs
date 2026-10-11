@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     env, io, mem,
+    os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
     process::Child,
     sync::Arc,
@@ -17,6 +18,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, ListEnd, VerticalDir},
+    clipboard,
     config::Config,
     favorites::{Added, Favorites},
     fs::{
@@ -342,6 +344,14 @@ enum Then {
     Rename { items: Vec<PathBuf>, tab: TabId },
 }
 
+/// Paths waiting to be sent to the clipboard at the end of the pass, one to a
+/// line, and how many there are.
+#[derive(Debug)]
+struct Clipped {
+    text: Vec<u8>,
+    count: usize,
+}
+
 /// Where the marks a queued job took came from, so the items that fail can be
 /// put back even after the user has switched tabs or panels.
 #[derive(Debug)]
@@ -434,6 +444,10 @@ pub struct App {
     /// What the loop is to hand the terminal over for, or `None` when nothing
     /// asked.
     opening: Option<Opening>,
+    /// What the loop is to send to the clipboard, or `None` when nothing
+    /// asked. Sent as a sequence the terminal reads, so it goes out between
+    /// frames and never in the middle of one.
+    clipboard: Option<Clipped>,
     /// The programs started without the terminal. Nothing waits for them; the
     /// list is only what `try_wait` is asked on, so one that has ended is let
     /// go of rather than left in the process table.
@@ -511,6 +525,7 @@ impl App {
             surface: Surface::new(capabilities),
             progress: None,
             opening: None,
+            clipboard: None,
             detached: Vec::new(),
             queued_marks: Vec::new(),
             tick: 0,
@@ -563,6 +578,7 @@ impl App {
             self.sync_preview();
             self.collect_from_previewer();
             self.reap_detached();
+            self.copy_pending();
             // Last of the pass, so a file asked for anywhere in it is opened
             // before the next frame is drawn.
             self.open_pending(terminal)?;
@@ -1099,6 +1115,7 @@ impl App {
             }
             Action::Transfer { op } => self.queue_transfer(op),
             Action::Link => self.queue_link(),
+            Action::CopyPath => self.copy_paths(),
             Action::Compare => self.queue_compare(),
             Action::Pack => self.prompt_pack(),
             Action::Unpack => self.queue_unpack(),
@@ -1266,6 +1283,54 @@ impl App {
                 Ok(child) => self.detached.push(child),
                 Err(e) => self.notify(ToastLevel::Error, format!("{program}: {e}"), None),
             },
+        }
+    }
+
+    /// Puts down the paths of the marks of the focused tab, or the path under
+    /// the cursor when nothing is marked, for the clipboard. Marks are taken in
+    /// path order, so the paths of one directory sit together.
+    fn copy_paths(&mut self) -> Result<(), AppError> {
+        let mut paths: Vec<Arc<Path>> = self
+            .get_focused_tabs()
+            .active_tab()
+            .get_selected_items()
+            .iter()
+            .cloned()
+            .collect();
+        if paths.is_empty() {
+            paths.push(Arc::clone(&self.get_focused_pane().selected_entry()?.path));
+        }
+        paths.sort();
+
+        let lines: Vec<&[u8]> = paths
+            .iter()
+            .map(|path| path.as_os_str().as_bytes())
+            .collect();
+        self.clipboard = Some(Clipped {
+            text: lines.join(&b'\n'),
+            count: paths.len(),
+        });
+        Ok(())
+    }
+
+    /// Sends what was put down for the clipboard to the terminal, and says so.
+    ///
+    /// Sent is all that can be said: the terminal answers nothing, and one
+    /// that refuses the sequence drops it in silence.
+    fn copy_pending(&mut self) {
+        let Some(Clipped { text, count }) = self.clipboard.take() else {
+            return;
+        };
+
+        match clipboard::copy(&text, &mut io::stdout()) {
+            Ok(()) => {
+                let message = match count {
+                    1 => String::from("Path sent to the clipboard"),
+                    count => format!("{count} paths sent to the clipboard"),
+                };
+                self.notify(ToastLevel::Info, message, None);
+            }
+            Err(e) => self.notify(ToastLevel::Error, format!("Clipboard: {e}"), None),
         }
     }
 
