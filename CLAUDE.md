@@ -196,6 +196,8 @@ is open again, not broken.
   overlay.
 - Every change to the keys rebuilds the Browse table from the config, and
   everything read out of it with it.
+- A tab per section, Keys last. The box is measured against every tab and
+  keeps fixed room for the footer, so nothing done inside it resizes it.
 
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once
