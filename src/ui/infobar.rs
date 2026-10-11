@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::{
     keys::KeyBinding,
-    ui::{self, columns::bytes},
+    ui::{self, columns::bytes, tab::Weight},
 };
 
 /// What the caller has already worked out about the running job. The widget
@@ -88,6 +88,8 @@ impl Speed {
 #[derive(Debug, Default)]
 pub struct InfoBar<'a> {
     marked: usize,
+    /// What the marks add up to, drawn after their count.
+    weight: Weight,
     /// How many of the marks the listing on screen does not show. The next
     /// operation takes them all the same.
     out_of_sight: usize,
@@ -148,6 +150,11 @@ impl<'a> InfoBar<'a> {
 
     pub fn marked(mut self, count: usize) -> Self {
         self.marked = count;
+        self
+    }
+
+    pub fn weight(mut self, weight: Weight) -> Self {
+        self.weight = weight;
         self
     }
 
@@ -219,6 +226,13 @@ impl<'a> InfoBar<'a> {
         if self.marked > 0 {
             let mut segment =
                 vec![Span::raw(format!("{}{}", self.marked, Self::MARKED_LABEL)).bold()];
+            match self.weight {
+                Weight::Exact(size) => segment.push(Span::raw(format!(" · {}", bytes(size)))),
+                Weight::AtLeast(size) => {
+                    segment.push(Span::raw(format!(" · ≥{}", bytes(size))));
+                }
+                Weight::Unknown => (),
+            }
             if self.out_of_sight > 0 {
                 segment.push(Span::raw(", "));
                 segment.push(
@@ -438,6 +452,22 @@ mod infobar_tests {
         assert_eq!(
             render(InfoBar::new().marked(5).out_of_sight(2), 40),
             format!("{}, 2{}", marked(5), InfoBar::OUT_OF_SIGHT_LABEL)
+        );
+    }
+
+    #[test]
+    fn the_weight_follows_the_count() {
+        assert_eq!(
+            render(InfoBar::new().marked(2).weight(Weight::Exact(2048)), 40),
+            format!("{} · 2.0K", marked(2))
+        );
+    }
+
+    #[test]
+    fn a_weight_not_yet_known_whole_is_a_lower_bound() {
+        assert_eq!(
+            render(InfoBar::new().marked(2).weight(Weight::AtLeast(10)), 40),
+            format!("{} · ≥10B", marked(2))
         );
     }
 

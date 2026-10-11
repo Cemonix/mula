@@ -287,6 +287,11 @@ impl Pane {
         self.view.iter().map(|&index| &entries[index])
     }
 
+    /// Every entry of the listing, the ones the view leaves out included.
+    pub fn listed_entries(&self) -> &[DirEntry] {
+        self.directory.entries()
+    }
+
     /// Adds a character to the filter and narrows the view to what still
     /// matches.
     pub fn push_filter(&mut self, c: char) {

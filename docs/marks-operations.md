@@ -76,6 +76,29 @@ is cut from the right when it runs out of room. A confirmation before a
 transfer with marks out of sight would change what `c` and `m` are, and is
 left for when the count turns out not to be enough.
 
+## What the marks weigh is a lower bound until it is whole
+
+`5 marked · 3.4G` adds a file by the size its listing read and a directory by
+the total a walk left on `App`. Nothing is read for it: the number is made of
+what is already known, which is what lets it sit in the info bar.
+
+What is not known yet makes it `≥3.4G`. A directory still being walked fills
+in as the walk reports, and the `≥` goes once the last one has. Nothing known
+at all draws no size rather than `≥0B`.
+
+A spinner was the other candidate and is wrong here: it says something is
+being worked out, and for a mark in a directory since left nothing is. A file
+there has no listing to read a size from, and a directory there counts only if
+it was measured while it was on screen. Measuring the marks themselves — a
+`stat` per file, a walk per directory, on the sizes pool and independent of
+the screen — would close that, and is a reader of its own; it waits until the
+`≥` turns out to matter.
+
+With the size column dropped (`,`) the listing is read without metadata, so the
+files on screen have no size either. The weight does not raise what the
+listing is read with: that would put a `stat` per entry behind a segment of the
+info bar, the opposite of a caller drawing no column asking for none.
+
 ## Marks clear when a batch is queued
 
 Not when it finishes. The user goes on marking while the copy runs, and a
