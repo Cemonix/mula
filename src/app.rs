@@ -40,7 +40,7 @@ use crate::{
     settings::{Section, Setting, Settings, Step},
     ui::{
         self,
-        columns::{Columns, Look, PermissionsColumn},
+        columns::{Columns, Look},
         config::{ConfigMsg, ConfigRow, ConfigTab, ConfigView, Question},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
@@ -674,7 +674,7 @@ impl App {
         let icons = self.config.settings().icons;
         let look = Look {
             columns: self.columns,
-            permissions: PermissionsColumn::default(),
+            permissions: self.config.settings().permissions,
             icons,
         };
         match self.opposite {
@@ -1746,7 +1746,7 @@ impl App {
                 }
             }
             // Read from the config every frame.
-            Setting::Icons | Setting::Progress => (),
+            Setting::Permissions | Setting::Icons | Setting::Progress => (),
             // Forgetting what was asked for is what asks for it again, with
             // the new setting, on the next pass.
             Setting::Highlight => self.previewing = None,
