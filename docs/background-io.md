@@ -221,6 +221,13 @@ there is no frame for a slow write to hold up.
 **Holds while** the temp directory is local, as it is wherever `$TMPDIR`
 has not been pointed somewhere else.
 
+## And the config file
+
+The third exception, written the way the favorites are and for the same
+reasons: a few kilobytes under the user's home, with nothing to be ordered
+against. What it adds — writing through a symlink, and refusing anything it
+cannot read back — is in `settings.md`.
+
 ## The worker never touches `App`
 
 It sends `Progress` and `Done { summary }`. The main loop refreshes panes and

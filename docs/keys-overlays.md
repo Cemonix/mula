@@ -141,7 +141,9 @@ would otherwise draw `c Copy  y Copy`.
 A config that cannot be used costs the user their keys and never their file
 manager: the defaults stand and the reason arrives as a toast. It is all or
 nothing rather than line by line, because half a config is a state the user
-cannot picture from the file in front of them.
+cannot picture from the file in front of them. Since the file grew settings
+and Mula started writing it, that has a second half, in `settings.md`: a file
+that could not be used is never written either.
 
 ## One spelling for a key
 
