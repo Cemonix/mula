@@ -8,7 +8,7 @@ in a task file.
 
 `docs/` holds the reasoning behind the rules below, one file per subsystem:
 `background-io.md`, `preview.md`, `keys-overlays.md`, `marks-operations.md`,
-`opening.md`, `archives.md`.
+`opening.md`, `archives.md`, `settings.md`.
 Read the one covering what you are about to change. A rule that acquires a
 rationale worth keeping puts it there, not here.
 
@@ -170,6 +170,35 @@ is open again, not broken.
   format has a Rust implementation; `.tar.zst` can be read but not written,
   since no Rust zstd encoder exists.
 
+**Settings**
+- The config file is Mula's: it is written whole from what Mula holds, and
+  what was written by hand beyond the values does not survive. Every setting
+  and action is written under its comment with the default commented out;
+  only a value off its default gets a line of its own.
+- A write lands on the file at the end of the symlinks, through a temporary
+  file beside it and a rename. The link stays a link.
+- Reading is strict: anything Mula does not know is an error, never a skipped
+  line, since the next write would drop it. A file that cannot be used falls
+  back whole and is not written for the rest of the run.
+- Read once, at startup. A change made by hand while Mula runs is overwritten
+  by the next change made in the overlay.
+- A setting is what a panel opens with. A Browse key that changes the same
+  thing changes the panel and never the file; a change in the overlay shows
+  at once on every pane, for that setting alone.
+- `Setting` is one enum matched exhaustively for its name, help, values and
+  section, and the file, the parser and the overlay all read it.
+- A key is bound by pressing it, never by typing its name. While the overlay
+  waits, every key but `Esc` is the answer; F1 stays global. A key that is
+  global, or whose name does not read back as itself, is refused.
+- A key moves, it is never shared, and never in silence: taking one from
+  another action asks first and names the holder, and any action the move
+  leaves with no key. The question is a state of the overlay, not a second
+  overlay.
+- Every change to the keys rebuilds the Browse table from the config, and
+  everything read out of it with it.
+- A tab per section, Keys last. The box is measured against every tab and
+  keeps fixed room for the footer, so nothing done inside it resizes it.
+
 **Opening**
 - The action writes down what to open; the loop hands the terminal over, once
   per pass. Only `run` holds the terminal.
@@ -194,14 +223,15 @@ is open again, not broken.
   holds is thinner than what it draws, never when it is thicker.
 - Threads, not async. **Holds while** the I/O is local file syscalls, which
   have no non-blocking API; SSH panes are sockets and do.
-- The favorites file and the names file of a bulk rename are the only `fs::`
-  writes on the loop: neither has anything to be ordered against, and the
-  queue they would sit in carries 4 GB copies. The favorites file is written
-  whole at every change and the list is put back when the write fails, so the
-  screen never claims a save that did not happen. A file that could not be
-  read closes writing for the run rather than replacing it. The names file
-  lives only while the editor holds the terminal.
-  **Holds while** the list stays small and both files are local.
+- The favorites file, the config file and the names file of a bulk rename
+  are the only `fs::` writes on the loop: none has anything to be ordered
+  against, and the queue they would sit in carries 4 GB copies. The favorites
+  and the config are written whole at every change and what changed is put
+  back when the write fails, so the screen never claims a save that did not
+  happen. A file that could not be read closes writing for the run rather
+  than replacing it. The names file lives only while the editor holds the
+  terminal.
+  **Holds while** the three stay small and local.
 - One worker for mutations, no pool. **Holds while** a batch stays on one
   device. One `Reader` instance per answer that can be outstanding on its own,
   each with its own generation — the two panels are two of those, not one

@@ -27,6 +27,7 @@ use crate::{
         sizes::{DirSizes, Sizing},
         worker::Health,
     },
+    settings::Settings,
     ui::{
         pane::{Entered, Pane, PaneError},
         tab::{Tab, TabId, TabList},
@@ -72,11 +73,11 @@ struct Measuring {
 }
 
 impl Panel {
-    /// A panel of one tab, with its readers running and nothing asked for yet.
-    /// Walks run on `pool`.
-    pub fn new(pool: Arc<ThreadPool>) -> Result<Self, PaneError> {
+    /// A panel of one tab opened the way `settings` say, with its readers
+    /// running and nothing asked for yet. Walks run on `pool`.
+    pub fn new(pool: Arc<ThreadPool>, settings: &Settings) -> Result<Self, PaneError> {
         Ok(Self {
-            tabs: TabList::new(vec![Tab::new(String::from("New Tab"))?]),
+            tabs: TabList::new(vec![Tab::new(String::from("New Tab"), settings)?]),
             listings: Reader::<Listing>::start(()),
             listing_for: None,
             sizing: Reader::<Sizing>::start(pool),
@@ -225,7 +226,7 @@ mod panel_tests {
 
     fn panel() -> Panel {
         let pool = ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-        Panel::new(Arc::new(pool)).unwrap()
+        Panel::new(Arc::new(pool), &Settings::default()).unwrap()
     }
 
     /// A panel of two tabs, each holding a listing and waiting for nothing,
@@ -235,7 +236,7 @@ mod panel_tests {
         let mut panel = panel();
         panel
             .tabs
-            .add_tab(Tab::new(String::from("second")).unwrap());
+            .add_tab(Tab::new(String::from("second"), &Settings::default()).unwrap());
 
         for _ in 0..2 {
             let path = Arc::clone(panel.active_pane().get_current_dir());

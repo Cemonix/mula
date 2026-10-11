@@ -86,6 +86,7 @@ These are the ones worth knowing first.
 | `b` / `Shift+B` | Favorites: go to one / add the directory this panel is in |
 | `t` / `w` / `Shift+T` | New tab / close tab / rename tab |
 | `[` / `]` | Previous / next tab |
+| `Shift+C` | Settings and key bindings, saved as they change |
 | `q` | Quit |
 
 ## What it does
@@ -140,25 +141,43 @@ subsystem.
 
 ## Configuration
 
-`~/.config/mula/config.toml` (or `$XDG_CONFIG_HOME/mula/config.toml`) rebinds
-the browse keys. Nothing is created for you and nothing changes until you put a
-file there.
+`Shift+C` opens the settings: the columns, the order and the dotfiles a panel
+opens with, and the browse keys. To rebind an action, put the cursor on it,
+press `Enter`, then press the new key. If another action already has that key,
+Mula asks before taking it away. `r` puts a row back to its default. A change
+shows at once and is saved straight away to `~/.config/mula/config.toml` (or
+`$XDG_CONFIG_HOME/mula/config.toml`).
+
+Mula owns that file and writes the whole of it on every change. It lists every
+setting and every browse key, each under a comment, with the default on a
+commented line and your own value, if you set one, on the line below it:
 
 ```toml
+[listing]
+
+# What a panel is sorted by when it opens: name, time, size, extension
+# sort = "name"
+sort = "size"
+
 [keys.browse]
-transfer.copy = ["c", "y"]    # copy on y as well as c
-entry.delete  = "Delete"      # delete on Delete, and no longer on d
-tab.close     = []            # nothing closes a tab
+
+# Copies marked items into the other panel
+# transfer.copy = "c"
+transfer.copy = ["c", "y"]
 ```
 
-[`config.example.toml`](config.example.toml) is every action written out at the
-key it already has — copy it and keep the lines you want to change. Key names
-are the ones F1 prints. Anything the file leaves out keeps the key it has, and
-a config Mula cannot use costs you your keys and nothing else: the defaults
-stand and the reason appears at startup.
+You can also edit the file by hand. Each action takes one key, a list of keys,
+or `[]` for none, and key names are the ones F1 prints. Values you write by hand
+are kept the next time Mula writes the file, but your comments and formatting
+are not. If the file is a symlink, say from a dotfiles repository, Mula writes
+through the link and leaves the link alone.
 
-Only the browse keys are configurable. The overlays answer to `Esc`, `Enter`
-and the arrows.
+If Mula can't use the file, because it is broken or holds something Mula doesn't
+know, you lose your settings and keys for that run but never the file: Mula
+starts on its defaults, says why, and won't write to the file until it restarts.
+
+Only the browse keys can be rebound. The overlays answer to `Esc`, `Enter` and
+the arrows.
 
 ## Environment
 
@@ -180,8 +199,6 @@ and the arrows.
   but Enter on an archive does not open it as a directory. Doing that means
   entries that are not local paths — the same thing a remote panel needs, so
   the two wait for one another.
-- **Settings in the config file.** It rebinds keys and nothing else; the column
-  choice and the icons are decided in the running app and forgotten on exit.
 
 ## Contributing
 

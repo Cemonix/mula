@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 
-use crate::fs::directory::{Detail, DirEntry, DirEntryKind, compare_file_names};
+use crate::{
+    fs::directory::{Detail, DirEntry, DirEntryKind, compare_file_names},
+    settings::Choice,
+};
 
 /// What a listing is ordered by, within each kind of entry.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -35,6 +38,14 @@ pub struct Sort {
 }
 
 impl Sort {
+    /// `key`, run its own way.
+    pub fn by(key: SortKey) -> Self {
+        Self {
+            key,
+            order: Order::Natural,
+        }
+    }
+
     /// The next key along, run its own way.
     pub fn next_key(self) -> Self {
         let key = match self.key {
@@ -71,19 +82,14 @@ impl Sort {
         }
     }
 
-    /// Describes the order for the border of the pane, or `None` for the one
-    /// every pane starts in.
-    pub fn label(self) -> Option<String> {
-        if self == Self::default() {
+    /// Describes the order for the border of the pane, or `None` when it is
+    /// `usual`, the one the pane opened in.
+    pub fn label(self, usual: Sort) -> Option<String> {
+        if self == usual {
             return None;
         }
 
-        let key = match self.key {
-            SortKey::Name => "name",
-            SortKey::Modified => "time",
-            SortKey::Size => "size",
-            SortKey::Extension => "extension",
-        };
+        let key = self.key.name();
         Some(match self.order {
             Order::Natural => format!("by {key}"),
             Order::Reversed => format!("by {key}, reversed"),
@@ -173,10 +179,7 @@ mod sort_tests {
     }
 
     fn by(key: SortKey) -> Sort {
-        Sort {
-            key,
-            order: Order::Natural,
-        }
+        Sort::by(key)
     }
 
     #[test]
@@ -303,11 +306,14 @@ mod sort_tests {
     }
 
     #[test]
-    fn the_order_every_pane_starts_in_is_not_labelled() {
-        assert_eq!(Sort::default().label(), None);
+    fn the_order_a_pane_opened_in_is_not_labelled() {
+        let usual = by(SortKey::Size);
+
+        assert_eq!(usual.label(usual), None);
         assert_eq!(
-            by(SortKey::Size).reversed().label().as_deref(),
+            usual.reversed().label(usual).as_deref(),
             Some("by size, reversed")
         );
+        assert_eq!(Sort::default().label(usual).as_deref(), Some("by name"));
     }
 }

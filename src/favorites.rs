@@ -16,9 +16,8 @@ const HEADER: &str = "# The directories Mula jumps to. Written by Mula itself.\n
 /// Where the list lives: `$XDG_STATE_HOME/mula`, else the platform's own place
 /// for what a program keeps about itself.
 ///
-/// Not `~/.config/mula`, which holds the keys. That file is written by the
-/// user and read by Mula; this one is the other way round, and rewriting a
-/// file someone edits by hand would cost them their comments.
+/// Not `~/.config/mula`, which holds the settings: those are carried from one
+/// machine to the next, and the paths on this list belong to this one.
 ///
 /// `None` when there is no home to write under.
 fn favorites_file() -> Option<PathBuf> {

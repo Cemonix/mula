@@ -3,6 +3,7 @@ use std::path::Path;
 use ratatui::text::Span;
 
 pub(crate) mod columns;
+pub(crate) mod config;
 pub(crate) mod dialog;
 pub(crate) mod favorites;
 pub(crate) mod filter;
@@ -36,6 +37,65 @@ pub(crate) fn scroll_position(first: usize, shown: usize, total: usize) -> Optio
     (shown < total).then(|| format!(" {}-{} of {total} ", first + 1, first + shown))
 }
 
+/// Breaks `message` into lines of at most `width` display columns, splitting
+/// at spaces. A word too long to ever fit is split across lines by column.
+/// Always returns at least one line.
+pub(crate) fn wrap(message: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0;
+
+    for word in message.split_whitespace() {
+        for chunk in split_word(word, width) {
+            let chunk_width = Span::raw(chunk.as_str()).width();
+            let space = if line.is_empty() { 0 } else { 1 };
+
+            if !line.is_empty() && line_width + space + chunk_width > width {
+                lines.push(std::mem::take(&mut line));
+                line_width = 0;
+            } else if space == 1 {
+                line.push(' ');
+                line_width += 1;
+            }
+
+            line.push_str(&chunk);
+            line_width += chunk_width;
+        }
+    }
+
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// Cuts `word` into pieces of at most `width` display columns. A word that
+/// already fits comes back whole.
+fn split_word(word: &str, width: usize) -> Vec<String> {
+    if Span::raw(word).width() <= width {
+        return vec![word.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut chunk = String::new();
+    let mut chunk_width = 0;
+
+    for character in word.chars() {
+        let character_width = Span::raw(character.to_string()).width();
+        if !chunk.is_empty() && chunk_width + character_width > width {
+            chunks.push(std::mem::take(&mut chunk));
+            chunk_width = 0;
+        }
+        chunk.push(character);
+        chunk_width += character_width;
+    }
+
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+    chunks
+}
+
 /// Clips text to `max` columns, counting display width rather than bytes, and
 /// marks the cut with an ellipsis that is itself one column wide.
 pub(crate) fn clip(text: &str, max: usize) -> String {
@@ -62,6 +122,32 @@ pub(crate) fn clip(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod ui_tests {
     use super::*;
+
+    #[test]
+    fn a_message_that_fits_stays_on_one_line() {
+        assert_eq!(wrap("Deleted 3 items", 20), ["Deleted 3 items"]);
+    }
+
+    #[test]
+    fn wrapping_breaks_at_spaces() {
+        assert_eq!(
+            wrap("Deleted 3 of 5 items", 10),
+            ["Deleted 3", "of 5 items"]
+        );
+    }
+
+    #[test]
+    fn a_word_longer_than_the_line_is_split() {
+        assert_eq!(
+            wrap("/very/long/path/to/a/file", 10),
+            ["/very/long", "/path/to/a", "/file"]
+        );
+    }
+
+    #[test]
+    fn an_empty_message_still_yields_one_line() {
+        assert_eq!(wrap("", 10), [""]);
+    }
 
     #[test]
     fn a_long_name_is_clipped_to_its_display_width() {
