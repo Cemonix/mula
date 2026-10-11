@@ -6,6 +6,7 @@ use std::{path::PathBuf, time::Duration};
 
 use crate::fs::{
     archive::format::Format,
+    compare::Comparison,
     ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
 };
 
@@ -24,6 +25,7 @@ pub enum JobKind {
     Unpack,
     Rename,
     Link,
+    Compare,
     Mutate,
 }
 
@@ -70,6 +72,12 @@ pub enum Work {
     Link {
         items: Vec<Transfer>,
     },
+    /// Two files read side by side. Nothing on disk changes, and the answer
+    /// comes back on the outcome.
+    Compare {
+        first: PathBuf,
+        second: PathBuf,
+    },
     Mutate(MutationOp),
 }
 
@@ -82,6 +90,7 @@ impl Work {
             Work::Unpack { .. } => JobKind::Unpack,
             Work::Rename { .. } => JobKind::Rename,
             Work::Link { .. } => JobKind::Link,
+            Work::Compare { .. } => JobKind::Compare,
             Work::Mutate(_) => JobKind::Mutate,
         }
     }
@@ -105,6 +114,7 @@ impl Work {
                 .flat_map(|item| [item.from.clone(), item.to.clone()])
                 .collect(),
             Work::Link { items } => items.iter().map(|item| item.to.clone()).collect(),
+            Work::Compare { .. } => Vec::new(),
             Work::Mutate(op) => match op {
                 MutationOp::Delete { path, .. } => vec![path.clone()],
                 MutationOp::Rename { path, new_name } => {
@@ -228,6 +238,9 @@ pub struct Outcome {
     pub reason: Option<String>,
     /// What [`Work::touched`] said before the job ran, whatever came of it.
     pub touched: Vec<PathBuf>,
+    /// What a comparison found, or `None` for a comparison that failed or was
+    /// cancelled and for every other job.
+    pub compared: Option<Comparison>,
 }
 
 #[derive(Debug)]
