@@ -133,6 +133,29 @@ disagree about how wide a selector makes a character, and the columns behind
 the name are laid out by that width. `off` draws nothing and keeps no room for
 it, so a name starts right after the mark.
 
+## The progress label drops what fits the job least
+
+`[appearance] progress` keeps the percentage beside the bar, the counts after
+the name, or both. Both is the default: the percentage answers "how far", the
+counts answer "how much", and on a wide row there is room for the two. The
+info bar drops segments from the right when the row runs out, so on a narrow
+one a user who reads only one of them can give the other's room to the speed
+and the queue. Like the icons, it is read every frame.
+
+## Highlighting is on or off, not a theme
+
+The preview colours text in the terminal's own palette: an ink is an index,
+never RGB, so the colours are the user's scheme and follow it when it changes.
+That leaves a theme with nothing to choose. A second table could only send
+the same scopes to other indices, and which index looks like what is already
+the terminal's decision. So the setting is `[preview] highlight`, `syntax` or
+`off`.
+
+`off` is honoured where the text is read, not where it is drawn. The preview
+job carries it, and a reader told `off` never loads the grammars at all. A
+change in the overlay forgets which path the preview was last asked for, which
+is what makes the next pass of the loop ask again.
+
 ## One list of settings
 
 `Setting` is an enum, and everything about a setting — its section, its name
