@@ -1898,36 +1898,40 @@ impl App {
         }
     }
 
-    /// Takes the marks of the focused tab and hands them to the worker. The
-    /// paths are copied out here and never read again, so the batch is settled
-    /// the moment the key is pressed.
-    fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
-        let (items, tab) = {
-            let (from, to) = self.both_sides();
+    /// Takes the marks of the focused tab, each paired with the path of its
+    /// own name in the directory of the other panel, and the tab they were
+    /// on. The paths are copied out here and never read again, so the batch is
+    /// settled the moment the key is pressed.
+    fn take_marks_across(&mut self) -> (Vec<Transfer>, TabId) {
+        let (from, to) = self.both_sides();
 
-            let to_dir = to.get_pane().get_current_dir().to_path_buf();
-            // The batch flattens here, once: every item lands under its own
-            // name, and both ends travel with it from now on. A marked entry
-            // always has a file name — the parent row is never marked — so
-            // nothing is dropped on the way.
-            let items: Vec<Transfer> = from
-                .get_selected_items()
-                .iter()
-                .filter_map(|item| {
-                    Some(Transfer {
-                        from: item.to_path_buf(),
-                        to: to_dir.join(item.file_name()?),
-                    })
+        let to_dir = to.get_pane().get_current_dir().to_path_buf();
+        // The batch flattens here, once: every item lands under its own name,
+        // and both ends travel with it from now on. A marked entry always has
+        // a file name — the parent row is never marked — so nothing is dropped
+        // on the way.
+        let items: Vec<Transfer> = from
+            .get_selected_items()
+            .iter()
+            .filter_map(|item| {
+                Some(Transfer {
+                    from: item.to_path_buf(),
+                    to: to_dir.join(item.file_name()?),
                 })
-                .collect();
-            let tab = from.id();
+            })
+            .collect();
+        let tab = from.id();
 
-            // Marks go now rather than on success: the user keeps marking while
-            // the batch runs, so there would be no telling ours from theirs by
-            // the time it finishes. What fails comes back in the outcome.
-            from.deselect_items();
-            (items, tab)
-        };
+        // Marks go now rather than on success: the user keeps marking while
+        // the batch runs, so there would be no telling ours from theirs by the
+        // time it finishes. What fails comes back in the outcome.
+        from.deselect_items();
+        (items, tab)
+    }
+
+    /// Takes the marks of the focused tab and hands them to the worker.
+    fn queue_transfer(&mut self, op: TransferOp) -> Result<(), AppError> {
+        let (items, tab) = self.take_marks_across();
 
         if items.is_empty() {
             self.notify(ToastLevel::Warning, "Nothing is marked", None);
