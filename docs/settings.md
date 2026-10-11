@@ -128,9 +128,26 @@ read the same list, so none of them can know about a setting the others do
 not.
 
 The values are `Choice`s: a fixed set of names, written in the file as they
-are and stepped through in the overlay. The overlay's box is measured against
-the widest value of each setting rather than the current one, so stepping
-through values never resizes it under the user's eyes.
+are and stepped through in the overlay.
+
+## A tab per section, and a box that holds still
+
+Each section of the file is a tab of the overlay, and the keys are the last
+one; `Tab` and `Shift+Tab` go between them. One long list with headings was
+the first shape, and it put three settings above sixty actions — the settings
+were what the user came for and the actions were what they scrolled through.
+
+The box does not change size while it is open. It is measured against every
+tab at once — the widest row and help line of any of them, the longest list —
+and against the widest value of each setting rather than the current one, and
+it keeps three lines at the bottom for the help or the question, whichever is
+there. The first shape measured what was on screen, and a question longer
+than a help line widened the box under the reader's eyes the moment it
+appeared. A question longer than three lines takes rows from the list instead,
+up to half the box: the box holds still and only what is in it moves.
+
+The cost is a short tab drawn in a box as tall as the longest one, with the
+room left empty.
 
 ## Config is `Shift+C`
 
@@ -141,8 +158,7 @@ direction of mistake that costs nothing.
 
 ## Keys are bound by pressing them
 
-Under the settings the overlay lists every Browse action by its catalogue
-name — the name the file uses, and the one F1 finds it by — with the keys it
+The Keys tab lists every Browse action by its catalogue name — the name the file uses, and the one F1 finds it by — with the keys it
 answers to. `Enter` on an action waits for a key, and the key pressed is the
 answer. Nothing is typed: a key name typed into a field is a spelling the user
 has to know, and a key pressed is the key itself.
