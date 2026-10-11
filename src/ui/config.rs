@@ -3,8 +3,9 @@ use ratatui::{
     crossterm::event::KeyCode,
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Clear, List, ListItem, ListState, Padding, StatefulWidget, Widget},
+    widgets::{Block, Clear, List, ListItem, ListState, Padding, StatefulWidget, Tabs, Widget},
 };
 
 use crate::{
@@ -21,6 +22,8 @@ pub enum ConfigMsg {
     /// Moves the cursor by the rows the list had room for, stopping at either
     /// end.
     MovePage(VerticalDir),
+    /// Shows the tab beside the one on screen, wrapping at either end.
+    SwitchTab(Step),
     /// Moves the setting under the cursor to the choice beside it. An action
     /// has no choices and is left alone.
     Step(Step),
@@ -41,15 +44,19 @@ pub enum ConfigMsg {
 /// One row as the overlay draws it: a setting, or an action and its keys.
 #[derive(Debug)]
 pub struct ConfigRow {
-    /// The heading the row is listed under. Rows of one section are next to
-    /// each other.
-    pub section: &'static str,
     pub title: &'static str,
     pub value: String,
     /// Every value the row can show, which the box is measured against so
     /// that stepping through them never resizes it.
     pub choices: Vec<String>,
     pub help: &'static str,
+}
+
+/// One tab of the overlay and the rows it lists.
+#[derive(Debug)]
+pub struct ConfigTab {
+    pub title: &'static str,
+    pub rows: Vec<ConfigRow>,
 }
 
 /// What the overlay is doing besides showing the rows.
@@ -71,14 +78,16 @@ pub enum Question {
     },
 }
 
-/// The config overlay: a cursor over settings and keys the overlay does not
-/// own, and the question it is asking about them, if any.
+/// The config overlay: a tab and a cursor over settings and keys the overlay
+/// does not own, and the question it is asking about them, if any.
 ///
 /// The settings and keys live on `App`, which writes them to the config file
 /// at every change.
 #[derive(Debug, Default)]
 pub struct ConfigView {
-    /// Index of the row under the cursor.
+    /// Index of the tab on screen.
+    tab: usize,
+    /// Index of the row under the cursor, within the tab on screen.
     selected: usize,
     /// Where the list is scrolled to, kept from one frame to the next.
     list_state: ListState,
@@ -112,6 +121,18 @@ impl ConfigView {
             msg: ConfigMsg::MovePage(VerticalDir::Down),
             bar: None,
             help: "Moves the cursor one screen down",
+        },
+        Binding {
+            key: KeyBinding::plain(KeyCode::Tab),
+            msg: ConfigMsg::SwitchTab(Step::Next),
+            bar: Some("Next tab"),
+            help: "Shows the next tab, wrapping to the first",
+        },
+        Binding {
+            key: KeyBinding::plain(KeyCode::BackTab).shift(),
+            msg: ConfigMsg::SwitchTab(Step::Previous),
+            bar: None,
+            help: "Shows the previous tab, wrapping to the last",
         },
         Binding {
             key: KeyBinding::plain(KeyCode::Enter),
@@ -177,7 +198,16 @@ impl ConfigView {
     /// Blank columns between a row's title and its value.
     const GAP: usize = 2;
 
+    /// Lines kept for the bottom of the box whatever it says, so a question
+    /// replacing a help line does not resize the box. A longer one takes
+    /// lines from the list instead.
+    const FOOTER: usize = 3;
+
     const TITLE: &'static str = "Config";
+
+    pub fn tab(&self) -> usize {
+        self.tab
+    }
 
     pub fn selected(&self) -> usize {
         self.selected
@@ -225,6 +255,20 @@ impl ConfigView {
             VerticalDir::Up => self.selected.saturating_sub(page),
             VerticalDir::Down => (self.selected + page).min(count.saturating_sub(1)),
         };
+    }
+
+    /// Shows the tab beside this one among `count`, with the cursor on its
+    /// first row.
+    pub fn switch_tab(&mut self, step: Step, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.tab = match step {
+            Step::Previous => (self.tab + count - 1) % count,
+            Step::Next => (self.tab + 1) % count,
+        };
+        self.selected = 0;
+        self.list_state = ListState::default();
     }
 
     fn block() -> Block<'static> {
@@ -286,39 +330,6 @@ impl ConfigView {
         }
     }
 
-    /// The list as it is drawn: a heading wherever the section changes, then
-    /// its rows. Answers the items and which of them the cursor is on.
-    fn items(&self, rows: &[ConfigRow], title_width: usize) -> (Vec<ListItem<'static>>, usize) {
-        let mut items = Vec::new();
-        let mut cursor = 0;
-        let mut section = None;
-        for (index, row) in rows.iter().enumerate() {
-            if section != Some(row.section) {
-                section = Some(row.section);
-                items.push(ListItem::new(Line::from(Span::styled(
-                    row.section,
-                    Style::new().fg(Color::Blue).bold(),
-                ))));
-            }
-            if index == self.selected {
-                cursor = items.len();
-            }
-            let padding = title_width + Self::GAP - Span::raw(row.title).width();
-            let value = match (&self.question, index == self.selected) {
-                (Question::Capturing { .. }, true) => {
-                    Span::styled("press a key…", Style::new().fg(Color::Yellow).italic())
-                }
-                _ => Span::styled(row.value.clone(), Style::new().fg(Color::Yellow)),
-            };
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(row.title, Style::new().fg(Color::White)),
-                Span::raw(" ".repeat(padding)),
-                value,
-            ])));
-        }
-        (items, cursor)
-    }
-
     fn title_width(rows: &[ConfigRow]) -> usize {
         rows.iter()
             .map(|row| Span::raw(row.title).width())
@@ -326,65 +337,79 @@ impl ConfigView {
             .unwrap_or(0)
     }
 
-    fn headings(rows: &[ConfigRow]) -> usize {
-        let mut count = 0;
-        let mut section = None;
-        for row in rows {
-            if section != Some(row.section) {
-                section = Some(row.section);
-                count += 1;
-            }
-        }
-        count
+    /// The rows of the tab on screen, as they are drawn.
+    fn items(&self, rows: &[ConfigRow]) -> Vec<ListItem<'static>> {
+        let title_width = Self::title_width(rows);
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let padding = title_width + Self::GAP - Span::raw(row.title).width();
+                let value = match (&self.question, index == self.selected) {
+                    (Question::Capturing { .. }, true) => {
+                        Span::styled("press a key…", Style::new().fg(Color::Yellow).italic())
+                    }
+                    _ => Span::styled(row.value.clone(), Style::new().fg(Color::Yellow)),
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(row.title, Style::new().fg(Color::White)),
+                    Span::raw(" ".repeat(padding)),
+                    value,
+                ]))
+            })
+            .collect()
     }
 
-    /// The width of the box: as wide as what any row can show and as what
-    /// the footer says on one line, never wider than `area`.
-    fn width(rows: &[ConfigRow], footer: &str, area: Rect) -> u16 {
+    fn tab_bar(&self, tabs: &[ConfigTab]) -> Tabs<'static> {
+        Tabs::new(tabs.iter().map(|tab| tab.title))
+            .select(self.tab)
+            .style(Style::new().fg(Color::White))
+            .highlight_style(Style::new().fg(Color::Black).bg(Color::Blue))
+            .divider(symbols::line::VERTICAL)
+    }
+
+    /// The box, centred, measured against every tab at once so that neither
+    /// switching tabs nor a question changes its size. Never larger than
+    /// `area`; what does not fit in its height scrolls.
+    fn outer_area(tabs: &[ConfigTab], area: Rect) -> Rect {
         let highlight = Span::raw(Self::HIGHLIGHT).width();
-        let title_width = Self::title_width(rows);
-        let widest = rows
-            .iter()
-            .flat_map(|row| {
+        let rows = || tabs.iter().flat_map(|tab| &tab.rows);
+        let widest_row = tabs.iter().flat_map(|tab| {
+            let title_width = Self::title_width(&tab.rows);
+            tab.rows.iter().map(move |row| {
                 let value = row
                     .choices
                     .iter()
                     .map(|choice| Span::raw(choice.as_str()).width())
                     .max()
                     .unwrap_or(0);
-                [
-                    highlight + title_width + Self::GAP + value,
-                    Span::raw(row.help).width(),
-                    highlight + Span::raw(row.section).width(),
-                ]
+                highlight + title_width + Self::GAP + value
             })
-            .chain([Span::raw(Self::TITLE).width(), Span::raw(footer).width()])
+        });
+        // What `Tabs` draws: each title padded by a space either side, and a
+        // divider between two titles.
+        let tab_bar = tabs
+            .iter()
+            .map(|tab| Span::raw(tab.title).width() + 2)
+            .sum::<usize>()
+            + tabs.len().saturating_sub(1);
+        let widest = widest_row
+            .chain(rows().map(|row| Span::raw(row.help).width()))
+            .chain([Span::raw(Self::TITLE).width(), tab_bar])
             .max()
             .unwrap_or(0);
 
         let inner = Self::block().inner(area);
         let chrome_x = area.width - inner.width;
-        u16::try_from(widest)
-            .unwrap_or(u16::MAX)
-            .saturating_add(chrome_x)
-            .min(area.width)
-    }
-
-    /// The box, centred, as large as what it draws and never larger than
-    /// `area`, and the footer wrapped to its width. What does not fit in its
-    /// height scrolls.
-    fn layout(&self, rows: &[ConfigRow], area: Rect) -> (Rect, Vec<String>) {
-        let text = self.footer(rows);
-        let width = Self::width(rows, &text, area);
-        let inner = Self::block().inner(Rect::new(0, 0, width, area.height));
         let chrome_y = area.height - inner.height;
 
-        // Half the box at most, so the row the footer is about stays in view.
-        let mut footer = ui::wrap(&text, usize::from(inner.width));
-        footer.truncate(usize::from(inner.height / 2).max(1));
-
-        // Every row and heading, a blank line, the footer, and the chrome.
-        let lines = rows.len() + Self::headings(rows) + 1 + footer.len();
+        // The tab bar and a blank line, the longest tab, a blank line and the
+        // footer.
+        let longest = tabs.iter().map(|tab| tab.rows.len()).max().unwrap_or(0);
+        let lines = 2 + longest + 1 + Self::FOOTER;
+        let width = u16::try_from(widest)
+            .unwrap_or(u16::MAX)
+            .saturating_add(chrome_x)
+            .min(area.width);
         let height = u16::try_from(lines)
             .unwrap_or(u16::MAX)
             .saturating_add(chrome_y)
@@ -396,27 +421,43 @@ impl ConfigView {
         let [area] = Layout::vertical([Constraint::Length(height)])
             .flex(Flex::Center)
             .areas(area);
-        (area, footer)
+        area
     }
 
-    /// Draws the box over `area`, listing `rows`, with the help of the one
-    /// under the cursor or the question being asked at the bottom.
-    pub fn render(&mut self, rows: &[ConfigRow], area: Rect, buf: &mut Buffer) {
-        let (outer, footer) = self.layout(rows, area);
+    /// Draws the box over `area`: the tabs, the rows of the one on screen, and
+    /// the help of the row under the cursor or the question being asked.
+    pub fn render(&mut self, tabs: &[ConfigTab], area: Rect, buf: &mut Buffer) {
+        let outer = Self::outer_area(tabs, area);
         Clear.render(outer, buf);
         Self::block().render(outer, buf);
+        let inner = Self::block().inner(outer);
 
-        let footer_height = u16::try_from(footer.len()).unwrap_or(u16::MAX);
-        let [list_area, _, footer_area] = Layout::vertical([
+        let rows: &[ConfigRow] = tabs
+            .get(self.tab)
+            .map(|tab| tab.rows.as_slice())
+            .unwrap_or_default();
+
+        // As many lines as the footer needs, never fewer than it keeps and
+        // never more than half the box, so the row it is about stays in view.
+        let mut footer = ui::wrap(&self.footer(rows), usize::from(inner.width));
+        let most = usize::from(inner.height / 2).max(1);
+        footer.truncate(most);
+        let footer_height = u16::try_from(footer.len().max(Self::FOOTER).min(most)).unwrap_or(1);
+
+        let [tab_area, _, list_area, _, footer_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),
             Constraint::Length(footer_height),
         ])
-        .areas(Self::block().inner(outer));
+        .areas(inner);
 
-        let (items, cursor) = self.items(rows, Self::title_width(rows));
+        self.tab_bar(tabs).render(tab_area, buf);
+
+        let items = self.items(rows);
         let total = items.len();
-        self.list_state.select(Some(cursor));
+        self.list_state.select(Some(self.selected));
         StatefulWidget::render(
             List::new(items)
                 .highlight_style(Style::new().bg(Self::CURSOR_BG))
@@ -462,12 +503,10 @@ mod config_view_tests {
         height: 24,
     };
 
-    /// `count` rows, a section of ten at a time, each named for its index.
+    /// `count` rows, each named for its index.
     fn rows(count: usize) -> Vec<ConfigRow> {
-        const SECTIONS: [&str; 6] = ["One", "Two", "Three", "Four", "Five", "Six"];
         (0..count)
             .map(|i| ConfigRow {
-                section: SECTIONS[i / 10 % SECTIONS.len()],
                 title: Box::leak(format!("Setting {i}").into_boxed_str()),
                 value: String::from("on"),
                 choices: vec![String::from("on"), String::from("off")],
@@ -476,9 +515,24 @@ mod config_view_tests {
             .collect()
     }
 
-    fn rendered(view: &mut ConfigView, rows: &[ConfigRow], area: Rect) -> Vec<String> {
+    /// A short tab of settings and a long one of keys, the way the overlay
+    /// is used.
+    fn tabs() -> Vec<ConfigTab> {
+        vec![
+            ConfigTab {
+                title: "Listing",
+                rows: rows(3),
+            },
+            ConfigTab {
+                title: "Keys",
+                rows: rows(60),
+            },
+        ]
+    }
+
+    fn rendered(view: &mut ConfigView, tabs: &[ConfigTab], area: Rect) -> Vec<String> {
         let mut buf = Buffer::empty(area);
-        view.render(rows, area, &mut buf);
+        view.render(tabs, area, &mut buf);
         (0..area.height)
             .map(|y| {
                 (0..area.width)
@@ -488,89 +542,139 @@ mod config_view_tests {
             .collect()
     }
 
-    /// The box is sized to the terminal and the list scrolls inside it, so a
-    /// list longer than the box is still one every row can be reached in.
-    #[test]
-    fn every_row_can_be_reached_on_an_eighty_by_twenty_four_terminal() {
-        let rows = rows(60);
-        let mut view = ConfigView::default();
-
-        for (index, row) in rows.iter().enumerate() {
-            view.selected = index;
-            let drawn = rendered(&mut view, &rows, SMALL);
-            assert!(
-                drawn
-                    .iter()
-                    .any(|line| line.contains(&format!("{}  ", row.title))),
-                "{} is on no row of {drawn:#?}",
-                row.title
-            );
-        }
-    }
-
-    /// The same, for the question about a clash: however many keys it names,
-    /// the box still holds the row it is about.
-    #[test]
-    fn a_long_question_leaves_the_row_it_is_about_on_screen() {
-        let rows = rows(60);
-        let mut view = ConfigView::default();
+    fn a_clash() -> Question {
         let clash = Clash {
             key: KeyBinding::plain(KeyCode::Char('c')),
             holder: "transfer.copy",
         };
-        view.ask(Question::Clashing {
+        Question::Clashing {
             action: "entry.delete",
             keys: vec![clash.key],
-            clashes: vec![clash; 10],
-            orphans: vec!["transfer.copy"; 10],
-        });
-
-        for (index, row) in rows.iter().enumerate() {
-            view.selected = index;
-            let drawn = rendered(&mut view, &rows, SMALL);
-            assert!(
-                drawn
-                    .iter()
-                    .any(|line| line.contains(&format!("{}  ", row.title))),
-                "{} is on no row of {drawn:#?}",
-                row.title
-            );
+            clashes: vec![clash],
+            orphans: vec!["transfer.copy"],
         }
+    }
+
+    /// The box is sized to the terminal and the list scrolls inside it, so a
+    /// tab longer than the box is still one every row can be reached in —
+    /// with a question at the bottom too, however long it is.
+    #[test]
+    fn every_row_of_every_tab_can_be_reached_on_an_eighty_by_twenty_four_terminal() {
+        let tabs = tabs();
+        let long_clash = {
+            let clash = Clash {
+                key: KeyBinding::plain(KeyCode::Char('c')),
+                holder: "transfer.copy",
+            };
+            Question::Clashing {
+                action: "entry.delete",
+                keys: vec![clash.key],
+                clashes: vec![clash; 10],
+                orphans: vec!["transfer.copy"; 10],
+            }
+        };
+
+        for question in [Question::None, long_clash] {
+            let mut view = ConfigView::default();
+            view.ask(question);
+            for (index, tab) in tabs.iter().enumerate() {
+                view.tab = index;
+                for (selected, row) in tab.rows.iter().enumerate() {
+                    view.selected = selected;
+                    let drawn = rendered(&mut view, &tabs, SMALL);
+                    assert!(
+                        drawn
+                            .iter()
+                            .any(|line| line.contains(&format!("{}  ", row.title))),
+                        "{} of {} is on no row of {drawn:#?}",
+                        row.title,
+                        tab.title
+                    );
+                }
+            }
+        }
+    }
+
+    /// The point of measuring every tab at once and keeping room for the
+    /// footer: what the user does inside the box never moves its edges.
+    #[test]
+    fn the_box_holds_still_across_tabs_and_questions() {
+        let tabs = tabs();
+        let mut view = ConfigView::default();
+        let edges = |drawn: &[String]| -> Vec<(usize, usize)> {
+            drawn
+                .iter()
+                .enumerate()
+                .filter_map(|(y, line)| line.find('┌').map(|x| (y, x)))
+                .collect()
+        };
+
+        let first = edges(&rendered(&mut view, &tabs, SMALL));
+        view.switch_tab(Step::Next, tabs.len());
+        let second = edges(&rendered(&mut view, &tabs, SMALL));
+        view.ask(a_clash());
+        let asking = edges(&rendered(&mut view, &tabs, SMALL));
+
+        assert_eq!(first, second);
+        assert_eq!(first, asking);
+    }
+
+    #[test]
+    fn a_short_tab_on_a_tall_terminal_still_holds_the_longest_one() {
+        let tabs = tabs();
+        let area = Rect::new(0, 0, 100, 100);
+
+        let outer = ConfigView::outer_area(&tabs, area);
+
+        assert!(usize::from(outer.height) > 60, "{outer:?}");
+    }
+
+    #[test]
+    fn every_tab_is_named_in_the_bar() {
+        let tabs = tabs();
+        let mut view = ConfigView::default();
+
+        let drawn = rendered(&mut view, &tabs, SMALL).join("\n");
+
+        assert!(drawn.contains("Listing"), "{drawn}");
+        assert!(drawn.contains("Keys"), "{drawn}");
+    }
+
+    #[test]
+    fn switching_tabs_wraps_and_starts_at_the_top() {
+        let mut view = ConfigView::default();
+        view.move_selection(VerticalDir::Down, 3);
+
+        view.switch_tab(Step::Previous, 2);
+
+        assert_eq!(view.tab(), 1);
+        assert_eq!(view.selected(), 0);
+        view.switch_tab(Step::Next, 2);
+        assert_eq!(view.tab(), 0);
     }
 
     #[test]
     fn a_list_that_scrolls_says_which_rows_are_on_screen() {
-        let rows = rows(60);
+        let tabs = tabs();
         let mut view = ConfigView::default();
+        view.switch_tab(Step::Next, tabs.len());
 
-        let drawn = rendered(&mut view, &rows, SMALL);
+        let drawn = rendered(&mut view, &tabs, SMALL);
 
         assert!(
-            drawn.iter().any(|line| line.contains(" of 66 ")),
+            drawn.iter().any(|line| line.contains(" of 60 ")),
             "{drawn:#?}"
         );
     }
 
-    /// Every heading is drawn once, above the rows it heads.
-    #[test]
-    fn a_section_is_headed_once() {
-        let rows = rows(3);
-        let mut view = ConfigView::default();
-
-        let drawn = rendered(&mut view, &rows, SMALL);
-
-        let headings = drawn.iter().filter(|line| line.contains("One")).count();
-        assert_eq!(headings, 1, "{drawn:#?}");
-    }
-
     #[test]
     fn the_row_under_the_cursor_says_what_it_decides() {
-        let mut rows = rows(2);
-        rows[1].help = "Only the second one says this";
+        let mut tabs = tabs();
+        tabs[0].rows[1].help = "Only the second one says this";
         let mut view = ConfigView::default();
-        view.move_selection(VerticalDir::Down, rows.len());
+        view.move_selection(VerticalDir::Down, tabs[0].rows.len());
 
-        let drawn = rendered(&mut view, &rows, SMALL);
+        let drawn = rendered(&mut view, &tabs, SMALL);
 
         assert!(
             drawn
@@ -583,13 +687,13 @@ mod config_view_tests {
     /// While a key is awaited, the box says so and what will not arrive.
     #[test]
     fn waiting_for_a_key_says_what_it_is_waiting_for() {
-        let rows = rows(2);
+        let tabs = tabs();
         let mut view = ConfigView::default();
         view.ask(Question::Capturing {
             action: "transfer.copy",
         });
 
-        let drawn = rendered(&mut view, &rows, SMALL).join("\n");
+        let drawn = rendered(&mut view, &tabs, SMALL).join("\n");
 
         assert!(drawn.contains("transfer.copy"), "{drawn}");
         assert!(drawn.contains("press a key"), "{drawn}");
@@ -600,38 +704,20 @@ mod config_view_tests {
     /// its holder, and a holder the move leaves with nothing.
     #[test]
     fn a_clash_names_the_key_its_holder_and_who_is_left_without_one() {
-        let rows = rows(2);
+        let tabs = tabs();
         let mut view = ConfigView::default();
-        let clash = Clash {
-            key: KeyBinding::plain(KeyCode::Char('c')),
-            holder: "transfer.copy",
-        };
-        view.ask(Question::Clashing {
-            action: "entry.delete",
-            keys: vec![clash.key],
-            clashes: vec![clash],
-            orphans: vec!["transfer.copy"],
-        });
+        view.ask(a_clash());
 
-        let drawn = rendered(&mut view, &rows, SMALL).join(" ");
+        // The text inside the box, its wrapped lines joined back up.
+        let drawn = rendered(&mut view, &tabs, SMALL)
+            .iter()
+            .map(|line| line.trim().trim_matches('│').trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
 
         assert!(drawn.contains("c is transfer.copy's"), "{drawn}");
         assert!(drawn.contains("no key at all"), "{drawn}");
-    }
-
-    /// Stepping through a setting's values never moves the box: it was
-    /// measured against the widest of them from the start.
-    #[test]
-    fn the_box_holds_still_while_a_value_changes() {
-        let mut rows = rows(1);
-        rows[0].choices = vec![String::from("on"), String::from("a much longer value")];
-        let view = ConfigView::default();
-
-        let (before, _) = view.layout(&rows, SMALL);
-        rows[0].value = String::from("a much longer value");
-        let (after, _) = view.layout(&rows, SMALL);
-
-        assert_eq!(before, after);
     }
 
     #[test]
@@ -657,15 +743,17 @@ mod config_view_tests {
 
     #[test]
     fn a_page_stops_at_either_end() {
-        let rows = rows(60);
+        let tabs = tabs();
+        let count = tabs[1].rows.len();
         let mut view = ConfigView::default();
-        rendered(&mut view, &rows, SMALL);
+        view.switch_tab(Step::Next, tabs.len());
+        rendered(&mut view, &tabs, SMALL);
 
-        view.move_page(VerticalDir::Up, rows.len());
+        view.move_page(VerticalDir::Up, count);
         assert_eq!(view.selected(), 0);
         for _ in 0..10 {
-            view.move_page(VerticalDir::Down, rows.len());
+            view.move_page(VerticalDir::Down, count);
         }
-        assert_eq!(view.selected(), rows.len() - 1);
+        assert_eq!(view.selected(), count - 1);
     }
 }

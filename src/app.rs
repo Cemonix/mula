@@ -34,11 +34,11 @@ use crate::{
     },
     keys::{self, Binding, Entry, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
-    settings::{Setting, Settings, Step},
+    settings::{Section, Setting, Settings, Step},
     ui::{
         self,
         columns::Columns,
-        config::{ConfigMsg, ConfigRow, ConfigView, Question},
+        config::{ConfigMsg, ConfigRow, ConfigTab, ConfigView, Question},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
         filter::{self, Filter, FilterMsg},
@@ -124,8 +124,7 @@ pub enum Mode {
     Filter,
 }
 
-/// What a row of the config overlay stands for: the settings first, then every
-/// Browse action in catalogue order.
+/// What a row of the config overlay stands for.
 #[derive(Clone, Copy)]
 enum ConfigItem {
     Setting(Setting),
@@ -133,17 +132,55 @@ enum ConfigItem {
 }
 
 impl ConfigItem {
-    fn count() -> usize {
-        Setting::ALL.len() + keys::BROWSE_ACTIONS.len()
+    /// The overlay's tabs and what each lists: a tab per section of settings,
+    /// then every Browse action in catalogue order. Both drawing and the keys
+    /// read this, so a row means the same thing to each.
+    fn tabs() -> Vec<(&'static str, Vec<ConfigItem>)> {
+        Section::ALL
+            .iter()
+            .map(|section| {
+                let settings = Setting::ALL
+                    .iter()
+                    .filter(|setting| setting.section() == *section)
+                    .map(|setting| ConfigItem::Setting(*setting))
+                    .collect();
+                (section.title(), settings)
+            })
+            .chain([(
+                "Keys",
+                keys::BROWSE_ACTIONS
+                    .iter()
+                    .map(ConfigItem::Action)
+                    .collect(),
+            )])
+            .collect()
     }
 
-    /// The row at `index`, or `None` past the last one.
-    fn at(index: usize) -> Option<Self> {
-        match Setting::ALL.get(index) {
-            Some(setting) => Some(Self::Setting(*setting)),
-            None => keys::BROWSE_ACTIONS
-                .get(index - Setting::ALL.len())
-                .map(Self::Action),
+    /// The row as the overlay draws it, with the values `config` holds.
+    fn row(self, config: &Config) -> ConfigRow {
+        match self {
+            ConfigItem::Setting(setting) => ConfigRow {
+                title: setting.title(),
+                value: setting.value(&config.settings()).to_string(),
+                choices: setting.choices().into_iter().map(String::from).collect(),
+                help: setting.help(),
+            },
+            ConfigItem::Action(entry) => {
+                let value = match config.keys_of(entry) {
+                    [] => String::from("none"),
+                    bound => bound
+                        .iter()
+                        .map(KeyBinding::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                ConfigRow {
+                    title: entry.name,
+                    choices: vec![value.clone()],
+                    value,
+                    help: entry.help,
+                }
+            }
         }
     }
 }
@@ -703,36 +740,18 @@ impl App {
         }
 
         if let Mode::Config { view } = &mut self.mode {
-            let settings = self.config.settings();
-            let rows: Vec<ConfigRow> = Setting::ALL
-                .iter()
-                .map(|setting| ConfigRow {
-                    section: setting.section().title(),
-                    title: setting.title(),
-                    value: setting.value(&settings).to_string(),
-                    choices: setting.choices().into_iter().map(String::from).collect(),
-                    help: setting.help(),
+            let tabs: Vec<ConfigTab> = ConfigItem::tabs()
+                .into_iter()
+                .map(|(title, items)| ConfigTab {
+                    title,
+                    rows: items
+                        .into_iter()
+                        .map(|item| item.row(&self.config))
+                        .collect(),
                 })
-                .chain(keys::BROWSE_ACTIONS.iter().map(|entry| {
-                    let value = match self.config.keys_of(entry) {
-                        [] => String::from("none"),
-                        bound => bound
-                            .iter()
-                            .map(KeyBinding::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    };
-                    ConfigRow {
-                        section: "Keys",
-                        title: entry.name,
-                        choices: vec![value.clone()],
-                        value,
-                        help: entry.help,
-                    }
-                }))
                 .collect();
             let area = frame.area();
-            view.render(&rows, area, frame.buffer_mut());
+            view.render(&tabs, area, frame.buffer_mut());
         }
 
         // Newest toast in the bottom-right corner, older ones stacked above it.
@@ -1539,10 +1558,17 @@ impl App {
         let Some(msg) = msg else {
             return;
         };
-        let item = ConfigItem::at(view.selected());
+        let tabs = ConfigItem::tabs();
+        let items = tabs
+            .get(view.tab())
+            .map(|(_, items)| items.as_slice())
+            .unwrap_or_default();
+        let count = items.len();
+        let item = items.get(view.selected()).copied();
         match (msg, item) {
-            (ConfigMsg::MoveSelection(dir), _) => view.move_selection(dir, ConfigItem::count()),
-            (ConfigMsg::MovePage(dir), _) => view.move_page(dir, ConfigItem::count()),
+            (ConfigMsg::MoveSelection(dir), _) => view.move_selection(dir, count),
+            (ConfigMsg::MovePage(dir), _) => view.move_page(dir, count),
+            (ConfigMsg::SwitchTab(step), _) => view.switch_tab(step, tabs.len()),
             (ConfigMsg::Step(step), Some(ConfigItem::Setting(setting))) => {
                 self.change_setting(setting, |settings| setting.step(settings, step));
             }
