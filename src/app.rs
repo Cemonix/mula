@@ -49,7 +49,6 @@ use crate::{
             surface::{Placement, Surface, Wanted},
         },
         help::{self, Help, HelpMsg, HelpState},
-        icon::Icons,
         infobar::{Counts, InfoBar, ProgressView, Speed},
         keybar::Keybar,
         pane::{Entered, Pane, PaneError},
@@ -656,7 +655,7 @@ impl App {
         )
         .split(main_layout[0]);
 
-        let icons = Icons::default();
+        let icons = self.config.settings().icons;
         match self.opposite {
             Opposite::Listing => {
                 let focused = self.focused_side;
@@ -1479,7 +1478,7 @@ impl App {
     fn open_finder(&mut self) -> Result<(), AppError> {
         let root = Arc::clone(self.get_focused_pane().get_current_dir());
         self.mode = Mode::Find {
-            finder: Finder::new(root, Icons::default()),
+            finder: Finder::new(root, self.config.settings().icons),
         };
         Ok(())
     }
@@ -1689,6 +1688,8 @@ impl App {
                     pane.set_dot_files(settings.dot_files);
                 }
             }
+            // Read from the config every frame.
+            Setting::Icons => (),
         }
     }
 
