@@ -24,9 +24,9 @@ use crate::{
     settings::Settings,
     ui::{
         self,
-        columns::{self, Columns},
+        columns::{self, Look},
         filter::Filter,
-        icon::{Icon, Icons},
+        icon::Icon,
         sort::{Sort, SortKey},
     },
 };
@@ -595,7 +595,7 @@ impl Pane {
         }
     }
 
-    /// Draws the directory listing. `focused` colours the border and `columns`
+    /// Draws the directory listing. `focused` colours the border and `look`
     /// says what each row shows beside its name; both are passed in every frame
     /// rather than stored, so neither can drift from what the caller holds.
     ///
@@ -608,8 +608,7 @@ impl Pane {
         area: Rect,
         selected_items: &HashSet<Arc<Path>>,
         focused: bool,
-        columns: Columns,
-        icons: Icons,
+        look: Look,
     ) {
         let title = Line::from(self.directory.path().to_string_lossy().to_string().bold());
         let mut block = Block::bordered()
@@ -655,7 +654,7 @@ impl Pane {
             let entry = &entries[index];
             let marked = selected_items.contains(&entry.path);
             let total = self.totals.get(&entry.path).copied();
-            let item = ListItem::new(Self::row(entry, total, marked, columns, icons, row_width));
+            let item = ListItem::new(Self::row(entry, total, marked, look, row_width));
             if marked {
                 item.style(Style::new().bg(Self::MARKED_BG))
             } else {
@@ -669,7 +668,7 @@ impl Pane {
     }
 
     /// One row, `row_width` columns wide: the mark, the icon, the name padded
-    /// out to whatever is left, and the cells of `columns` behind it. `total`
+    /// out to whatever is left, and the cells of `look` behind it. `total`
     /// is what a directory measured to.
     ///
     /// The name is padded rather than the cells positioned, so a row is built
@@ -684,19 +683,17 @@ impl Pane {
         entry: &DirEntry,
         total: Option<u64>,
         marked: bool,
-        columns: Columns,
-        icons: Icons,
+        look: Look,
         row_width: usize,
     ) -> Line<'static> {
         // Every row, the parent included, is labelled by the last component of
         // its path.
         let label = ui::name_of(&entry.path);
-        let icon = icons.of(entry).map(Icon::span).unwrap_or_default();
+        let icon = look.icons.of(entry).map(Icon::span).unwrap_or_default();
 
         // A pane too narrow to hold the columns leaves the name none at all
         // rather than borrowing any back from them.
-        let name_width =
-            row_width.saturating_sub(Self::MARK_WIDTH + icon.width() + columns.width());
+        let name_width = row_width.saturating_sub(Self::MARK_WIDTH + icon.width() + look.width());
         let label = ui::clip(&label, name_width);
         let padding = name_width.saturating_sub(Span::raw(&label).width());
 
@@ -713,7 +710,7 @@ impl Pane {
             Span::raw(label),
             Span::raw(" ".repeat(padding)),
         ];
-        spans.extend(columns.cells(entry, total));
+        spans.extend(look.cells(entry, total));
 
         Line::from(spans)
     }
@@ -735,7 +732,10 @@ mod pane_tests {
 
     use ratatui::{buffer::Buffer, widgets::Widget};
 
-    use crate::fs::directory::{DirEntryKind, EntryMeta};
+    use crate::{
+        fs::directory::{DirEntryKind, EntryMeta},
+        ui::{columns::Columns, icon::Icons},
+    };
 
     /// Builds a pane over `count` file entries at `/0`, `/1`, … in that order.
     fn pane(count: usize) -> Pane {
@@ -955,8 +955,10 @@ mod pane_tests {
                     frame.area(),
                     &HashSet::new(),
                     true,
-                    Columns::Name,
-                    Icons::default(),
+                    Look {
+                        columns: Columns::Name,
+                        ..Look::default()
+                    },
                 )
             })
             .unwrap();
@@ -985,8 +987,10 @@ mod pane_tests {
                     frame.area(),
                     &HashSet::new(),
                     true,
-                    Columns::Name,
-                    Icons::default(),
+                    Look {
+                        columns: Columns::Name,
+                        ..Look::default()
+                    },
                 )
             })
             .unwrap();
@@ -1010,6 +1014,7 @@ mod pane_tests {
                 meta: Some(EntryMeta {
                     size: *size,
                     modified: 0,
+                    mode: 0o100644,
                 }),
             })
             .collect();
@@ -1599,7 +1604,12 @@ mod pane_tests {
         let area = Rect::new(0, 0, width, 1);
         let mut buf = Buffer::empty(area);
 
-        Pane::row(entry, None, false, columns, icons, usize::from(width)).render(area, &mut buf);
+        let look = Look {
+            columns,
+            icons,
+            ..Look::default()
+        };
+        Pane::row(entry, None, false, look, usize::from(width)).render(area, &mut buf);
         (0..width).map(|x| buf[(x, 0)].symbol()).collect()
     }
 
@@ -1631,6 +1641,7 @@ mod pane_tests {
             meta: Some(EntryMeta {
                 size,
                 modified: 1_756_400_000,
+                mode: 0o100644,
             }),
         }
     }

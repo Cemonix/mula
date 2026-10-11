@@ -146,8 +146,8 @@ subsystem.
 ## Configuration
 
 `Shift+C` opens the settings: the columns, the order and the dotfiles a panel
-opens with, the icons, the progress label, the preview's highlighting, and the
-browse keys. To rebind an action, put the cursor on it, press `Enter`, then
+opens with, a column of permissions, the icons, the progress label, the
+preview's highlighting, and the browse keys. To rebind an action, put the cursor on it, press `Enter`, then
 press the new key. If another action already has that key, Mula asks before
 taking it away. `r` puts a row back to its default. A change
 shows at once and is saved straight away to `~/.config/mula/config.toml` (or

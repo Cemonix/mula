@@ -118,6 +118,27 @@ every pane started in. It now leaves the order the settings ask for
 unlabelled, whatever that is: a user who sorts by size by default would
 otherwise read "by size" on every pane for good.
 
+## Permissions ride on the other columns
+
+`[listing] permissions` puts the nine permission bits in front of the size,
+the way `ls -l` writes them, with the set-id and sticky bits in the execute
+places. It is a column like the others, so it costs what they cost: the mode
+comes from the same `stat` that gives the size and the time, and nothing more
+is read for it.
+
+That is also why it goes with them. With `,` at the name alone the listing is
+read without a `stat`, so there is nothing to draw, and the name alone is what
+was asked for. Turning the columns back on brings the permissions back with
+them. A Browse key of its own would be a second cycle over the same row; the
+setting decides whether the permissions are among the columns at all.
+
+It starts hidden. Ten more columns on a row is a lot on an 80-column terminal
+split in two, and the panels should not get narrower for someone who never
+asked.
+
+The owner is left out. Turning a uid into a name is a lookup per row, and
+would want a cache before it is worth drawing.
+
 ## Icons are a look, not what a panel opens with
 
 `[appearance] icons` is the first setting no Browse key changes, and nothing

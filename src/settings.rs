@@ -1,6 +1,12 @@
 use crate::{
     fs::preview::Highlight,
-    ui::{columns::Columns, icon::Icons, infobar::ProgressLabel, pane::DotFiles, sort::SortKey},
+    ui::{
+        columns::{Columns, PermissionsColumn},
+        icon::Icons,
+        infobar::ProgressLabel,
+        pane::DotFiles,
+        sort::SortKey,
+    },
 };
 
 /// One value out of a fixed set, spelled the way the config file writes it.
@@ -48,6 +54,17 @@ impl Choice for DotFiles {
         match self {
             DotFiles::Hidden => "hidden",
             DotFiles::Shown => "shown",
+        }
+    }
+}
+
+impl Choice for PermissionsColumn {
+    const ALL: &'static [Self] = &[PermissionsColumn::Hidden, PermissionsColumn::Shown];
+
+    fn name(self) -> &'static str {
+        match self {
+            PermissionsColumn::Hidden => "hidden",
+            PermissionsColumn::Shown => "shown",
         }
     }
 }
@@ -128,6 +145,7 @@ pub struct Settings {
     pub columns: Columns,
     pub sort: SortKey,
     pub dot_files: DotFiles,
+    pub permissions: PermissionsColumn,
     pub icons: Icons,
     pub progress: ProgressLabel,
     pub highlight: Highlight,
@@ -170,6 +188,7 @@ pub enum Setting {
     Columns,
     Sort,
     DotFiles,
+    Permissions,
     Icons,
     Progress,
     Highlight,
@@ -181,6 +200,7 @@ impl Setting {
         Setting::Columns,
         Setting::Sort,
         Setting::DotFiles,
+        Setting::Permissions,
         Setting::Icons,
         Setting::Progress,
         Setting::Highlight,
@@ -188,7 +208,9 @@ impl Setting {
 
     pub fn section(self) -> Section {
         match self {
-            Setting::Columns | Setting::Sort | Setting::DotFiles => Section::Listing,
+            Setting::Columns | Setting::Sort | Setting::DotFiles | Setting::Permissions => {
+                Section::Listing
+            }
             Setting::Icons | Setting::Progress => Section::Appearance,
             Setting::Highlight => Section::Preview,
         }
@@ -200,6 +222,7 @@ impl Setting {
             Setting::Columns => "columns",
             Setting::Sort => "sort",
             Setting::DotFiles => "dotfiles",
+            Setting::Permissions => "permissions",
             Setting::Icons => "icons",
             Setting::Progress => "progress",
             Setting::Highlight => "highlight",
@@ -212,6 +235,7 @@ impl Setting {
             Setting::Columns => "Columns",
             Setting::Sort => "Sort by",
             Setting::DotFiles => "Dotfiles",
+            Setting::Permissions => "Permissions",
             Setting::Icons => "Icons",
             Setting::Progress => "Progress",
             Setting::Highlight => "Highlighting",
@@ -225,6 +249,9 @@ impl Setting {
             Setting::Columns => "What each row shows besides its name",
             Setting::Sort => "What a panel is sorted by when it opens",
             Setting::DotFiles => "Whether a panel lists names beginning with a dot when it opens",
+            Setting::Permissions => {
+                "Whether a row shows its permission bits beside the other columns"
+            }
             Setting::Icons => "The glyph in front of each name; nerd-font takes a Nerd Font",
             Setting::Progress => "What a running job's bar is labelled with",
             Setting::Highlight => {
@@ -239,6 +266,7 @@ impl Setting {
             Setting::Columns => names::<Columns>(),
             Setting::Sort => names::<SortKey>(),
             Setting::DotFiles => names::<DotFiles>(),
+            Setting::Permissions => names::<PermissionsColumn>(),
             Setting::Icons => names::<Icons>(),
             Setting::Progress => names::<ProgressLabel>(),
             Setting::Highlight => names::<Highlight>(),
@@ -251,6 +279,7 @@ impl Setting {
             Setting::Columns => settings.columns.name(),
             Setting::Sort => settings.sort.name(),
             Setting::DotFiles => settings.dot_files.name(),
+            Setting::Permissions => settings.permissions.name(),
             Setting::Icons => settings.icons.name(),
             Setting::Progress => settings.progress.name(),
             Setting::Highlight => settings.highlight.name(),
@@ -268,6 +297,7 @@ impl Setting {
             Setting::Columns => put(&mut settings.columns, name),
             Setting::Sort => put(&mut settings.sort, name),
             Setting::DotFiles => put(&mut settings.dot_files, name),
+            Setting::Permissions => put(&mut settings.permissions, name),
             Setting::Icons => put(&mut settings.icons, name),
             Setting::Progress => put(&mut settings.progress, name),
             Setting::Highlight => put(&mut settings.highlight, name),
@@ -281,6 +311,7 @@ impl Setting {
             Setting::Columns => settings.columns = defaults.columns,
             Setting::Sort => settings.sort = defaults.sort,
             Setting::DotFiles => settings.dot_files = defaults.dot_files,
+            Setting::Permissions => settings.permissions = defaults.permissions,
             Setting::Icons => settings.icons = defaults.icons,
             Setting::Progress => settings.progress = defaults.progress,
             Setting::Highlight => settings.highlight = defaults.highlight,
@@ -293,6 +324,7 @@ impl Setting {
             Setting::Columns => settings.columns = stepped(settings.columns, step),
             Setting::Sort => settings.sort = stepped(settings.sort, step),
             Setting::DotFiles => settings.dot_files = stepped(settings.dot_files, step),
+            Setting::Permissions => settings.permissions = stepped(settings.permissions, step),
             Setting::Icons => settings.icons = stepped(settings.icons, step),
             Setting::Progress => settings.progress = stepped(settings.progress, step),
             Setting::Highlight => settings.highlight = stepped(settings.highlight, step),
@@ -368,6 +400,7 @@ mod settings_tests {
             Setting::Columns
             | Setting::Sort
             | Setting::DotFiles
+            | Setting::Permissions
             | Setting::Icons
             | Setting::Progress
             | Setting::Highlight => Setting::ALL.contains(&setting),
@@ -376,6 +409,7 @@ mod settings_tests {
         assert!(listed(Setting::Columns));
         assert!(listed(Setting::Sort));
         assert!(listed(Setting::DotFiles));
+        assert!(listed(Setting::Permissions));
         assert!(listed(Setting::Icons));
         assert!(listed(Setting::Progress));
         assert!(listed(Setting::Highlight));

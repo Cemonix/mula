@@ -15,7 +15,10 @@ use ratatui::{
     text::Span,
 };
 
-use crate::fs::directory::{Detail, DirEntry, DirEntryKind};
+use crate::{
+    fs::directory::{Detail, DirEntry, DirEntryKind},
+    ui::icon::Icons,
+};
 
 /// Stands in the size column of the parent, which is never measured.
 const NO_SIZE: &str = "\u{2014}";
@@ -102,6 +105,82 @@ impl Columns {
             Columns::Size | Columns::SizeAndTime => true,
         }
     }
+}
+
+/// Whether a row carries its permission bits in front of the other columns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PermissionsColumn {
+    #[default]
+    Hidden,
+    Shown,
+}
+
+/// Everything a row draws besides its name, handed down from `App` every frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub columns: Columns,
+    pub permissions: PermissionsColumn,
+    pub icons: Icons,
+}
+
+impl Look {
+    /// Columns of the permissions cell: `rwxr-xr-x`.
+    const MODE_WIDTH: usize = 9;
+
+    /// Whether the permissions are drawn: when they are asked for, beside any
+    /// other column. With the name alone the listing is read without a `stat`,
+    /// so there are none to draw, and the name alone was asked for.
+    fn shows_permissions(self) -> bool {
+        self.permissions == PermissionsColumn::Shown && self.columns != Columns::Name
+    }
+
+    /// Columns taken to the right of the name, the gaps in front of each cell
+    /// included.
+    pub fn width(self) -> usize {
+        let mode = match self.shows_permissions() {
+            true => Columns::GAP + Self::MODE_WIDTH,
+            false => 0,
+        };
+        mode + self.columns.width()
+    }
+
+    /// The cells of `entry` to the right of its name, together exactly
+    /// [`Look::width`] wide. `total` is what a directory measured to.
+    pub fn cells(self, entry: &DirEntry, total: Option<u64>) -> Vec<Span<'static>> {
+        let mut cells = Vec::new();
+        if self.shows_permissions() {
+            let text = entry
+                .meta
+                .map(|meta| format_mode(meta.mode))
+                .unwrap_or_default();
+            cells.push(cell(&text, Self::MODE_WIDTH, Columns::MUTED));
+        }
+        cells.extend(self.columns.cells(entry, total));
+        cells
+    }
+}
+
+/// The nine permission bits of `mode` the way `ls -l` writes them, with the
+/// set-id and sticky bits in the execute places: lower case over an execute
+/// bit, upper case without one.
+fn format_mode(mode: u32) -> String {
+    let triple = |shift: u32, special: u32, mark: char| {
+        let bits = mode >> shift;
+        let flag = |bit: u32, c: char| if bits & bit != 0 { c } else { '-' };
+        let execute = match (bits & 1 != 0, mode & special != 0) {
+            (true, true) => mark,
+            (false, true) => mark.to_ascii_uppercase(),
+            (true, false) => 'x',
+            (false, false) => '-',
+        };
+        [flag(4, 'r'), flag(2, 'w'), execute]
+    };
+
+    triple(6, 0o4000, 's')
+        .into_iter()
+        .chain(triple(3, 0o2000, 's'))
+        .chain(triple(0, 0o1000, 't'))
+        .collect()
 }
 
 /// The size column of `entry`, padded to its width.
@@ -213,6 +292,7 @@ mod columns_tests {
             Some(EntryMeta {
                 size,
                 modified: 1_756_400_000,
+                mode: 0o100644,
             }),
         )
     }
@@ -221,6 +301,67 @@ mod columns_tests {
     /// are about.
     fn text_of(cell: Span<'static>) -> String {
         cell.content.trim().to_string()
+    }
+
+    #[test]
+    fn a_mode_reads_the_way_ls_writes_it() {
+        for (mode, text) in [
+            (0o100644, "rw-r--r--"),
+            (0o100755, "rwxr-xr-x"),
+            (0o104755, "rwsr-xr-x"),
+            (0o102640, "rw-r-S---"),
+            (0o041777, "rwxrwxrwt"),
+            (0o040000, "---------"),
+        ] {
+            assert_eq!(format_mode(mode), text, "{mode:o}");
+        }
+    }
+
+    /// A row is laid out by the width alone, so the cells have to fill it
+    /// exactly whatever is drawn.
+    #[test]
+    fn the_cells_fill_the_width_of_every_look() {
+        for columns in [Columns::Name, Columns::Size, Columns::SizeAndTime] {
+            for permissions in [PermissionsColumn::Hidden, PermissionsColumn::Shown] {
+                let look = Look {
+                    columns,
+                    permissions,
+                    ..Look::default()
+                };
+
+                let drawn: usize = look.cells(&file(2048), None).iter().map(Span::width).sum();
+
+                assert_eq!(drawn, look.width(), "{look:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_name_alone_draws_no_permissions() {
+        let look = Look {
+            columns: Columns::Name,
+            permissions: PermissionsColumn::Shown,
+            ..Look::default()
+        };
+
+        assert!(look.cells(&file(2048), None).is_empty());
+    }
+
+    #[test]
+    fn shown_permissions_come_before_the_size() {
+        let look = Look {
+            columns: Columns::Size,
+            permissions: PermissionsColumn::Shown,
+            ..Look::default()
+        };
+
+        let texts: Vec<String> = look
+            .cells(&file(2048), None)
+            .into_iter()
+            .map(text_of)
+            .collect();
+
+        assert_eq!(texts, ["rw-r--r--", "2.0K"]);
     }
 
     #[test]

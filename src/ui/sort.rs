@@ -153,7 +153,11 @@ mod sort_tests {
         DirEntry {
             path: Arc::from(Path::new("/a").join(name).as_path()),
             kind,
-            meta: meta.map(|(size, modified)| EntryMeta { size, modified }),
+            meta: meta.map(|(size, modified)| EntryMeta {
+                size,
+                modified,
+                mode: 0o100644,
+            }),
         }
     }
 
