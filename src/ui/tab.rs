@@ -18,13 +18,25 @@ use ratatui::{
 };
 
 use crate::{
-    fs::directory::DirEntryKind,
+    fs::{directory::DirEntryKind, sizes::DirSizes},
     ui::{
         self,
         columns::Columns,
         pane::{Pane, PaneError},
     },
 };
+
+/// What a set of marks adds up to on disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Weight {
+    /// Every mark has a size, and this is their sum.
+    Exact(u64),
+    /// Some marks have a size and add up to this; the rest have none yet.
+    AtLeast(u64),
+    /// No mark has a size.
+    #[default]
+    Unknown,
+}
 
 /// Which neighbour of the active tab becomes active, wrapping around the ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +220,43 @@ impl Tab {
         self.selected_items.len() - in_sight
     }
 
+    /// What the marks add up to, as far as `App` knows: a file by the size
+    /// its listing read, a directory by the total `sizes` holds for it.
+    ///
+    /// A mark outside this directory has no listing to read a size from, so
+    /// only a directory measured before can count; a file there, a directory
+    /// nobody has measured, and a file listed without metadata are unknown.
+    pub fn marked_weight(&self, sizes: &DirSizes) -> Weight {
+        let mut known = None;
+        let mut unknown = 0;
+        let mut add = |size: Option<u64>| match size {
+            Some(size) => *known.get_or_insert(0) += size,
+            None => unknown += 1,
+        };
+
+        let mut listed = HashSet::new();
+        for entry in self.pane.listed_entries() {
+            if let Some(mark) = self.selected_items.get(&entry.path) {
+                listed.insert(mark);
+                add(match entry.kind {
+                    DirEntryKind::Directory => sizes.get(&entry.path),
+                    _ => entry.meta.map(|meta| meta.size),
+                });
+            }
+        }
+        for mark in &self.selected_items {
+            if !listed.contains(mark) {
+                add(sizes.get(mark));
+            }
+        }
+
+        match (known, unknown) {
+            (None, _) => Weight::Unknown,
+            (Some(size), 0) => Weight::Exact(size),
+            (Some(size), _) => Weight::AtLeast(size),
+        }
+    }
+
     pub fn deselect_items(&mut self) {
         self.selected_items.clear();
     }
@@ -309,7 +358,7 @@ mod tab_tests {
 
     use crate::{
         fs::{
-            directory::{Detail, DirEntry, Directory},
+            directory::{Detail, DirEntry, Directory, EntryMeta},
             listing::Listed,
         },
         ui::filter,
@@ -319,16 +368,25 @@ mod tab_tests {
     /// parent entry. Built through `listed` because that is the only way a
     /// pane takes a directory.
     fn tab_over(names: &[&str]) -> Tab {
+        let rows: Vec<_> = names
+            .iter()
+            .map(|&name| (name, DirEntryKind::File, None))
+            .collect();
+        tab_of(&rows)
+    }
+
+    /// A tab like [`tab_over`]'s, each row of a kind and with a size or none.
+    fn tab_of(rows: &[(&str, DirEntryKind, Option<u64>)]) -> Tab {
         let root: Arc<Path> = Arc::from(Path::new("/a"));
         let mut entries = vec![DirEntry {
             path: Arc::from(Path::new("/")),
             kind: DirEntryKind::Parent,
             meta: None,
         }];
-        entries.extend(names.iter().map(|name| DirEntry {
+        entries.extend(rows.iter().map(|&(name, kind, size)| DirEntry {
             path: Arc::from(root.join(name).as_path()),
-            kind: DirEntryKind::File,
-            meta: None,
+            kind,
+            meta: size.map(|size| EntryMeta { size, modified: 0 }),
         }));
 
         let mut tab = Tab::new(String::from("t")).unwrap();
@@ -475,6 +533,72 @@ mod tab_tests {
         tab.mark_paths([PathBuf::from("/elsewhere/x")]);
 
         assert_eq!(tab.marked_out_of_sight(), 1);
+    }
+
+    fn marking_all(rows: &[(&str, DirEntryKind, Option<u64>)]) -> Tab {
+        let mut tab = tab_of(rows);
+        tab.mark_visible(MarkOp::Mark, everything);
+        tab
+    }
+
+    fn measured(dirs: &[(&str, u64)]) -> DirSizes {
+        let mut sizes = DirSizes::default();
+        for &(dir, total) in dirs {
+            sizes.insert(Arc::from(Path::new(dir)), total);
+        }
+        sizes
+    }
+
+    #[test]
+    fn files_and_measured_directories_add_up_exactly() {
+        let tab = marking_all(&[
+            ("d", DirEntryKind::Directory, None),
+            ("f", DirEntryKind::File, Some(10)),
+        ]);
+
+        assert_eq!(
+            tab.marked_weight(&measured(&[("/a/d", 100)])),
+            Weight::Exact(110)
+        );
+    }
+
+    #[test]
+    fn a_directory_not_measured_yet_leaves_a_lower_bound() {
+        let tab = marking_all(&[
+            ("d", DirEntryKind::Directory, None),
+            ("f", DirEntryKind::File, Some(10)),
+        ]);
+
+        assert_eq!(tab.marked_weight(&measured(&[])), Weight::AtLeast(10));
+    }
+
+    #[test]
+    fn a_mark_the_filter_hides_still_weighs_what_it_was_listed_with() {
+        let mut tab = marking_all(&[
+            ("a", DirEntryKind::File, Some(1)),
+            ("b", DirEntryKind::File, Some(2)),
+        ]);
+        tab.get_pane_mut().push_filter('a');
+
+        assert_eq!(tab.marked_weight(&measured(&[])), Weight::Exact(3));
+    }
+
+    #[test]
+    fn a_mark_elsewhere_counts_only_as_a_measured_directory() {
+        let mut tab = marking_all(&[("f", DirEntryKind::File, Some(10))]);
+        tab.mark_paths([PathBuf::from("/elsewhere/d"), PathBuf::from("/elsewhere/x")]);
+
+        assert_eq!(
+            tab.marked_weight(&measured(&[("/elsewhere/d", 5)])),
+            Weight::AtLeast(15)
+        );
+    }
+
+    #[test]
+    fn nothing_with_a_size_weighs_nothing_known() {
+        let tab = marking_all(&[("f", DirEntryKind::File, None)]);
+
+        assert_eq!(tab.marked_weight(&measured(&[])), Weight::Unknown);
     }
 
     #[test]

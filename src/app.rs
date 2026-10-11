@@ -706,6 +706,7 @@ impl App {
         let tab = self.get_focused_tabs().active_tab();
         let marked = tab.get_selected_items().len();
         let out_of_sight = tab.marked_out_of_sight();
+        let weight = tab.marked_weight(&self.dir_sizes);
 
         // Drawn while the filter is being typed even before there is anything
         // to show, since that is the only sign the keys have gone somewhere
@@ -737,6 +738,7 @@ impl App {
             InfoBar::new()
                 .progress(progress)
                 .marked(marked)
+                .weight(weight)
                 .out_of_sight(out_of_sight)
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
