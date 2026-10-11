@@ -838,6 +838,7 @@ impl App {
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
                 .filter(filter)
+                .label(self.config.settings().progress)
                 .tick(self.tick),
             info_area,
         );
@@ -1689,7 +1690,7 @@ impl App {
                 }
             }
             // Read from the config every frame.
-            Setting::Icons => (),
+            Setting::Icons | Setting::Progress => (),
         }
     }
 
