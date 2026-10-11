@@ -56,6 +56,9 @@ pub enum Action {
     /// Makes a symlink to every marked item in the other panel, under the
     /// item's own name. Nothing is asked: a name already taken fails its item.
     Link,
+    /// Compares two files byte by byte: the two marked, or with nothing
+    /// marked the two under the cursors. The answer comes as a toast.
+    Compare,
     /// Opens the prompt for the archive's name. What format it is written in
     /// follows from that name, so only the asking half is an action here too.
     Pack,

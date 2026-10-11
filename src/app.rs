@@ -1086,6 +1086,7 @@ impl App {
             }
             Action::Transfer { op } => self.queue_transfer(op),
             Action::Link => self.queue_link(),
+            Action::Compare => self.queue_compare(),
             Action::Pack => self.prompt_pack(),
             Action::Unpack => self.queue_unpack(),
             Action::Delete(mode) => self.confirm_delete(mode),
@@ -1956,6 +1957,45 @@ impl App {
     ) -> Result<(), AppError> {
         let tag = self.worker.queue(Work::Transfer { op, items, policy })?;
         self.queued_marks.push(QueuedMarks { tag, tab });
+        Ok(())
+    }
+
+    /// Puts two files on the worker's queue to be compared: the two marks of
+    /// the focused tab, or with nothing marked the entries under both cursors,
+    /// the focused one first. The marks are left standing.
+    ///
+    /// The queue rather than a reader of its own, so a comparison asked for
+    /// right after a copy reads the copy once it is whole.
+    fn queue_compare(&mut self) -> Result<(), AppError> {
+        let mut marked: Vec<PathBuf> = self
+            .get_focused_tabs()
+            .active_tab()
+            .get_selected_items()
+            .iter()
+            .map(|item| item.to_path_buf())
+            .collect();
+        marked.sort();
+
+        let (first, second) = match marked.as_slice() {
+            [] => {
+                let other = self.panel(self.focused_side.toggle()).active_pane();
+                (
+                    self.get_focused_pane().selected_entry()?.path.to_path_buf(),
+                    other.selected_entry()?.path.to_path_buf(),
+                )
+            }
+            [first, second] => (first.clone(), second.clone()),
+            _ => {
+                self.notify(
+                    ToastLevel::Warning,
+                    "Mark two files to compare, or none for the two under the cursors",
+                    None,
+                );
+                return Ok(());
+            }
+        };
+
+        self.worker.queue(Work::Compare { first, second })?;
         Ok(())
     }
 
