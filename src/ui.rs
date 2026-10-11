@@ -3,6 +3,7 @@ use std::path::Path;
 use ratatui::text::Span;
 
 pub(crate) mod columns;
+pub(crate) mod config;
 pub(crate) mod dialog;
 pub(crate) mod favorites;
 pub(crate) mod filter;

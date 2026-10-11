@@ -73,8 +73,8 @@ mod keybar_tests {
 
     use crate::keys::{self, BROWSE_ACTIONS, GLOBAL_KEYS, GlobalMsg, find};
     use crate::{
-        ui::dialog::Dialog, ui::favorites::FavoritesView, ui::filter::Filter, ui::finder::Finder,
-        ui::help, ui::prompt::Prompt,
+        ui::config::ConfigView, ui::dialog::Dialog, ui::favorites::FavoritesView,
+        ui::filter::Filter, ui::finder::Finder, ui::help, ui::prompt::Prompt,
     };
 
     /// The narrowest terminal the bar is curated against.
@@ -128,6 +128,7 @@ mod keybar_tests {
                 "favorites",
                 row_width(FavoritesView::FAVORITE_KEYS, help_key()),
             ),
+            ("config", row_width(ConfigView::CONFIG_KEYS, help_key())),
             ("filter", row_width(Filter::FILTER_KEYS, help_key())),
             ("help", row_width(help::HELP_KEYS, None)),
         ] {

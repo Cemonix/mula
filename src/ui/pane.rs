@@ -21,12 +21,13 @@ use crate::{
         listing::{Kind, Listed},
         sizes::DirSizes,
     },
+    settings::Settings,
     ui::{
         self,
         columns::{self, Columns},
         filter::Filter,
         icon::Icon,
-        sort::Sort,
+        sort::{Sort, SortKey},
     },
 };
 
@@ -137,6 +138,9 @@ pub struct Pane {
     /// The order the view is drawn in. A setting the pane keeps, the way it
     /// keeps `dot_files`.
     sort: Sort,
+    /// The order the settings open a pane in, which the border leaves
+    /// unlabelled.
+    usual: Sort,
     /// What the directories of the listing measured to, as far as anybody
     /// knows yet.
     totals: HashMap<Arc<Path>, u64>,
@@ -178,6 +182,7 @@ impl Pane {
             dot_files: DotFiles::default(),
             filter: Filter::default(),
             sort: Sort::default(),
+            usual: Sort::default(),
             totals: HashMap::new(),
             list_state: ListState::default(),
             rows: 0,
@@ -264,6 +269,27 @@ impl Pane {
     /// Shows or hides the entries whose names begin with a dot.
     pub fn toggle_dot_files(&mut self) {
         self.keeping_cursor(|pane| pane.dot_files = pane.dot_files.toggle());
+    }
+
+    /// Puts the order and the dotfiles back to what `settings` opens a pane
+    /// with.
+    pub fn take_settings(&mut self, settings: &Settings) {
+        self.open_sorted(settings.sort);
+        self.set_dot_files(settings.dot_files);
+    }
+
+    /// Orders the view by `key` run its own way, and makes that the order the
+    /// border leaves unlabelled. Keeps the cursor on the entry it stands on.
+    pub fn open_sorted(&mut self, key: SortKey) {
+        self.keeping_cursor(|pane| {
+            pane.usual = Sort::by(key);
+            pane.sort = pane.usual;
+        });
+    }
+
+    /// Keeps the cursor on the entry it stands on while that is still shown.
+    pub fn set_dot_files(&mut self, dot_files: DotFiles) {
+        self.keeping_cursor(|pane| pane.dot_files = dot_files);
     }
 
     /// Orders the view by the next key, run its own way.
@@ -594,7 +620,7 @@ impl Pane {
             });
         let sort = self
             .sort
-            .label()
+            .label(self.usual)
             .map(|label| Line::from(format!(" {label} ")).right_aligned());
         let free = self
             .directory
@@ -791,6 +817,34 @@ mod pane_tests {
         pane.toggle_dot_files();
 
         assert_eq!(visible(&pane), [".env", ".git", "a", "b"]);
+    }
+
+    #[test]
+    fn a_pane_takes_the_dotfiles_and_the_order_the_settings_open_it_with() {
+        let mut pane = Pane::new(directory_of("/a", &["a", ".env"]));
+        let settings = Settings {
+            dot_files: DotFiles::Shown,
+            sort: SortKey::Size,
+            ..Settings::default()
+        };
+
+        pane.take_settings(&settings);
+
+        assert_eq!(visible(&pane), [".env", "a"]);
+        assert_eq!(pane.sort(), Sort::by(SortKey::Size));
+    }
+
+    /// The order the settings open a pane in is the one its border leaves
+    /// unlabelled, whatever that order is.
+    #[test]
+    fn the_order_the_settings_ask_for_is_the_usual_one() {
+        let mut pane = Pane::new(directory_of("/a", &["a"]));
+
+        pane.open_sorted(SortKey::Size);
+
+        assert_eq!(pane.sort().label(pane.usual), None);
+        pane.cycle_sort();
+        assert!(pane.sort().label(pane.usual).is_some());
     }
 
     /// The parent's path is the directory above, whose own name may begin with

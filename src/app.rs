@@ -17,7 +17,7 @@ use thiserror::Error;
 
 use crate::{
     action::{Action, ListEnd, VerticalDir},
-    config,
+    config::Config,
     favorites::{Added, Favorites},
     fs::{
         archive::format::{self, Format},
@@ -34,9 +34,11 @@ use crate::{
     },
     keys::{self, Binding, GlobalMsg, KeyBinding},
     open::{self, Handover, Launch, Opener, Program},
+    settings::{Setting, Step},
     ui::{
         self,
         columns::Columns,
+        config::{ConfigMsg, ConfigRow, ConfigView},
         dialog::{Choice, Dialog, DialogMsg},
         favorites::{FavoritesMsg, FavoritesView},
         filter::{self, Filter, FilterMsg},
@@ -110,6 +112,11 @@ pub enum Mode {
     /// mode carries is where the cursor stands in it.
     Favorites {
         view: FavoritesView,
+    },
+    /// Changing the settings. They live on `App` in the config; what the mode
+    /// carries is where the cursor stands among them.
+    Config {
+        view: ConfigView,
     },
     /// Typing a filter. It draws no overlay — the whole point is watching the
     /// listing narrow — so it is a mode only in the sense that the keys go
@@ -305,6 +312,8 @@ pub struct App {
     /// Browse is the one table a config file can rebind, so it is the one that
     /// is built at startup rather than being a `const`.
     browse_keys: Vec<Binding<Action>>,
+    /// The settings and keys Mula runs with, and the file they are kept in.
+    config: Config,
     help_key: Option<KeyBinding>,
     /// Resolved from the key table once, so the hint the info bar draws while a
     /// job runs cannot drift from the key that actually cancels it.
@@ -393,13 +402,12 @@ impl App {
             preview_limits.max_bitmap_side = Self::GRAPHICS_BITMAP_SIDE;
         }
 
-        // A broken config costs the user their keys, never their file manager.
-        // The defaults stand and the complaint becomes a toast, which needs the
-        // `App` that is still being built here.
-        let (browse_keys, complaint) = match config::browse_table() {
-            Ok(table) => (table, None),
-            Err(e) => (keys::table(keys::BROWSE_ACTIONS, |_| None), Some(e)),
-        };
+        // A broken config costs the user their settings, never their file
+        // manager. The defaults stand and the complaint becomes a toast, which
+        // needs the `App` that is still being built here.
+        let (config, complaint) = Config::load();
+        let browse_keys = config.browse_table();
+        let settings = config.settings();
         let cancel_key =
             keys::find(&browse_keys, |a| matches!(a, Action::CancelJob)).map(|binding| binding.key);
         let add_favorite_key = keys::find(&browse_keys, |a| matches!(a, Action::AddFavorite))
@@ -418,14 +426,15 @@ impl App {
         let pool = Arc::new(pool);
 
         let mut app = Self {
-            left: Panel::new(Arc::clone(&pool))?,
-            right: Panel::new(pool)?,
+            left: Panel::new(Arc::clone(&pool), &settings)?,
+            right: Panel::new(pool, &settings)?,
             dir_sizes: DirSizes::default(),
             focused_side: Side::Left,
             toasts: VecDeque::new(),
             mode: Mode::Browse,
             help: None,
             browse_keys,
+            config,
             help_key: keys::find(keys::GLOBAL_KEYS, |m| matches!(m, GlobalMsg::ToggleHelp))
                 .map(|binding| binding.key),
             cancel_key,
@@ -434,7 +443,7 @@ impl App {
             worker: Worker::start(),
             reader: Reader::<Search>::start(Limits::default()),
             opposite: Opposite::Listing,
-            columns: Columns::SizeAndTime,
+            columns: settings.columns,
             previewer: Reader::<Preview>::start(preview::Config::new(preview_limits)),
             previewing: None,
             preview: None,
@@ -672,6 +681,22 @@ impl App {
             );
         }
 
+        if let Mode::Config { view } = &mut self.mode {
+            let settings = self.config.settings();
+            let rows: Vec<ConfigRow> = Setting::ALL
+                .iter()
+                .map(|setting| ConfigRow {
+                    section: setting.section().title(),
+                    title: setting.title(),
+                    value: setting.value(&settings),
+                    choices: setting.choices(),
+                    help: setting.help(),
+                })
+                .collect();
+            let area = frame.area();
+            view.render(&rows, area, frame.buffer_mut());
+        }
+
         // Newest toast in the bottom-right corner, older ones stacked above it.
         // The first that no longer fits ends the stack; nothing older would fit
         // either.
@@ -775,6 +800,10 @@ impl App {
                     Keybar::new(FavoritesView::FAVORITE_KEYS).help_key(self.help_key),
                     keys_area,
                 ),
+                Mode::Config { .. } => frame.render_widget(
+                    Keybar::new(ConfigView::CONFIG_KEYS).help_key(self.help_key),
+                    keys_area,
+                ),
                 Mode::Filter => frame.render_widget(
                     Keybar::new(Filter::FILTER_KEYS).help_key(self.help_key),
                     keys_area,
@@ -804,6 +833,9 @@ impl App {
                         Help::new(FavoritesView::FAVORITE_KEYS, globals, state),
                         area,
                     );
+                }
+                Mode::Config { .. } => {
+                    frame.render_widget(Help::new(ConfigView::CONFIG_KEYS, globals, state), area);
                 }
                 Mode::Filter => {
                     frame.render_widget(Help::new(Filter::FILTER_KEYS, globals, state), area);
@@ -870,6 +902,7 @@ impl App {
             Mode::Input { .. } => self.handle_input_key(key),
             Mode::Find { .. } => self.handle_find_key(key),
             Mode::Favorites { .. } => self.handle_favorites_key(key),
+            Mode::Config { .. } => self.handle_config_key(key),
             Mode::Filter => self.handle_filter_key(key),
             Mode::Browse => {
                 if let Some(action) = keys::resolve(&self.browse_keys, &key)
@@ -985,7 +1018,7 @@ impl App {
             }
             Action::Open(opener) => self.open_selected(opener),
             Action::NewTab => {
-                if let Ok(new_tab) = Tab::new(String::from("New Tab")) {
+                if let Ok(new_tab) = Tab::new(String::from("New Tab"), &self.config.settings()) {
                     self.get_focused_tabs_mut().add_tab(new_tab);
                 }
                 Ok(())
@@ -1003,6 +1036,12 @@ impl App {
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
             Action::Find => self.open_finder(),
+            Action::OpenConfig => {
+                self.mode = Mode::Config {
+                    view: ConfigView::default(),
+                };
+                Ok(())
+            }
             Action::OpenFavorites => {
                 self.mode = Mode::Favorites {
                     view: FavoritesView::new(self.favorites.paths().len()),
@@ -1443,6 +1482,58 @@ impl App {
             }
             Err(e) => self.notify(ToastLevel::Error, e, None),
         }
+    }
+
+    fn handle_config_key(&mut self, key: KeyEvent) {
+        let Some(msg) = keys::resolve(ConfigView::CONFIG_KEYS, &key) else {
+            return;
+        };
+        let Mode::Config { view } = &mut self.mode else {
+            return;
+        };
+
+        match msg {
+            ConfigMsg::MoveSelection(dir) => view.move_selection(dir, Setting::ALL.len()),
+            ConfigMsg::Step(step) => {
+                let setting = Setting::ALL[view.selected()];
+                self.change_setting(setting, step);
+            }
+            ConfigMsg::Close => self.mode = Mode::Browse,
+        }
+    }
+
+    /// Moves `setting` one choice along, saves it, and shows it on screen at
+    /// once. A save that fails leaves the setting and the screen as they were
+    /// and says so in a toast.
+    fn change_setting(&mut self, setting: Setting, step: Step) {
+        let mut settings = self.config.settings();
+        setting.step(&mut settings, step);
+        if let Err(e) = self.config.set(settings) {
+            self.notify(ToastLevel::Error, e, None);
+            return;
+        }
+
+        match setting {
+            Setting::Columns => self.columns = settings.columns,
+            Setting::Sort => {
+                for pane in self.all_panes_mut() {
+                    pane.open_sorted(settings.sort);
+                }
+            }
+            Setting::DotFiles => {
+                for pane in self.all_panes_mut() {
+                    pane.set_dot_files(settings.dot_files);
+                }
+            }
+        }
+    }
+
+    /// The pane of every tab of both panels.
+    fn all_panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.left
+            .tabs_mut()
+            .panes_mut()
+            .chain(self.right.tabs_mut().panes_mut())
     }
 
     fn handle_favorites_key(&mut self, key: KeyEvent) {

@@ -19,6 +19,7 @@ use ratatui::{
 
 use crate::{
     fs::{directory::DirEntryKind, sizes::DirSizes},
+    settings::Settings,
     ui::{
         self,
         columns::Columns,
@@ -108,6 +109,11 @@ impl TabList {
         self.tabs.iter_mut().find(|tab| tab.id == id)
     }
 
+    /// The pane of every tab, the ones behind the active one included.
+    pub fn panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.tabs.iter_mut().map(|tab| &mut tab.pane)
+    }
+
     pub fn toggle(&mut self, dir: ToggleDirection) {
         self.active = match dir {
             ToggleDirection::Previous => self.active.checked_sub(1).unwrap_or(self.tabs.len() - 1),
@@ -146,15 +152,18 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn new(title: String) -> Result<Self, PaneError> {
+    /// A tab on the current directory, its pane opened the way `settings` say.
+    pub fn new(title: String, settings: &Settings) -> Result<Self, PaneError> {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
         let curr_dir: Arc<Path> = env::current_dir()?.into();
+        let mut pane = Pane::empty(curr_dir);
+        pane.take_settings(settings);
 
         Ok(Self {
             id: TabId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             title,
-            pane: Pane::empty(curr_dir),
+            pane,
             selected_items: HashSet::new(),
         })
     }
@@ -307,7 +316,7 @@ mod tab_list_tests {
     fn tabs(count: usize) -> TabList {
         TabList::new(
             (0..count)
-                .map(|i| Tab::new(i.to_string()).unwrap())
+                .map(|i| Tab::new(i.to_string(), &Settings::default()).unwrap())
                 .collect(),
         )
     }
@@ -389,7 +398,7 @@ mod tab_tests {
             meta: size.map(|size| EntryMeta { size, modified: 0 }),
         }));
 
-        let mut tab = Tab::new(String::from("t")).unwrap();
+        let mut tab = Tab::new(String::from("t"), &Settings::default()).unwrap();
         tab.get_pane_mut()
             .listed(Ok(Listed::Directory(Directory::new(
                 root,

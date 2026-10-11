@@ -636,6 +636,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Switches to the next tab, wrapping to the first one",
     },
     Entry {
+        name: "app.config",
+        action: Action::OpenConfig,
+        keys: &[KeyBinding::plain(KeyCode::Char('C')).shift()],
+        bar: None,
+        help: "Opens the settings, saved to config.toml as they change",
+    },
+    Entry {
         name: "app.quit",
         action: Action::Quit,
         keys: &[KeyBinding::plain(KeyCode::Char('q'))],
@@ -648,8 +655,8 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
 mod keys_tests {
     use super::*;
     use crate::ui::{
-        dialog::Dialog, favorites::FavoritesView, filter::Filter, finder::Finder, help,
-        prompt::Prompt,
+        config::ConfigView, dialog::Dialog, favorites::FavoritesView, filter::Filter,
+        finder::Finder, help, prompt::Prompt,
     };
 
     /// The Browse table as it stands with no config to override it.
@@ -793,6 +800,7 @@ mod keys_tests {
         round_trip(Prompt::PROMPT_KEYS);
         round_trip(Finder::FIND_KEYS);
         round_trip(FavoritesView::FAVORITE_KEYS);
+        round_trip(ConfigView::CONFIG_KEYS);
         round_trip(Filter::FILTER_KEYS);
         round_trip(help::HELP_KEYS);
     }
@@ -859,6 +867,7 @@ mod keys_tests {
             ("prompt", bound(Prompt::PROMPT_KEYS)),
             ("finder", bound(Finder::FIND_KEYS)),
             ("favorites", bound(FavoritesView::FAVORITE_KEYS)),
+            ("config", bound(ConfigView::CONFIG_KEYS)),
             ("filter", bound(Filter::FILTER_KEYS)),
             ("help", bound(help::HELP_KEYS)),
         ] {
