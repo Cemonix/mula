@@ -88,6 +88,9 @@ impl Speed {
 #[derive(Debug, Default)]
 pub struct InfoBar<'a> {
     marked: usize,
+    /// How many of the marks the listing on screen does not show. The next
+    /// operation takes them all the same.
+    out_of_sight: usize,
     queued: usize,
     progress: Option<ProgressView<'a>>,
     /// Drawn only while a job runs. Cancelling is the one key whose meaning is
@@ -118,6 +121,9 @@ impl<'a> InfoBar<'a> {
     /// Follows the count of marked items.
     const MARKED_LABEL: &'static str = " marked";
 
+    /// Follows the count of marks the listing does not show.
+    const OUT_OF_SIGHT_LABEL: &'static str = " out of sight";
+
     /// Follows the count of jobs waiting behind the running one.
     const QUEUED_LABEL: &'static str = " queued";
 
@@ -142,6 +148,11 @@ impl<'a> InfoBar<'a> {
 
     pub fn marked(mut self, count: usize) -> Self {
         self.marked = count;
+        self
+    }
+
+    pub fn out_of_sight(mut self, count: usize) -> Self {
+        self.out_of_sight = count;
         self
     }
 
@@ -206,9 +217,16 @@ impl<'a> InfoBar<'a> {
         }
 
         if self.marked > 0 {
-            segments.push(vec![
-                Span::raw(format!("{}{}", self.marked, Self::MARKED_LABEL)).bold(),
-            ]);
+            let mut segment =
+                vec![Span::raw(format!("{}{}", self.marked, Self::MARKED_LABEL)).bold()];
+            if self.out_of_sight > 0 {
+                segment.push(Span::raw(", "));
+                segment.push(
+                    Span::raw(format!("{}{}", self.out_of_sight, Self::OUT_OF_SIGHT_LABEL))
+                        .fg(Color::Yellow),
+                );
+            }
+            segments.push(segment);
         }
 
         // Counts the running job too, so the row never reads as empty while
@@ -413,6 +431,14 @@ mod infobar_tests {
     #[test]
     fn the_marked_count_is_drawn() {
         assert_eq!(render(InfoBar::new().marked(3), 40), marked(3));
+    }
+
+    #[test]
+    fn marks_out_of_sight_are_counted_beside_the_marks() {
+        assert_eq!(
+            render(InfoBar::new().marked(5).out_of_sight(2), 40),
+            format!("{}, 2{}", marked(5), InfoBar::OUT_OF_SIGHT_LABEL)
+        );
     }
 
     #[test]

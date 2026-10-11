@@ -197,6 +197,17 @@ impl Tab {
         }
     }
 
+    /// How many of the marks the view does not show: marks in another
+    /// directory, and marks here that the filter or the dot-file setting hides.
+    pub fn marked_out_of_sight(&self) -> usize {
+        let in_sight = self
+            .pane
+            .visible_entries()
+            .filter(|entry| self.selected_items.contains(&entry.path))
+            .count();
+        self.selected_items.len() - in_sight
+    }
+
     pub fn deselect_items(&mut self) {
         self.selected_items.clear();
     }
@@ -455,5 +466,23 @@ mod tab_tests {
         tab.mark_visible(MarkOp::Toggle, everything);
 
         assert_eq!(marked_names(&tab), ["a", "c", "x"]);
+    }
+
+    #[test]
+    fn marks_in_another_directory_are_out_of_sight() {
+        let mut tab = tab_over(&["a"]);
+        tab.mark_visible(MarkOp::Mark, everything);
+        tab.mark_paths([PathBuf::from("/elsewhere/x")]);
+
+        assert_eq!(tab.marked_out_of_sight(), 1);
+    }
+
+    #[test]
+    fn a_mark_the_filter_hides_is_out_of_sight() {
+        let mut tab = tab_over(&["a", "b"]);
+        tab.mark_visible(MarkOp::Mark, everything);
+        tab.get_pane_mut().push_filter('a');
+
+        assert_eq!(tab.marked_out_of_sight(), 1);
     }
 }

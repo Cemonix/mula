@@ -703,11 +703,9 @@ impl App {
 
         // Counts the marks of the focused tab; marks of the other side and of
         // inactive tabs are not included.
-        let marked = self
-            .get_focused_tabs()
-            .active_tab()
-            .get_selected_items()
-            .len();
+        let tab = self.get_focused_tabs().active_tab();
+        let marked = tab.get_selected_items().len();
+        let out_of_sight = tab.marked_out_of_sight();
 
         // Drawn while the filter is being typed even before there is anything
         // to show, since that is the only sign the keys have gone somewhere
@@ -739,6 +737,7 @@ impl App {
             InfoBar::new()
                 .progress(progress)
                 .marked(marked)
+                .out_of_sight(out_of_sight)
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
                 .filter(filter)

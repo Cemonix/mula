@@ -61,6 +61,21 @@ would be nothing to redraw it from on the next frame.
 The row stays reserved even when empty. Letting it collapse would shift the
 panes and move the cursor the moment the first item is marked.
 
+## Marks out of sight are counted, not asked about
+
+`c`, `m` and `d` take every mark of the tab, the ones the screen does not show
+included: marks made in a directory since left, and marks here that the filter
+or the dot-file setting hides. Filter to `log`, press `a`, drop the filter, and
+a copy takes the logs and whatever was marked before. The delete dialog names
+every item; a transfer asks nothing.
+
+So the mark count carries a second number, `5 marked, 2 out of sight`, for the
+marks the view does not hold. One number for both reasons rather than two:
+either way the user cannot see them and the operation takes them, and the row
+is cut from the right when it runs out of room. A confirmation before a
+transfer with marks out of sight would change what `c` and `m` are, and is
+left for when the count turns out not to be enough.
+
 ## Marks clear when a batch is queued
 
 Not when it finishes. The user goes on marking while the copy runs, and a
