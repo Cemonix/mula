@@ -27,7 +27,7 @@ use crate::{
         job::{JobKind, JobTag, Measure, Outcome, Progress, Work},
         listing::Kind,
         ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
-        preview::{self, Content, Highlight, Preview},
+        preview::{self, Content, Preview},
         reader::Reader,
         rename,
         sizes::DirSizes,
@@ -1691,6 +1691,9 @@ impl App {
             }
             // Read from the config every frame.
             Setting::Icons | Setting::Progress => (),
+            // Forgetting what was asked for is what asks for it again, with
+            // the new setting, on the next pass.
+            Setting::Highlight => self.previewing = None,
         }
     }
 
@@ -2280,7 +2283,7 @@ impl App {
             Some(path) => {
                 if let Err(e) = self.previewer.send(Preview {
                     path: Arc::clone(path),
-                    highlight: Highlight::default(),
+                    highlight: self.config.settings().highlight,
                 }) {
                     self.notify(ToastLevel::Error, e, None);
                 }
