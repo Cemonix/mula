@@ -118,6 +118,21 @@ every pane started in. It now leaves the order the settings ask for
 unlabelled, whatever that is: a user who sorts by size by default would
 otherwise read "by size" on every pane for good.
 
+## Icons are a look, not what a panel opens with
+
+`[appearance] icons` is the first setting no Browse key changes, and nothing
+holds a copy of it. Every frame reads it out of the config, so a change in the
+overlay reaches every listing, the preview and the find overlay at once, with
+nothing to tell.
+
+Three values. `nerd-font` is what Mula always drew, and needs the font.
+`emoji` is for a terminal without one: four glyphs, one for each kind of entry,
+since every font stack carries emoji. Only glyphs that are emoji on their own
+are used — no variation selector — because a terminal and `Span::width`
+disagree about how wide a selector makes a character, and the columns behind
+the name are laid out by that width. `off` draws nothing and keeps no room for
+it, so a name starts right after the mark.
+
 ## One list of settings
 
 `Setting` is an enum, and everything about a setting — its section, its name
