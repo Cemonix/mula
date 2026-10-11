@@ -23,6 +23,7 @@ use crate::{
 
 mod action;
 mod app;
+mod clipboard;
 mod config;
 mod favorites;
 mod fs;
