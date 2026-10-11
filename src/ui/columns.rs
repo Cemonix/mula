@@ -213,6 +213,7 @@ mod columns_tests {
             Some(EntryMeta {
                 size,
                 modified: 1_756_400_000,
+                mode: 0o100644,
             }),
         )
     }

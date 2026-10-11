@@ -410,7 +410,11 @@ mod tab_tests {
         entries.extend(rows.iter().map(|&(name, kind, size)| DirEntry {
             path: Arc::from(root.join(name).as_path()),
             kind,
-            meta: size.map(|size| EntryMeta { size, modified: 0 }),
+            meta: size.map(|size| EntryMeta {
+                size,
+                modified: 0,
+                mode: 0o100644,
+            }),
         }));
 
         let mut tab = Tab::new(String::from("t"), &Settings::default()).unwrap();

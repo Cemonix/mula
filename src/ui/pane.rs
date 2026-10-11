@@ -1010,6 +1010,7 @@ mod pane_tests {
                 meta: Some(EntryMeta {
                     size: *size,
                     modified: 0,
+                    mode: 0o100644,
                 }),
             })
             .collect();
@@ -1631,6 +1632,7 @@ mod pane_tests {
             meta: Some(EntryMeta {
                 size,
                 modified: 1_756_400_000,
+                mode: 0o100644,
             }),
         }
     }

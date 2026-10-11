@@ -9,7 +9,7 @@ use std::{cmp::Ordering, io, os::unix::fs::MetadataExt, path::Path, sync::Arc};
 pub enum Detail {
     /// The name and the kind, both of which `read_dir` gives away.
     NamesOnly,
-    /// Size and modification time as well, one `stat` per entry.
+    /// Size, modification time and mode as well, one `stat` per entry.
     WithMetadata,
 }
 
@@ -19,6 +19,8 @@ pub struct EntryMeta {
     pub size: u64,
     /// `st_mtime`, in seconds since the epoch.
     pub modified: i64,
+    /// `st_mode`: the kind of file and its permission bits.
+    pub mode: u32,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -167,6 +169,7 @@ fn meta_of(path: &Path, detail: Detail) -> Option<EntryMeta> {
         Detail::WithMetadata => std::fs::symlink_metadata(path).ok().map(|meta| EntryMeta {
             size: meta.size(),
             modified: meta.mtime(),
+            mode: meta.mode(),
         }),
     }
 }
