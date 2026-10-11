@@ -63,6 +63,9 @@ pub enum Action {
     /// settled by the key, since only the asking half is an `Action`.
     Delete(DeleteMode),
     Rename,
+    /// Hands the names of every marked item to `$EDITOR`, one per line, and
+    /// asks before renaming whatever came back changed.
+    RenameMarked,
     CreateEntry,
     NewTab,
     CloseTab,

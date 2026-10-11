@@ -68,7 +68,7 @@ These are the ones worth knowing first.
 | `i` | Invert the marks of what the panel is showing |
 | `+` / `-` | Mark / unmark the items shown whose names match a pattern, like `*.jpg` |
 | `g` / `Shift+G` | Jump to the first / last item |
-| `r` | Rename |
+| `r` / `Shift+R` | Rename / rename the marked items in `$EDITOR`, one name per line |
 | `v` / `e` | Open in `$PAGER` / `$EDITOR` |
 | `c` / `m` | Copy / move the marked items into the other panel |
 | `z` / `u` | Pack the marked items into one archive / unpack the marked archives |

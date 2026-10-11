@@ -450,6 +450,13 @@ pub const BROWSE_ACTIONS: &[Entry] = &[
         help: "Renames the item under the cursor",
     },
     Entry {
+        name: "entry.rename-marked",
+        action: Action::RenameMarked,
+        keys: &[KeyBinding::plain(KeyCode::Char('R')).shift()],
+        bar: None,
+        help: "Renames the marked items in $EDITOR, one name per line",
+    },
+    Entry {
         name: "entry.view",
         action: Action::Open(Opener::View),
         keys: &[KeyBinding::plain(KeyCode::Char('v'))],

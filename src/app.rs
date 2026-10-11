@@ -28,6 +28,7 @@ use crate::{
         ops::{DeleteMode, MutationOp, OnCollision, ProcessedSummary, Transfer, TransferOp},
         preview::{self, Content, Preview},
         reader::Reader,
+        rename,
         sizes::DirSizes,
         worker::{Health, Worker},
     },
@@ -214,6 +215,15 @@ pub enum ConfirmTarget {
     /// Carry out the pairs a batch could not answer for, under the button the
     /// user pressed.
     Resolve(Unanswered),
+    /// Carry out a bulk rename, its names already read back and checked.
+    Rename(Renamings),
+}
+
+/// The pairs a bulk rename settled on, and the tab whose marks they were.
+#[derive(Debug, Clone)]
+pub struct Renamings {
+    items: Vec<Transfer>,
+    tab: TabId,
 }
 
 /// What a finished transfer could not answer for, and what a job carrying the
@@ -250,6 +260,17 @@ fn answered(choice: Choice) -> Option<OnCollision> {
 struct Opening {
     program: Program,
     path: Arc<Path>,
+    then: Then,
+}
+
+/// What becomes of the file once the program has given the terminal back.
+#[derive(Debug)]
+enum Then {
+    /// Nothing: it was the user's own file, and the program was the point.
+    Leave,
+    /// It is the names file of a bulk rename, written from `items` in their
+    /// order, and is read back against them and removed.
+    Rename { items: Vec<PathBuf>, tab: TabId },
 }
 
 /// Where the marks a queued job took came from, so the items that fail can be
@@ -336,6 +357,9 @@ pub struct App {
     /// their own open at that moment. Waiting is what lets the question be put
     /// without ever taking the screen from a dialog already on it.
     asking: Option<Unanswered>,
+    /// A bulk rename read back from the editor, waiting the way `asking` does
+    /// to be confirmed. Asked after `asking` when both wait.
+    renaming: Option<Renamings>,
     /// What the loop is to hand the terminal over for, or `None` when nothing
     /// asked.
     opening: Option<Opening>,
@@ -416,6 +440,7 @@ impl App {
             preview: None,
             preview_generation: 0,
             asking: None,
+            renaming: None,
             preview_placement: None,
             surface: Surface::new(capabilities),
             progress: None,
@@ -973,6 +998,7 @@ impl App {
             Action::Unpack => self.queue_unpack(),
             Action::Delete(mode) => self.confirm_delete(mode),
             Action::Rename => self.prompt_rename(),
+            Action::RenameMarked => self.edit_marked_names(),
             Action::CreateEntry => self.prompt_create_entry(),
             Action::RenameTab => self.prompt_rename_tab(),
             Action::Find => self.open_finder(),
@@ -1035,7 +1061,15 @@ impl App {
                 }
                 None => Ok(()),
             },
-            ConfirmTarget::Delete(_) | ConfirmTarget::Quit => Ok(()),
+            ConfirmTarget::Rename(Renamings { items, tab }) if choice == Choice::Yes => {
+                if let Some(tab) = self.tab_mut(tab) {
+                    tab.deselect_items();
+                }
+                let tag = self.worker.queue(Work::Rename { items })?;
+                self.queued_marks.push(QueuedMarks { tag, tab });
+                Ok(())
+            }
+            ConfirmTarget::Delete(_) | ConfirmTarget::Quit | ConfirmTarget::Rename(_) => Ok(()),
         }
     }
 
@@ -1109,7 +1143,13 @@ impl App {
         let program = opener.program();
 
         match opener.launch() {
-            Launch::Handover => self.opening = Some(Opening { program, path }),
+            Launch::Handover => {
+                self.opening = Some(Opening {
+                    program,
+                    path,
+                    then: Then::Leave,
+                })
+            }
             Launch::Detached => match open::detach(&program, &path) {
                 Ok(child) => self.detached.push(child),
                 Err(e) => self.notify(ToastLevel::Error, format!("{program}: {e}"), None),
@@ -1143,8 +1183,13 @@ impl App {
             return Ok(());
         };
 
-        let Opening { program, path } = opening;
-        match open::hand_over(terminal, &mut self.surface, &program, &path)? {
+        let Opening {
+            program,
+            path,
+            then,
+        } = opening;
+        let handover = open::hand_over(terminal, &mut self.surface, &program, &path)?;
+        match &handover {
             Handover::Exited(status) if status.success() => (),
             // A program killed by a signal has no code of its own. Ctrl-C in a
             // program that reads keys the plain way is the ordinary way here.
@@ -1161,7 +1206,71 @@ impl App {
             }
         }
 
+        if let Then::Rename { items, tab } = then {
+            let edited = rename::take_names(&path);
+            // An editor that exits with a failure is how the user says to drop
+            // the edit, the way `:cq` aborts a commit message.
+            if matches!(&handover, Handover::Exited(status) if status.success()) {
+                self.read_renames(items, tab, edited);
+            }
+        }
+
         Ok(())
+    }
+
+    /// Opens the editor on the names of every marked item, ordered by the
+    /// directory they are in and then by name.
+    fn edit_marked_names(&mut self) -> Result<(), AppError> {
+        let tab = self.get_focused_tabs().active_tab();
+        let mut items: Vec<PathBuf> = tab
+            .get_selected_items()
+            .iter()
+            .map(|item| item.to_path_buf())
+            .collect();
+        let tab = tab.id();
+
+        if items.is_empty() {
+            self.notify(ToastLevel::Warning, "Nothing is marked", None);
+            return Ok(());
+        }
+        items.sort_by(|a, b| {
+            a.parent()
+                .cmp(&b.parent())
+                .then_with(|| directory::compare_file_names(a, b))
+        });
+
+        let path = rename::write_names(&items)?;
+        self.opening = Some(Opening {
+            program: Opener::Edit.program(),
+            path: Arc::from(path),
+            then: Then::Rename { items, tab },
+        });
+        Ok(())
+    }
+
+    /// Reads what the editor left against the items it was given, and puts
+    /// the renames that came of it up to be confirmed. A batch the names
+    /// cannot be carried out for is turned away whole, with the marks still
+    /// standing.
+    fn read_renames(&mut self, items: Vec<PathBuf>, tab: TabId, edited: io::Result<String>) {
+        let edited = match edited {
+            Ok(edited) => edited,
+            Err(e) => {
+                self.notify(ToastLevel::Error, format!("Names not read: {e}"), None);
+                return;
+            }
+        };
+
+        match rename::pair(&items, &edited) {
+            Ok(pairs) if pairs.is_empty() => {
+                self.notify(ToastLevel::Info, "No name was changed", None)
+            }
+            Ok(pairs) => {
+                self.renaming = Some(Renamings { items: pairs, tab });
+                self.ask_pending();
+            }
+            Err(refusal) => self.notify(ToastLevel::Warning, refusal.to_string(), None),
+        }
     }
 
     fn handle_confirm_key(&mut self, key: KeyEvent) {
@@ -1669,6 +1778,26 @@ impl App {
         Ok(())
     }
 
+    /// Asks before a bulk rename, listing every name that changes as
+    /// `old → new`.
+    fn confirm_renames(&mut self, renamings: Renamings) {
+        let count = renamings.items.len();
+        let message = match count {
+            1 => String::from("Rename this item?"),
+            count => format!("Rename these {count} items?"),
+        };
+        let changes = renamings
+            .items
+            .iter()
+            .map(|item| format!("{} → {}", ui::name_of(&item.from), ui::name_of(&item.to)))
+            .collect();
+
+        self.mode = Mode::Confirm {
+            dialog: Dialog::new("Rename", message).listing(changes),
+            pending: ConfirmTarget::Rename(renamings),
+        };
+    }
+
     /// Asks before leaving with work still queued, since quitting drops it.
     fn confirm_quit(&mut self) -> Result<(), AppError> {
         if self.worker.is_idle() {
@@ -1895,13 +2024,17 @@ impl App {
         }
     }
 
-    /// Puts the question a finished transfer left behind, once there is a pass
-    /// of the loop with nothing else on screen to put it in.
+    /// Puts the question a finished transfer left behind, or else the bulk
+    /// rename waiting to be confirmed, once there is a pass of the loop with
+    /// nothing else on screen to put it in.
     fn ask_pending(&mut self) {
         if !matches!(self.mode, Mode::Browse) {
             return;
         }
         let Some(unanswered) = self.asking.take() else {
+            if let Some(renamings) = self.renaming.take() {
+                self.confirm_renames(renamings);
+            }
             return;
         };
 
@@ -1981,6 +2114,7 @@ impl App {
             }
             JobKind::Pack => self.notify_summary("packed", &outcome.summary, reason),
             JobKind::Unpack => self.notify_summary("unpacked", &outcome.summary, reason),
+            JobKind::Rename => self.notify_summary("renamed", &outcome.summary, reason),
             // A single mutation has nothing worth counting: it either happened,
             // or the error itself is the whole report.
             JobKind::Mutate => {

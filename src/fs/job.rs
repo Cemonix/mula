@@ -22,6 +22,7 @@ pub enum JobKind {
     Delete(DeleteMode),
     Pack,
     Unpack,
+    Rename,
     Mutate,
 }
 
@@ -58,6 +59,11 @@ pub enum Work {
         items: Vec<PathBuf>,
         into: PathBuf,
     },
+    /// Every pair of a bulk rename, each target in the directory of its
+    /// source. Only the pairs whose name changed.
+    Rename {
+        items: Vec<Transfer>,
+    },
     Mutate(MutationOp),
 }
 
@@ -68,6 +74,7 @@ impl Work {
             Work::Delete { mode, .. } => JobKind::Delete(*mode),
             Work::Pack { .. } => JobKind::Pack,
             Work::Unpack { .. } => JobKind::Unpack,
+            Work::Rename { .. } => JobKind::Rename,
             Work::Mutate(_) => JobKind::Mutate,
         }
     }
@@ -86,6 +93,10 @@ impl Work {
             Work::Delete { items, .. } => items.clone(),
             Work::Pack { archive, .. } => vec![archive.clone()],
             Work::Unpack { into, .. } => vec![into.clone()],
+            Work::Rename { items } => items
+                .iter()
+                .flat_map(|item| [item.from.clone(), item.to.clone()])
+                .collect(),
             Work::Mutate(op) => match op {
                 MutationOp::Delete { path, .. } => vec![path.clone()],
                 MutationOp::Rename { path, new_name } => {

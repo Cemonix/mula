@@ -37,6 +37,7 @@ panel.jump = "j"
 
 entry.open = "Enter"
 entry.rename = "r"
+entry.rename-marked = "Shift+R"
 entry.view = "v"
 entry.edit = "e"
 entry.create = "n"
