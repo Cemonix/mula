@@ -23,6 +23,7 @@ pub enum JobKind {
     Pack,
     Unpack,
     Rename,
+    Link,
     Mutate,
 }
 
@@ -64,6 +65,11 @@ pub enum Work {
     Rename {
         items: Vec<Transfer>,
     },
+    /// A symbolic link at every `to`, pointing at its `from`. A `to` that is
+    /// taken fails its item; nothing standing there is replaced.
+    Link {
+        items: Vec<Transfer>,
+    },
     Mutate(MutationOp),
 }
 
@@ -75,6 +81,7 @@ impl Work {
             Work::Pack { .. } => JobKind::Pack,
             Work::Unpack { .. } => JobKind::Unpack,
             Work::Rename { .. } => JobKind::Rename,
+            Work::Link { .. } => JobKind::Link,
             Work::Mutate(_) => JobKind::Mutate,
         }
     }
@@ -97,6 +104,7 @@ impl Work {
                 .iter()
                 .flat_map(|item| [item.from.clone(), item.to.clone()])
                 .collect(),
+            Work::Link { items } => items.iter().map(|item| item.to.clone()).collect(),
             Work::Mutate(op) => match op {
                 MutationOp::Delete { path, .. } => vec![path.clone()],
                 MutationOp::Rename { path, new_name } => {

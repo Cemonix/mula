@@ -592,6 +592,22 @@ fn copy_symlink(_from: &Path, _to: &Path) -> io::Result<()> {
     ))
 }
 
+/// Creates a symbolic link at `link` pointing at `target`. Fails with
+/// `AlreadyExists` when anything stands at `link`, a link that points nowhere
+/// included; what stands there is neither opened nor replaced.
+#[cfg(unix)]
+pub fn make_link(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+pub fn make_link(_target: &Path, _link: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "creating symlinks is only implemented on unix",
+    ))
+}
+
 /// How many numbered names are tried before a `KeepBoth` gives up, so a
 /// directory already holding every one of them ends the search rather than
 /// counting forever.
