@@ -838,6 +838,7 @@ impl App {
                 .queued(self.worker.queued())
                 .cancel_key(self.cancel_key)
                 .filter(filter)
+                .label(self.config.settings().progress)
                 .tick(self.tick),
             info_area,
         );
@@ -1689,7 +1690,10 @@ impl App {
                 }
             }
             // Read from the config every frame.
-            Setting::Icons => (),
+            Setting::Icons | Setting::Progress => (),
+            // Forgetting what was asked for is what asks for it again, with
+            // the new setting, on the next pass.
+            Setting::Highlight => self.previewing = None,
         }
     }
 
@@ -2279,6 +2283,7 @@ impl App {
             Some(path) => {
                 if let Err(e) = self.previewer.send(Preview {
                     path: Arc::clone(path),
+                    highlight: self.config.settings().highlight,
                 }) {
                     self.notify(ToastLevel::Error, e, None);
                 }

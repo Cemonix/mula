@@ -1,4 +1,7 @@
-use crate::ui::{columns::Columns, icon::Icons, pane::DotFiles, sort::SortKey};
+use crate::{
+    fs::preview::Highlight,
+    ui::{columns::Columns, icon::Icons, infobar::ProgressLabel, pane::DotFiles, sort::SortKey},
+};
 
 /// One value out of a fixed set, spelled the way the config file writes it.
 pub trait Choice: Copy + Eq + 'static {
@@ -61,6 +64,33 @@ impl Choice for Icons {
     }
 }
 
+impl Choice for ProgressLabel {
+    const ALL: &'static [Self] = &[
+        ProgressLabel::Both,
+        ProgressLabel::Percent,
+        ProgressLabel::Amount,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            ProgressLabel::Both => "both",
+            ProgressLabel::Percent => "percent",
+            ProgressLabel::Amount => "amount",
+        }
+    }
+}
+
+impl Choice for Highlight {
+    const ALL: &'static [Self] = &[Highlight::Syntax, Highlight::Off];
+
+    fn name(self) -> &'static str {
+        match self {
+            Highlight::Syntax => "syntax",
+            Highlight::Off => "off",
+        }
+    }
+}
+
 /// Which way a setting is stepped through its choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -99,6 +129,8 @@ pub struct Settings {
     pub sort: SortKey,
     pub dot_files: DotFiles,
     pub icons: Icons,
+    pub progress: ProgressLabel,
+    pub highlight: Highlight,
 }
 
 /// A table of the config file, and a heading of the settings overlay.
@@ -106,17 +138,19 @@ pub struct Settings {
 pub enum Section {
     Listing,
     Appearance,
+    Preview,
 }
 
 impl Section {
     /// Every section, in the order the file and the overlay list them.
-    pub const ALL: &[Section] = &[Section::Listing, Section::Appearance];
+    pub const ALL: &[Section] = &[Section::Listing, Section::Appearance, Section::Preview];
 
     /// The table the section is written under.
     pub fn name(self) -> &'static str {
         match self {
             Section::Listing => "listing",
             Section::Appearance => "appearance",
+            Section::Preview => "preview",
         }
     }
 
@@ -124,6 +158,7 @@ impl Section {
         match self {
             Section::Listing => "Listing",
             Section::Appearance => "Appearance",
+            Section::Preview => "Preview",
         }
     }
 }
@@ -136,6 +171,8 @@ pub enum Setting {
     Sort,
     DotFiles,
     Icons,
+    Progress,
+    Highlight,
 }
 
 impl Setting {
@@ -145,12 +182,15 @@ impl Setting {
         Setting::Sort,
         Setting::DotFiles,
         Setting::Icons,
+        Setting::Progress,
+        Setting::Highlight,
     ];
 
     pub fn section(self) -> Section {
         match self {
             Setting::Columns | Setting::Sort | Setting::DotFiles => Section::Listing,
-            Setting::Icons => Section::Appearance,
+            Setting::Icons | Setting::Progress => Section::Appearance,
+            Setting::Highlight => Section::Preview,
         }
     }
 
@@ -161,6 +201,8 @@ impl Setting {
             Setting::Sort => "sort",
             Setting::DotFiles => "dotfiles",
             Setting::Icons => "icons",
+            Setting::Progress => "progress",
+            Setting::Highlight => "highlight",
         }
     }
 
@@ -171,6 +213,8 @@ impl Setting {
             Setting::Sort => "Sort by",
             Setting::DotFiles => "Dotfiles",
             Setting::Icons => "Icons",
+            Setting::Progress => "Progress",
+            Setting::Highlight => "Highlighting",
         }
     }
 
@@ -182,6 +226,10 @@ impl Setting {
             Setting::Sort => "What a panel is sorted by when it opens",
             Setting::DotFiles => "Whether a panel lists names beginning with a dot when it opens",
             Setting::Icons => "The glyph in front of each name; nerd-font takes a Nerd Font",
+            Setting::Progress => "What a running job's bar is labelled with",
+            Setting::Highlight => {
+                "Whether text is coloured by its language, in the terminal's palette"
+            }
         }
     }
 
@@ -192,6 +240,8 @@ impl Setting {
             Setting::Sort => names::<SortKey>(),
             Setting::DotFiles => names::<DotFiles>(),
             Setting::Icons => names::<Icons>(),
+            Setting::Progress => names::<ProgressLabel>(),
+            Setting::Highlight => names::<Highlight>(),
         }
     }
 
@@ -202,6 +252,8 @@ impl Setting {
             Setting::Sort => settings.sort.name(),
             Setting::DotFiles => settings.dot_files.name(),
             Setting::Icons => settings.icons.name(),
+            Setting::Progress => settings.progress.name(),
+            Setting::Highlight => settings.highlight.name(),
         }
     }
 
@@ -217,6 +269,8 @@ impl Setting {
             Setting::Sort => put(&mut settings.sort, name),
             Setting::DotFiles => put(&mut settings.dot_files, name),
             Setting::Icons => put(&mut settings.icons, name),
+            Setting::Progress => put(&mut settings.progress, name),
+            Setting::Highlight => put(&mut settings.highlight, name),
         }
     }
 
@@ -228,6 +282,8 @@ impl Setting {
             Setting::Sort => settings.sort = defaults.sort,
             Setting::DotFiles => settings.dot_files = defaults.dot_files,
             Setting::Icons => settings.icons = defaults.icons,
+            Setting::Progress => settings.progress = defaults.progress,
+            Setting::Highlight => settings.highlight = defaults.highlight,
         }
     }
 
@@ -238,6 +294,8 @@ impl Setting {
             Setting::Sort => settings.sort = stepped(settings.sort, step),
             Setting::DotFiles => settings.dot_files = stepped(settings.dot_files, step),
             Setting::Icons => settings.icons = stepped(settings.icons, step),
+            Setting::Progress => settings.progress = stepped(settings.progress, step),
+            Setting::Highlight => settings.highlight = stepped(settings.highlight, step),
         }
     }
 }
@@ -307,15 +365,20 @@ mod settings_tests {
     #[test]
     fn every_setting_is_listed() {
         let listed = |setting: Setting| match setting {
-            Setting::Columns | Setting::Sort | Setting::DotFiles | Setting::Icons => {
-                Setting::ALL.contains(&setting)
-            }
+            Setting::Columns
+            | Setting::Sort
+            | Setting::DotFiles
+            | Setting::Icons
+            | Setting::Progress
+            | Setting::Highlight => Setting::ALL.contains(&setting),
         };
 
         assert!(listed(Setting::Columns));
         assert!(listed(Setting::Sort));
         assert!(listed(Setting::DotFiles));
         assert!(listed(Setting::Icons));
+        assert!(listed(Setting::Progress));
+        assert!(listed(Setting::Highlight));
     }
 
     #[test]

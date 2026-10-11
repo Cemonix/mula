@@ -48,6 +48,18 @@ impl Counts {
     }
 }
 
+/// What the progress bar is labelled with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProgressLabel {
+    /// The percentage beside the bar, and the counts after the name.
+    #[default]
+    Both,
+    /// The percentage alone.
+    Percent,
+    /// The counts alone.
+    Amount,
+}
+
 /// How fast the bytes are going and how long the rest will take, drawn as
 /// `85M/s · 0:42`.
 #[derive(Clone, Copy, Debug)]
@@ -106,6 +118,8 @@ pub struct InfoBar<'a> {
     /// listing looks exactly like a short directory. `Some("")` is the moment
     /// after the filter key, with nothing typed yet.
     filter: Option<&'a str>,
+    /// Which of the percentage and the counts the bar carries.
+    label: ProgressLabel,
     tick: u64,
 }
 
@@ -183,6 +197,11 @@ impl<'a> InfoBar<'a> {
         self
     }
 
+    pub fn label(mut self, label: ProgressLabel) -> Self {
+        self.label = label;
+        self
+    }
+
     pub fn tick(mut self, tick: u64) -> Self {
         self.tick = tick;
         self
@@ -195,14 +214,17 @@ impl<'a> InfoBar<'a> {
 
         if let Some(progress) = self.progress {
             let (done, rest) = Self::bar(progress.ratio);
-            segments.push(vec![
+            let mut bar = vec![
                 Span::raw(Self::SPINNER[(self.tick as usize) % Self::SPINNER.len()])
                     .fg(Color::Cyan),
                 Span::raw(" "),
                 Span::raw(done).fg(Color::Cyan),
                 Span::raw(rest).fg(Color::DarkGray),
-                Span::raw(format!(" {:>3.0}%", progress.ratio * 100.0)).bold(),
-            ]);
+            ];
+            if self.label != ProgressLabel::Amount {
+                bar.push(Span::raw(format!(" {:>3.0}%", progress.ratio * 100.0)).bold());
+            }
+            segments.push(bar);
 
             if !progress.current.is_empty() {
                 segments.push(vec![
@@ -210,7 +232,9 @@ impl<'a> InfoBar<'a> {
                 ]);
             }
 
-            segments.push(vec![Span::raw(progress.counts.text()).bold()]);
+            if self.label != ProgressLabel::Percent {
+                segments.push(vec![Span::raw(progress.counts.text()).bold()]);
+            }
         }
 
         // Ahead of the marks: a filter changes what the next operation will
@@ -408,6 +432,20 @@ mod infobar_tests {
     fn a_speed_with_nothing_to_go_by_is_drawn_alone() {
         let row = render(InfoBar::new().progress(Some(copying(at_85m(None)))), 80);
         assert!(row.ends_with("3.0G / 5.0G | 85M/s"), "{row}");
+    }
+
+    #[test]
+    fn the_label_keeps_the_percentage_the_counts_or_both() {
+        for (label, percent, counts) in [
+            (ProgressLabel::Both, true, true),
+            (ProgressLabel::Percent, true, false),
+            (ProgressLabel::Amount, false, true),
+        ] {
+            let row = render(InfoBar::new().progress(Some(halfway())).label(label), 80);
+
+            assert_eq!(row.contains("50%"), percent, "{label:?}: {row}");
+            assert_eq!(row.contains("6 / 12"), counts, "{label:?}: {row}");
+        }
     }
 
     #[test]
