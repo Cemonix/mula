@@ -133,6 +133,9 @@ is open again, not broken.
 - Directory on directory is a descent, never an overwrite; a type mismatch and
   a symlink in the destination are collisions. `remove_recursive` never stands
   behind "overwrite".
+- A link is made like a transfer: each mark gets one in the other panel
+  under its own name, holding the mark's absolute path. A taken name fails the
+  item and is never asked about.
 - Nothing is asked when nothing is at stake: a merge with no clashing leaf runs
   in silence.
 - A bulk rename changes names, never directories: a line holding `/` is
